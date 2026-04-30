@@ -40,6 +40,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import sys
 import tempfile
 import threading
 from dataclasses import dataclass
@@ -99,6 +100,19 @@ def runtime_available() -> bool:
     the parity scaffold.
     """
     return _ncnn_available() and _pnnx_available()
+
+
+def _should_use_vulkan(prefer_vulkan: bool) -> bool:
+    if not prefer_vulkan:
+        return False
+    if os.environ.get("ORS_DISABLE_NCNN_VULKAN") == "1":
+        return False
+    # MoltenVK is optional on macOS and the current NCNN path is not stable on
+    # all dev boxes, so default to the documented CPU fallback unless the user
+    # explicitly opts in.
+    if sys.platform == "darwin" and os.environ.get("ORS_ENABLE_NCNN_VULKAN") != "1":
+        return False
+    return vulkan_available()
 
 
 # ---------------------------------------------------------------------------
@@ -239,7 +253,7 @@ class VulkanPicoRuntime:
         self._net = ncnn.Net()
         # NCNN flips this on automatically when a Vulkan ICD is visible.
         # We set the flag explicitly so behaviour is deterministic.
-        self._net.opt.use_vulkan_compute = bool(prefer_vulkan and vulkan_available())
+        self._net.opt.use_vulkan_compute = _should_use_vulkan(prefer_vulkan)
         # Threaded CPU path defaults are fine; expose if we need them later.
         self._net.load_param(str(artifacts.param))
         self._net.load_model(str(artifacts.bin))
@@ -363,9 +377,10 @@ class VulkanPicoRuntime:
                     ex.input(name, ncnn.Mat(chw).clone())
                 _, mat0 = ex.extract(self._OUTPUT_NAMES[0])
                 _, mat1 = ex.extract(self._OUTPUT_NAMES[1])
-
-        rgb_hr = np.array(mat0)[None, ...].astype(np.float32)
-        new_hidden = np.array(mat1)[None, ...].astype(np.float32)
+                # NCNN mats may reference extractor-owned memory; copy them
+                # before the extractor context exits.
+                rgb_hr = np.array(mat0.numpy(), copy=True)[None, ...].astype(np.float32, copy=False)
+                new_hidden = np.array(mat1.numpy(), copy=True)[None, ...].astype(np.float32, copy=False)
         return rgb_hr, new_hidden
 
 
