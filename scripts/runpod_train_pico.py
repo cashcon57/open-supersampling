@@ -148,14 +148,25 @@ def _run_training(harness: SafetyHarness, ip: str, port: int, args) -> int:
     ssh = _ssh_command(ip, port)
     smoke_flag = "--smoke-test" if args.smoke_test else ""
     data_arg = "" if args.smoke_test else "--data /root/data/noisebase"
+    # CUDA driver pin: RunPod pods can have older drivers (we've seen CUDA
+    # 12.5). torch>=2.6 wants CUDA 13+. Force-install torch 2.5.x first
+    # (compatible with CUDA 12.x drivers), then let pip install -e fill in
+    # the rest of our deps WITHOUT upgrading torch.
     remote_cmd = (
         "set -uo pipefail && "
         "cd ~/ors && "
         "python3 -m venv venv-cloud --upgrade-deps 2>&1 | tail -3 && "
         "source venv-cloud/bin/activate && "
-        "echo '--- pip install starting ---' && "
-        "pip install -e .[dev] 2>&1 | tee /tmp/ors-pip-install.log | tail -100 && "
+        "echo '--- nvidia-smi driver check ---' && "
+        "nvidia-smi --query-gpu=driver_version --format=csv,noheader || echo 'no nvidia-smi' && "
+        "echo '--- installing torch 2.5 (CUDA 12.x compatible) ---' && "
+        "pip install 'torch==2.5.*' 'torchvision<0.21' "
+        "--index-url https://download.pytorch.org/whl/cu121 "
+        "2>&1 | tee /tmp/ors-torch-install.log | tail -10 && "
+        "echo '--- pip install -e .[dev] (rest of deps) ---' && "
+        "pip install -e .[dev] 2>&1 | tee /tmp/ors-pip-install.log | tail -50 && "
         "echo '--- pip install OK ---' && "
+        "python -c 'import torch; print(\"torch\", torch.__version__, \"cuda\", torch.cuda.is_available(), torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"\")' && "
         f"python -m ors.train.train_pico "
         f"{smoke_flag} {data_arg} "
         f"--out results/pico-cloud "
@@ -289,9 +300,11 @@ def main():
         ckpt_local.parent.mkdir(parents=True, exist_ok=True)
         scp_cmd = [
             "scp",
+            "-i", str(_RUNPOD_SSH_KEY),
             "-P", str(port),
             "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "BatchMode=yes",
             f"root@{ip}:~/ors/results/pico-cloud/oru_pico.pth",
             str(ckpt_local),
         ]
