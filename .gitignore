@@ -14,8 +14,8 @@ venv/
 *.hdr
 results/
 !results/.gitkeep
-data/
+/data/
 .DS_Store
 venv-py312/
 venv-*/
-data/
+
