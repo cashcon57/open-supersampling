@@ -19,6 +19,8 @@ dependencies = [
     "lpips>=0.1.4",
     "tqdm>=4.66",
     "pyyaml>=6.0",
+    "zarr>=3.0",
+    "h5py>=3.10",
 ]
 
 [project.optional-dependencies]
