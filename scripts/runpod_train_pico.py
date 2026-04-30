@@ -148,16 +148,41 @@ def _run_training(harness: SafetyHarness, ip: str, port: int, args) -> int:
     ssh = _ssh_command(ip, port)
     smoke_flag = "--smoke-test" if args.smoke_test else ""
     data_arg = "" if args.smoke_test else "--data /root/data/noisebase"
-    # If --volume-gb > 0, RunPod mounts a persistent network volume at
-    # /workspace. Save the checkpoint there so it survives pod termination
-    # — critical when the user is offline and can't grab the checkpoint
-    # before the pod self-terminates.
+    # Save checkpoint to /workspace if a volume is attached, otherwise local.
     out_path = "/workspace/pico-cloud" if args.volume_gb > 0 else "results/pico-cloud"
-    persist_msg = (
-        " && echo '--- copying checkpoint to /workspace (persists pod terminate) ---' && "
-        f"cp -v {out_path}/oru_pico.pth /workspace/oru_pico.pth 2>/dev/null || true"
-        if args.volume_gb > 0 and out_path != "/workspace/pico-cloud"
-        else ""
+    # Upload checkpoint to public-anonymous storage at end of training so it
+    # survives pod termination even if user is offline + scp-back never fires.
+    # Try file.io first (14d default), catbox.moe fallback (1yr), 0x0.st last.
+    # Output the URL prominently so it's visible in the streamed log.
+    upload_cmd = (
+        " && echo '==== UPLOADING CHECKPOINT TO PUBLIC STORAGE ====' && "
+        "(set +e; "
+        f"  CKPT={out_path}/oru_pico.pth; "
+        "  URL=''; "
+        # Try file.io
+        "  R=$(curl -s --max-time 60 -F \"file=@$CKPT\" 'https://file.io/?expires=14d' 2>/dev/null); "
+        "  URL=$(echo \"$R\" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get(\"link\",\"\")) if d.get(\"success\") else None' 2>/dev/null || echo ''); "
+        "  if [ -z \"$URL\" ]; then "
+        # Try catbox.moe
+        "    URL=$(curl -s --max-time 60 -F 'reqtype=fileupload' -F \"fileToUpload=@$CKPT\" 'https://catbox.moe/user/api.php' 2>/dev/null | head -1); "
+        "  fi; "
+        "  if [ -z \"$URL\" ]; then "
+        # Try 0x0.st
+        "    URL=$(curl -s --max-time 60 -F \"file=@$CKPT\" 'https://0x0.st' 2>/dev/null | head -1); "
+        "  fi; "
+        "  if [ -n \"$URL\" ]; then "
+        "    echo ''; "
+        "    echo '############################################################'; "
+        "    echo '#                                                          #'; "
+        "    echo '#  CHECKPOINT URL (download anytime within retention):     #'; "
+        "    echo \"#  $URL\"; "
+        "    echo '#                                                          #'; "
+        "    echo '############################################################'; "
+        "    echo ''; "
+        "  else "
+        "    echo 'WARNING: all checkpoint upload services failed; checkpoint exists only on pod ephemeral disk'; "
+        "  fi; "
+        "  set -e)"
     )
     # CUDA driver pin: RunPod pods can have older drivers (we've seen CUDA
     # 12.5). torch>=2.6 wants CUDA 13+. Force-install torch 2.5.x first
@@ -186,7 +211,7 @@ def _run_training(harness: SafetyHarness, ip: str, port: int, args) -> int:
         f"--sequence-length {args.sequence_length} "
         f"--batch-size {args.batch_size} "
         f"--scale-factor {args.scale_factor}"
-        + persist_msg
+        + upload_cmd
     )
     full = ssh + ["bash", "-lc", shlex.quote(remote_cmd)]
 
