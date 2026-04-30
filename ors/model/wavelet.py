@@ -258,7 +258,7 @@ class WaveletKPNHead(nn.Module):
         self,
         feature_ch: int = 32,
         kernel_size: int = 5,
-        scale_factor: int = 2,
+        scale_factor: float = 2.0,
         levels: int = 2,
         wavelet: str = "db2",
     ):
@@ -266,7 +266,7 @@ class WaveletKPNHead(nn.Module):
         self.feature_ch = feature_ch
         self.k = kernel_size
         self.k2 = kernel_size * kernel_size
-        self.scale_factor = scale_factor
+        self.scale_factor = float(scale_factor)
         self.levels = levels
 
         self.swt = SWT2D(levels=levels, wavelet=wavelet)

@@ -37,8 +37,54 @@ _PICO_HIDDEN_CHANNELS = 24
 # Number of refinement ConvBlocks per spatial level (encoder + decoder).
 # Three keeps the model in the 200-320K param window with the spec channels.
 _REFINE_DEPTH = 3
-# v0.2 ships a single fixed scale factor (240p->480p, 360p->720p, 540p->1080p).
-_PICO_SCALE_FACTOR = 2.0
+# Default scale factor used at construction time when caller doesn't override.
+# Steam Deck targets are 1.4× (540p→800p), 1.5×, 1.7×, 2.0×, 2.5× (320p→800p),
+# 3.3× (240p→800p). The model accepts ANY positive float scale_factor at
+# construction; train at the scale you'll deploy at, or train with multi-scale
+# augmentation in the trainer.
+_PICO_DEFAULT_SCALE_FACTOR = 2.0
+
+# DLSS-style preset names mapped to scale_factor. Mirrors NVIDIA's published
+# preset ratios — gives users a familiar dial. "DLAA" runs the model at
+# native res (no upscale), pure temporal-AA + denoise.
+PRESET_SCALE_FACTORS: dict[str, float] = {
+    "DLAA":              1.0,    # no upscale; temporal AA + denoise only
+    "Ultra Quality":     1.3,    # 75% input res
+    "Quality":           1.5,    # 67% input res
+    "Balanced":          1.7,    # 59% input res
+    "Performance":       2.0,    # 50% input res
+    "Ultra Performance": 3.0,    # 33% input res — extreme regime
+}
+
+
+def preset_scale(name: str) -> float:
+    """Look up a DLSS-style preset name → scale factor.
+
+    Accepts case-insensitive variants ('quality', 'Quality', 'QUALITY') and
+    common shorthands ('ultra-perf', 'ultra_perf'). Raises KeyError for unknown
+    names so callers can decide to error vs fall back to a default.
+    """
+    norm = name.strip().lower().replace("-", " ").replace("_", " ")
+    aliases = {
+        "dlaa": "DLAA",
+        "ultra quality": "Ultra Quality",
+        "uq": "Ultra Quality",
+        "quality": "Quality",
+        "q": "Quality",
+        "balanced": "Balanced",
+        "b": "Balanced",
+        "performance": "Performance",
+        "perf": "Performance",
+        "p": "Performance",
+        "ultra performance": "Ultra Performance",
+        "ultra perf": "Ultra Performance",
+        "up": "Ultra Performance",
+    }
+    if norm in aliases:
+        return PRESET_SCALE_FACTORS[aliases[norm]]
+    raise KeyError(
+        f"unknown preset {name!r}; available: {list(PRESET_SCALE_FACTORS)}"
+    )
 
 
 def _refine_stack(ch: int, depth: int = _REFINE_DEPTH) -> nn.Sequential:
@@ -73,9 +119,9 @@ class ORUPico(nn.Module):
 
     # Exposed for tests / external code that needs to allocate a zero hidden.
     HIDDEN_CHANNELS = _PICO_HIDDEN_CHANNELS
-    SCALE_FACTOR = _PICO_SCALE_FACTOR
+    SCALE_FACTOR = _PICO_DEFAULT_SCALE_FACTOR  # legacy alias
 
-    def __init__(self, use_wavelet: bool = True):
+    def __init__(self, use_wavelet: bool = True, scale_factor: float = _PICO_DEFAULT_SCALE_FACTOR):
         """Construct an ORU-Pico network.
 
         Args:
@@ -89,7 +135,10 @@ class ORUPico(nn.Module):
                 head — retained for ablation comparison only.
         """
         super().__init__()
+        if scale_factor <= 0:
+            raise ValueError(f"scale_factor must be positive; got {scale_factor}")
         self.use_wavelet = use_wavelet
+        self.scale_factor = float(scale_factor)
         c = _PICO_CHANNELS
 
         # ---- Two-branch encoder, late-fused at level 0 ------------------
@@ -131,23 +180,30 @@ class ORUPico(nn.Module):
         # Wavelet-space head (Poudel 2025) is the default; legacy RGB-space
         # head retained behind use_wavelet=False for ablation comparison.
         if use_wavelet:
+            # WaveletKPNHead works over the bilinearly-upsampled HR features +
+            # noisy color, so the scale_factor here doesn't actually drive any
+            # internal interpolation — kept for API symmetry. Pass the float
+            # scale; the head accepts it for documentation purposes.
             self.kpn = WaveletKPNHead(
                 feature_ch=32,
                 kernel_size=5,
-                scale_factor=int(_PICO_SCALE_FACTOR),
+                scale_factor=self.scale_factor,
                 levels=2,
                 wavelet="db2",
             )
         else:
             self.kpn = KernelPredictionHead(32, kernel_size=5)
 
-    @staticmethod
-    def _hr_size(lr_h: int, lr_w: int) -> tuple[int, int]:
-        # Floor (not banker's round) for deterministic round-trip with the
-        # paired downsample step - matches ORU's convention.
+    def _hr_size(self, lr_h: int, lr_w: int) -> tuple[int, int]:
+        """Compute HR spatial size from LR using this instance's scale_factor.
+
+        Floor (not banker's round) for deterministic round-trip with the
+        paired downsample step in the trainer. Same convention as the legacy
+        scale_factor=2.0 path.
+        """
         return (
-            int(lr_h * _PICO_SCALE_FACTOR),
-            int(lr_w * _PICO_SCALE_FACTOR),
+            int(lr_h * self.scale_factor),
+            int(lr_w * self.scale_factor),
         )
 
     def forward(

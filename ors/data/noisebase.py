@@ -155,6 +155,81 @@ def _compute_depth_from_position(position: np.ndarray, camera_pos: np.ndarray) -
     return dist.mean(axis=-1).astype(np.float32)
 
 
+def _halton(i: int, base: int) -> float:
+    """One-dimensional Halton sequence sample (Halton 1964).
+
+    Standard low-discrepancy sub-pixel jitter source used by FSR2 / DLSS.
+    With base=2 for X and base=3 for Y you get well-distributed offsets in
+    [0, 1)^2. We subtract 0.5 in the caller to center on [-0.5, 0.5].
+    """
+    f, q = 1.0, 0.0
+    while i > 0:
+        f /= base
+        q += f * (i % base)
+        i //= base
+    return q
+
+
+def _jitter_offsets(num_frames: int) -> np.ndarray:
+    """Per-frame Halton(2,3) sub-pixel offsets in [-0.5, 0.5] HR-pixel units.
+
+    Returns shape (num_frames, 2) — (jitter_x, jitter_y) per frame. FSR2
+    uses Halton(2,3) for its jitter; DLSS uses similar quasi-random
+    sequences. Centred on zero so accumulated mean = 0 across many frames.
+    """
+    out = np.zeros((num_frames, 2), dtype=np.float32)
+    for t in range(num_frames):
+        # Halton index 0 → 0; start at 1 for proper distribution
+        out[t, 0] = _halton(t + 1, 2) - 0.5
+        out[t, 1] = _halton(t + 1, 3) - 0.5
+    return out
+
+
+def _apply_jitter_to_lr(hr_tensor: np.ndarray, jitter_hr_pixels: np.ndarray, scale_factor: float) -> np.ndarray:
+    """Resample HR tensor to LR with per-frame sub-pixel jitter offsets.
+
+    Args:
+        hr_tensor: shape (F, C, H_hr, W_hr) — frames at HR resolution.
+        jitter_hr_pixels: shape (F, 2) — (jx, jy) per frame in HR pixel units.
+        scale_factor: HR / LR ratio.
+    Returns:
+        (F, C, H_lr, W_lr) LR tensor where each frame samples HR at jittered
+        sub-pixel positions. Each frame uses bilinear interp via grid_sample.
+
+    LR pixel (x, y) at frame t samples HR at (x*scale + jx_t, y*scale + jy_t).
+    """
+    import torch
+    F_, C, H_hr, W_hr = hr_tensor.shape
+    H_lr = max(1, int(H_hr / scale_factor))
+    W_lr = max(1, int(W_hr / scale_factor))
+
+    hr = torch.from_numpy(np.ascontiguousarray(hr_tensor, dtype=np.float32))
+
+    # Build a normalized [-1, 1] grid for grid_sample. Each LR pixel (x, y)
+    # samples HR at (x*scale + jx, y*scale + jy) in HR pixel-center units.
+    # grid_sample uses align_corners=False convention: pixel center i ↔ (2i+1)/N - 1.
+    base_y = (np.arange(H_lr, dtype=np.float32) + 0.5) * scale_factor  # HR pixel-center y
+    base_x = (np.arange(W_lr, dtype=np.float32) + 0.5) * scale_factor
+
+    out = np.zeros((F_, C, H_lr, W_lr), dtype=np.float32)
+    for t in range(F_):
+        jx, jy = float(jitter_hr_pixels[t, 0]), float(jitter_hr_pixels[t, 1])
+        # Per-pixel HR sample positions for this frame
+        ys = base_y + jy
+        xs = base_x + jx
+        # Normalize to [-1, 1] in grid_sample convention
+        norm_y = (ys * 2.0 / H_hr) - 1.0
+        norm_x = (xs * 2.0 / W_hr) - 1.0
+        gy, gx = np.meshgrid(norm_y, norm_x, indexing="ij")
+        grid = np.stack([gx, gy], axis=-1)[None, ...]  # (1, H_lr, W_lr, 2)
+        grid_t = torch.from_numpy(np.ascontiguousarray(grid, dtype=np.float32))
+        sampled = torch.nn.functional.grid_sample(
+            hr[t : t + 1], grid_t, mode="bilinear", padding_mode="border", align_corners=False
+        )
+        out[t] = sampled[0].numpy()
+    return out
+
+
 def _compute_screen_motion(
     positions: np.ndarray,
     view_proj_mats: np.ndarray,
@@ -463,14 +538,55 @@ class NoiseBaseDataset(Dataset):
         # Resize HR buffers to requested HR resolution.
         gt_hr_np = self._to_hr(ref, mode="bilinear")
 
-        # LR buffers: resize HR-equivalent to LR (area downsample).
-        # We feed the *noisy* radiance straight to LR — that's what the
-        # network sees as the temporally-noisy low-res input.
-        color_lr_np = self._to_lr(self._to_hr(noisy_avg, mode="bilinear"), mode="area")
-        normals_lr_np = self._to_lr(self._to_hr(normal, mode="bilinear"), mode="area")
-        albedo_lr_np = self._to_lr(self._to_hr(albedo, mode="bilinear"), mode="area")
-        motion_lr_np = self._to_lr(self._to_hr(motion_screen, mode="bilinear"), mode="area")
-        depth_lr_np = self._to_lr(self._to_hr(depth, mode="bilinear"), mode="area")
+        # ---- Per-frame Halton(2,3) sub-pixel jitter -----------------------
+        # Critical for the model to learn temporal sub-pixel accumulation:
+        # without jitter, every frame's LR samples HR at the same grid
+        # positions, so accumulating frames over time can't recover detail
+        # below the LR Nyquist limit. With jitter, consecutive frames sample
+        # at slightly shifted sub-pixel positions, and the recurrent state
+        # learns to integrate across them — same trick FSR2 / DLSS use.
+        F_seq = gt_hr_np.shape[0]
+        jitter_hr_pixels = _jitter_offsets(F_seq)  # (F, 2) in HR-pixel units
+
+        # color_lr is the only buffer the network treats as the "noisy LR
+        # input you actually have to recover from" — apply jitter here so
+        # successive frames carry distinct sub-pixel info.
+        # Other LR buffers (depth, normals, albedo, motion) are aux signals;
+        # using the same jittered grid keeps them aligned with color_lr.
+        color_lr_np = _apply_jitter_to_lr(
+            self._to_hr(noisy_avg, mode="bilinear"),
+            jitter_hr_pixels, self.scale_factor,
+        )
+        normals_lr_np = _apply_jitter_to_lr(
+            self._to_hr(normal, mode="bilinear"),
+            jitter_hr_pixels, self.scale_factor,
+        )
+        albedo_lr_np = _apply_jitter_to_lr(
+            self._to_hr(albedo, mode="bilinear"),
+            jitter_hr_pixels, self.scale_factor,
+        )
+        motion_lr_np = _apply_jitter_to_lr(
+            self._to_hr(motion_screen, mode="bilinear"),
+            jitter_hr_pixels, self.scale_factor,
+        )
+        depth_lr_np = _apply_jitter_to_lr(
+            self._to_hr(depth, mode="bilinear"),
+            jitter_hr_pixels, self.scale_factor,
+        )
+
+        # Add jitter delta (jitter[t] - jitter[t-1]) to motion_lr.
+        # This represents the additional sub-pixel displacement between
+        # consecutive frames' LR sample grids, beyond the camera motion
+        # already encoded in motion_screen. Frame 0 has no prior, so its
+        # delta is 0. Units: convert HR-pixel delta to NDC delta.
+        H_hr_size = gt_hr_np.shape[-2]
+        W_hr_size = gt_hr_np.shape[-1]
+        for t in range(1, F_seq):
+            dx_hr = jitter_hr_pixels[t, 0] - jitter_hr_pixels[t - 1, 0]
+            dy_hr = jitter_hr_pixels[t, 1] - jitter_hr_pixels[t - 1, 1]
+            # NDC delta = HR-pixel delta * 2 / dim (NDC spans [-1, 1])
+            motion_lr_np[t, 0] += np.float32(dx_hr * 2.0 / W_hr_size)
+            motion_lr_np[t, 1] += np.float32(dy_hr * 2.0 / H_hr_size)
 
         # G-buffer normalization for stable FP16 training.
         # Clamp normals to [-1, 1] range (sh_normal style, already in range but enforce).
