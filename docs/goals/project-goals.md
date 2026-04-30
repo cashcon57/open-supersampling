@@ -37,22 +37,50 @@ Ship a vendor-agnostic, open-source, real-time ray-tracing reconstruction stack 
 ## Versioned milestones
 
 ### v0.1.0-mvp (SHIPPED 2026-04-29)
+
 Pure-PyTorch reference implementation on macOS arm64. ORD denoiser (kernel-prediction U-Net + two-branch input), ORU upscaler (3-mode: rgb/rgb_aux/features), paired feature handoff (32-ch FP16 frozen contract), training pipeline (3 trainers with smoke mode), valuation harness. 23/23 tests pass. Tagged `v0.1.0-mvp`.
 
-### v0.2 — Drop-in DLL (target ~2-3 months, ~$1500 cloud GPU)
-1. Architecture upgrade: 141K-param ORD → JNDS-shape 2.6M params (Bálint Mini Adaptive lineage). Quality target: ~24-25 PSNR @ 0.25 spp.
-2. Real Bistro training data via Mitsuba 3 cloud rendering.
-3. ONNX export + ONNX Runtime DirectML inference path.
-4. **`nvngx_dlssd.dll` drop-in replacement** for DLSS Ray Reconstruction. Implements NGX RR API surface from open Streamline spec. OptiScaler is the engineering reference.
-5. Cyberpunk 2077 Path Tracing as canonical first integration test.
-6. Corkscrew integration (bundle ORS for Wine/CrossOver users).
+### v0.2 — UPSCALER drop-in DLL (target ~2-3 months, ~$1500 cloud GPU)
 
-### v0.3 — Quality + perf push
-1. RAKD-style distillation: 15M Bálint teacher → ~1M student. Target: ~24.5 PSNR @ <3ms 1080p RTX 4070.
-2. Tile-gated variable-rate inference (30-50% perf reduction).
-3. LoRA adapter training pipeline + format spec.
-4. Inline HLSL Cooperative Vectors / SPIR-V coop_matrix shader inference (no ML runtime in hot path).
-5. Cross-vendor benchmark suite: RTX 4070 + RX 9070 XT + Arc B580 + Apple M3 — first published numbers in the space.
+**Strategy: ship upscaler before denoiser.** Bigger install base (every DLSS/FSR/XeSS game ~1000+ titles), simpler API surface, validates drop-in DLL infrastructure before tackling the harder RR API. The denoiser ships in v0.3 leveraging validated v0.2 infra.
+
+**Denoising is NOT needed for the upscaler ship.** Pure upscalers (DLSS-SR, FSR, XeSS) consume clean input from the game's existing pipeline (rasterized or pre-denoised RT). The game's own denoiser handles noise BEFORE the upscaler runs. ORS-upscaler is a drop-in for the same contract.
+
+**Hardware tiering (3 weight sets, same DLL, runtime detection):**
+
+| Tier | Params | Target HW | Quality target | Perf target @ 1080p |
+|---|---|---|---|---|
+| **ORU-Tiny** | ~500K | GTX 10/16 series, RX 5000, integrated GPUs (no ML accel, no RT) | match FSR 2 spatial+temporal | <2 ms on GTX 1660 |
+| **ORU-Lite** | ~1M | RTX 20+, RDNA 2+, M-series base, Steam Deck | match DLSS-SR Quality | <1.5 ms RTX 4070 |
+| **ORU-Standard** | ~2.6M | RTX 4080+, RX 9070 XT+, M3 Pro+, coop_matrix HW | beat DLSS-SR Quality | <2.5 ms RTX 4090 |
+
+**Hardware coverage spans the entire gaming GPU market since ~2016.** Massive reach.
+
+**v0.2 deliverables:**
+1. PyTorch architecture rebuild: ORU at 500K / 1M / 2.6M tiers (currently 121K, undersized).
+2. Real training data from rasterized + RT game traces (~$300 cloud rendering).
+3. ONNX export + ONNX Runtime DirectML inference path (Windows). Vulkan compute path for Linux.
+4. **Drop-in DLL replacements**: `nvngx_dlss.dll` (DLSS-SR) + `amd_fidelityfx_dx12.dll` / `amd_fidelityfx_vk.dll` (FSR) + `libxess.dll` (XeSS). Three DLLs, one inference engine.
+5. Per-game compatibility shim layer (community-maintainable game profiles).
+6. First integration test: a popular game with FSR/DLSS-SR support (e.g., Helldivers 2, Starfield, Cyberpunk 2077 raster mode).
+7. Corkscrew integration (bundle ORS for Wine/CrossOver users).
+
+**Out of v0.2 scope (deferred to v0.3):**
+- ORD denoiser DLL ship
+- DLSS-RR (`nvngx_dlssd.dll`) replacement (joint denoise+upscale, requires both products paired)
+- FSR Ray Regen replacement (same reason)
+- NRD shader replacement
+- Adaptive sampling (Bálint research-only contribution)
+
+### v0.3 — DENOISER ship + cross-vendor inference push
+1. Real ORD training: JNDS-shape 2.6M (Bálint Mini Adaptive lineage). Published target: 24.97 PSNR @ 0.25 spp (+2.09 dB over DLSS 4 RR).
+2. RAKD-style distillation: 15M Bálint teacher → 1M ORD-Lite student. Target: ~24.5 PSNR @ <3 ms 1080p RTX 4070.
+3. **`nvngx_dlssd.dll` drop-in replacement** for DLSS Ray Reconstruction (paired ORD+ORU joint denoise+upscale). Cyberpunk 2077 Path Tracing as canonical test.
+4. NRD-shader replacement option for engines using NRD directly (UE5 + custom RT pipelines).
+5. Tile-gated variable-rate inference (30-50% perf reduction, the structural lead over DLSS dense).
+6. LoRA adapter training pipeline + format spec + community hub bootstrapping.
+7. Inline HLSL Cooperative Vectors / SPIR-V coop_matrix shader inference (no ML runtime in hot path).
+8. Cross-vendor benchmark suite: RTX 4070 + RX 9070 XT + Arc B580 + Apple M3 — first published numbers in the space.
 
 ### v0.4 — Production hardening
 1. Per-game compatibility shim layer (community-maintained game profiles).

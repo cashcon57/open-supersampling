@@ -24,16 +24,25 @@
 - No production weights — checkpoints saved by smoke tests are random init only.
 - 141K-param ORD undersized for production quality (intentional for MVP smoke; v0.2 upgrades to JNDS-shape 2.6M).
 
-## What v0.2 will deliver
+## What v0.2 will deliver — UPSCALER-FIRST (revised 2026-04-30)
 
-See [`docs/goals/project-goals.md`](../goals/project-goals.md) for the full milestone list. v0.2 highlights:
+See [`docs/goals/project-goals.md`](../goals/project-goals.md) for the full milestone list. **Strategic pivot 2026-04-30**: ship upscaler DLL before denoiser DLL. Bigger install base (every DLSS/FSR/XeSS game ~1000+ titles vs ~10-20 RT/PT games), simpler API surface, validates drop-in DLL infrastructure with broader user feedback before tackling the harder DLSS-RR API. Denoiser ships in v0.3 leveraging validated v0.2 infra.
 
-1. **Architecture upgrade** to JNDS-shape (2.6M params, Bálint Mini Adaptive lineage). Hits 24.97 PSNR @ 0.25 spp per published Bálint 2026 paper — beats DLSS 4 RR by 2.09 dB.
-2. **Real training data** rendered on cloud GPU via Mitsuba 3 (~$300 budget).
-3. **ONNX export** + ONNX Runtime + DirectML inference dispatch.
-4. **`nvngx_dlssd.dll` drop-in replacement** for DLSS Ray Reconstruction. Implements NGX RR API surface from open Streamline spec.
-5. **Cyberpunk 2077 Path Tracing** as canonical first integration test.
-6. Total budget estimate: ~$1500 cloud GPU + ~$60 game license, ~2-3 months solo engineering.
+Highlights:
+
+1. **Three-tier ORU architecture** — ORU-Tiny (~500K, GTX 10/16/RX 5000/integrated), ORU-Lite (~1M, RTX 20+/RDNA2+/M-series base/Steam Deck), ORU-Standard (~2.6M, RTX 4080+/RX 9070 XT+/M3 Pro+ with coop_matrix). Same DLL, runtime detection picks tier. Hardware coverage spans entire gaming GPU market since ~2016.
+2. **Real training data** from rasterized + RT game traces on cloud GPU (~$300 budget).
+3. **ONNX export** + ONNX Runtime + DirectML inference dispatch (Windows). Vulkan compute path (Linux).
+4. **Three drop-in DLL replacements**, one inference engine:
+   - `nvngx_dlss.dll` (DLSS Super Resolution)
+   - `amd_fidelityfx_dx12.dll` / `amd_fidelityfx_vk.dll` (FSR 2/3/4 upscaler)
+   - `libxess.dll` (XeSS)
+5. **Per-game compatibility shim layer** (community-maintainable game profiles).
+6. **First integration test** — popular game with FSR/DLSS-SR support (Helldivers 2, Starfield, or CP2077 raster mode).
+7. **Corkscrew integration** (bundle ORS for Wine/CrossOver users).
+8. Total budget estimate: ~$1500 cloud GPU + ~$60 first-test game license, ~2-3 months solo engineering.
+
+**Note: denoising is NOT bundled in v0.2.** Pure upscalers consume clean input from the game's existing pipeline. The game's own denoiser (NRD, hand-tuned, or DLSS-RR if installed) handles noise BEFORE the upscaler runs. ORS-upscaler is a drop-in for the same contract FSR/XeSS/DLSS-SR all already meet.
 
 ## Known v0.1 limitations carried forward
 
@@ -54,15 +63,22 @@ See [`docs/goals/project-goals.md`](../goals/project-goals.md) for the full mile
 - **Distribution**: drop-in DLL = day-1 install base of every game with DLSS RR support (CP2077 PT, Alan Wake 2, Black Myth Wukong, Indiana Jones, Portal RTX, Hellblade II, etc.).
 - **Differentiation**: per-game LoRA adapters + variable-rate inference + Apple Silicon support are structural advantages DLSS cannot match.
 
-## Open decisions (gating v0.2 spec drafting)
+## Decisions made 2026-04-30
 
-1. Target `nvngx_dlssd.dll` first vs FSR/XeSS DLLs?
-2. Architecture: upgrade to JNDS-shape 2.6M for v0.2 ship?
-3. Inference: ONNX-RT + DirectML for v0.2, inline HLSL CoopVec for v0.3?
-4. First test game: Cyberpunk 2077 Path Tracing?
-5. Budget: ~$1500 v0.2 cloud GPU?
-6. Timeline: 2-3 month v0.2 milestone?
-7. RE/leaked-source work: SKIP per 2026-04-30 decision (clean-room only, public open-source patterns sufficient).
+1. **v0.2 = upscaler DLL** (not denoiser). Bigger install base, simpler API. Denoiser → v0.3.
+2. **Three hardware tiers** (Tiny / Lite / Standard) so we cover GTX 10-series + Steam Deck + flagship in one DLL.
+3. **Inference: ONNX-RT + DirectML** for v0.2 ship. Inline HLSL CoopVec / SPIR-V coop_matrix → v0.3 perf push.
+4. **DLL targets**: `nvngx_dlss.dll` + `amd_fidelityfx_*.dll` + `libxess.dll` (three pure-upscaler surfaces).
+5. **Budget**: ~$1500 cloud GPU, ~2-3 month timeline.
+6. **RE/leaked-source work: SKIP** (clean-room only, public open-source patterns sufficient — quality lead from Bálint 2026 published architecture, not RE).
+7. **First test game**: TBD — pick a game with broad FSR/DLSS-SR support that's accessible without expensive licensing.
+
+## Open questions / next decisions
+
+1. Which specific first-test game? (CP2077 raster, Helldivers 2, Starfield, others?)
+2. Engine integration plugin track (UE5 path-tracer denoiser plugin) — keep on v0.4 or accelerate?
+3. LoRA framework — v0.3 or v0.4?
+4. Adaptive sampling research track (Bálint 2026 paradigm shift) — v1.0 sister project or v0.5+ ORS extension?
 
 ## Files of record
 
