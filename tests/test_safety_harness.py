@@ -51,6 +51,7 @@ def _mk_config(**kwargs) -> HarnessConfig:
         idle_timeout_s=10,
         idle_check_interval_s=2,
         watchdog_stale_s=999,  # disable watchdog firing in tests
+        require_pre_launch_approval=False,  # tests bypass the interactive gate
     )
     base.update(kwargs)
     return HarnessConfig(**base)
@@ -136,3 +137,39 @@ def test_terminate_is_idempotent():
     h.__exit__(None, None, None)
     # Should only have called terminate once despite multiple invocations
     assert client.terminate.call_count == 1
+
+
+def test_pre_launch_approval_aborts_when_user_declines(monkeypatch):
+    client = _mk_client()
+    cfg = _mk_config(require_pre_launch_approval=True)
+    monkeypatch.setattr("builtins.input", lambda *a, **kw: "no")
+    monkeypatch.delenv("ORS_LAMBDA_AUTO_APPROVE", raising=False)
+    h = SafetyHarness(client, cfg)
+    with pytest.raises(RuntimeError, match="launch aborted"):
+        h.__enter__()
+    # Critical: launch must NOT have been called when approval is denied
+    client.launch.assert_not_called()
+
+
+def test_pre_launch_approval_proceeds_when_user_types_launch(monkeypatch):
+    client = _mk_client()
+    cfg = _mk_config(require_pre_launch_approval=True)
+    monkeypatch.setattr("builtins.input", lambda *a, **kw: "launch")
+    monkeypatch.delenv("ORS_LAMBDA_AUTO_APPROVE", raising=False)
+    h = SafetyHarness(client, cfg)
+    inst = h.__enter__()
+    h.__exit__(None, None, None)
+    assert inst.instance_id == "i-test-1234"
+    client.launch.assert_called_once()
+
+
+def test_auto_approve_env_var_bypasses_prompt(monkeypatch):
+    client = _mk_client()
+    cfg = _mk_config(require_pre_launch_approval=True)
+    monkeypatch.setenv("ORS_LAMBDA_AUTO_APPROVE", "1")
+    # Even if input() would block, env-var should short-circuit before reaching it
+    monkeypatch.setattr("builtins.input", lambda *a, **kw: (_ for _ in ()).throw(AssertionError("input should not be called")))
+    h = SafetyHarness(client, cfg)
+    h.__enter__()
+    h.__exit__(None, None, None)
+    client.launch.assert_called_once()

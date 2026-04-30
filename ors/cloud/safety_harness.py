@@ -87,6 +87,11 @@ class HarnessConfig:
     require_explicit_high_budget: bool = True  # require explicit override above $50
     audit_log_path: Path = field(default_factory=lambda: _AUDIT_LOG_PATH)
 
+    # Human-in-the-loop pre-launch approval. ALWAYS true except in tests or when
+    # caller has already shown a cost preview and gotten user confirmation.
+    require_pre_launch_approval: bool = True
+    purpose: str = ""  # short human-readable description shown in the approval preview
+
 
 def _audit(event: str, payload: dict, log_path: Path = _AUDIT_LOG_PATH):
     """Append a JSON line to the audit log. Best-effort, never raises."""
@@ -149,11 +154,67 @@ class SafetyHarness:
     # ----- public API -----
 
     def __enter__(self) -> LambdaInstance:
+        if self._config.require_pre_launch_approval:
+            self._pre_launch_approval()
         self._install_signal_handlers()
         atexit.register(self._terminate_idempotent, "atexit")
         self._launch()
         self._start_watchdog()
         return self._instance  # type: ignore[return-value]
+
+    def _pre_launch_approval(self):
+        """Print a cost preview and require interactive confirmation."""
+        from .lambda_client import INSTANCE_PRICING
+        cfg = self._config
+        rate = INSTANCE_PRICING.get(cfg.instance_type, 0.0)
+        max_cost_at_duration = (cfg.max_duration_s / 3600.0) * rate
+
+        preview = [
+            "",
+            "=" * 70,
+            "  LAMBDA GPU LAUNCH — APPROVAL REQUIRED",
+            "=" * 70,
+            f"  Purpose         : {cfg.purpose or '(not specified)'}",
+            f"  Instance type   : {cfg.instance_type}",
+            f"  Region          : {cfg.region}",
+            f"  SSH key(s)      : {', '.join(cfg.ssh_key_names)}",
+            "",
+            f"  Hourly rate     : ${rate:.2f}/hr",
+            f"  Budget cap      : ${cfg.budget_usd:.2f}    (auto-terminate at this $)",
+            f"  Max duration    : {cfg.max_duration_s/3600:.1f}h    (auto-terminate at this time)",
+            f"  Worst-case cost : ${max_cost_at_duration:.2f}    (max_duration × hourly rate)",
+            "",
+            f"  Idle detection  : terminate after {cfg.idle_timeout_s/60:.0f}min of <{cfg.idle_threshold_pct}% GPU util",
+            f"  Watchdog        : terminate if heartbeat stale >{cfg.watchdog_stale_s}s",
+            "",
+            "  Multiple termination triggers active:",
+            "    1. context-manager exit (always)",
+            "    2. SIGINT/SIGTERM signal handlers",
+            "    3. atexit handler (interpreter shutdown)",
+            "    4. external watchdog process (poll heartbeat)",
+            "    5. budget cap (cumulative cost)",
+            "    6. max duration cap (wall time)",
+            "    7. idle timeout (low GPU util)",
+            "",
+            f"  Audit log       : {cfg.audit_log_path}",
+            "=" * 70,
+            "",
+        ]
+        print("\n".join(preview))
+
+        # Auto-approve only if explicitly env-var-disabled (e.g. inside a CLI that
+        # has already shown the preview to the user).
+        if os.environ.get("ORS_LAMBDA_AUTO_APPROVE") == "1":
+            print("  [ORS_LAMBDA_AUTO_APPROVE=1 — proceeding without prompt]")
+            return
+
+        try:
+            answer = input("  Type 'launch' to confirm, anything else to abort: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            raise RuntimeError("launch aborted (no tty / interrupt during approval)")
+        if answer != "launch":
+            raise RuntimeError(f"launch aborted by user (typed {answer!r})")
+        print("  ✓ approved\n")
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         try:

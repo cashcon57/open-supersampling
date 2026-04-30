@@ -35,6 +35,91 @@ INSTANCE_PRICING: dict[str, float] = {
     "gpu_8x_h100":     23.92,
 }
 
+# Effective FP16 throughput (TFLOPs) for small CNNs at typical 25-35% of peak.
+# Used by `select_optimal_instance` to estimate wall-time and pick "fastest
+# available" rather than "cheapest available". Numbers are conservative.
+INSTANCE_EFFECTIVE_FP16_TFLOPS: dict[str, float] = {
+    "gpu_1x_a10":       35.0,
+    "gpu_1x_a6000":     45.0,
+    "gpu_1x_a100":      90.0,
+    "gpu_1x_a100_sxm4": 110.0,
+    "gpu_1x_h100_pcie": 250.0,
+    "gpu_1x_h100_sxm5": 320.0,
+    "gpu_2x_a100":      180.0,
+    "gpu_4x_a100":      360.0,
+    "gpu_8x_a100":      720.0,
+    "gpu_8x_h100":      2560.0,
+}
+
+# Default preference ordering for a single-GPU small-CNN training workload
+# (~250K params, ~1-3 hour total compute on a single instance).
+# Order: fastest first; selector falls through to next available.
+SINGLE_GPU_PREFERENCE_ORDER: list[str] = [
+    "gpu_1x_h100_sxm5",   # fastest, $2.99/hr — usually scarce
+    "gpu_1x_h100_pcie",   # nearly as fast, $2.49/hr
+    "gpu_1x_a100_sxm4",   # $1.79/hr
+    "gpu_1x_a100",        # $1.29/hr — common mid-tier
+    "gpu_1x_a6000",       # $0.80/hr — solid fallback
+    "gpu_1x_a10",         # $0.75/hr — slow but always available
+]
+
+
+def select_optimal_instance(
+    client: "LambdaClient",
+    preference: Optional[list[str]] = None,
+    workload_tflops: float = 200.0,
+    max_extra_per_run_usd: float = 5.0,
+) -> tuple[str, str]:
+    """Pick the most time-efficient available instance, biased toward speed.
+
+    Policy:
+        1. Walk `preference` in order (fastest first).
+        2. For each tier, if it has capacity in any region:
+             a. Compute its estimated wall-time and run-cost for `workload_tflops`.
+             b. If we already have a "cheapest acceptable" candidate and this
+                tier's run-cost is more than `max_extra_per_run_usd` higher,
+                prefer the cheaper one (still finishing in reasonable time).
+                Otherwise pick the faster one — time savings win.
+        3. If nothing in preference is available, raise.
+
+    Returns (instance_type_name, region_name).
+    """
+    if preference is None:
+        preference = SINGLE_GPU_PREFERENCE_ORDER
+
+    types = client.list_instance_types()
+    candidates = []
+    for tname in preference:
+        entry = types.get(tname, {})
+        regions = entry.get("regions_with_capacity_available", []) or []
+        region_names = [r.get("name") if isinstance(r, dict) else r for r in regions]
+        if not region_names:
+            continue
+        rate = INSTANCE_PRICING.get(tname, 0.0)
+        eff_tflops = INSTANCE_EFFECTIVE_FP16_TFLOPS.get(tname, 30.0)
+        # Wall time in hours = TFLOPs of work / TFLOPs/sec / 3600
+        wall_hr = workload_tflops * 1000.0 / (eff_tflops * 1000.0 * 3600.0) if eff_tflops > 0 else 9999.0
+        # Simpler: workload_tflops is "thousands of GFLOPs"; eff is TFLOPs/sec
+        # workload_seconds = workload_tflops / eff_tflops
+        wall_s = workload_tflops / eff_tflops if eff_tflops > 0 else 1e9
+        cost = (wall_s / 3600.0) * rate
+        candidates.append((tname, region_names[0], wall_s, cost, rate))
+
+    if not candidates:
+        raise RuntimeError(
+            "No instances of any preferred tier are available. "
+            "Try again later, or expand `preference` list."
+        )
+
+    # Candidates are already in fastest-first order via `preference`. Walk them
+    # and apply the cost-extra cap: if a faster tier costs >cap more than the
+    # cheapest, fall back to cheapest. Else pick the fastest.
+    fastest = candidates[0]
+    cheapest = min(candidates, key=lambda c: c[3])  # by total run cost
+    if fastest[3] - cheapest[3] > max_extra_per_run_usd:
+        return cheapest[0], cheapest[1]
+    return fastest[0], fastest[1]
+
 
 @dataclass
 class LambdaInstance:
