@@ -22,9 +22,18 @@ from ors.cloud.safety_harness import (
 
 
 def _mk_client(active_status: str = "active", ip: str = "10.0.0.1"):
-    """Return a MagicMock LambdaClient that simulates a launch+terminate cycle."""
+    """Return a MagicMock CloudClient that simulates a launch+terminate cycle.
+
+    The harness now type-checks against the `CloudClient` Protocol, so the
+    mock must answer `vendor_name`, `hourly_rate`, and `list_instances`
+    deterministically.
+    """
     client = MagicMock()
     client._api_key = "test-key"
+    client.vendor_name = "lambda"
+    # `hourly_rate` MUST return a real float — the harness uses it for budget
+    # math and pre-launch validation.
+    client.hourly_rate = MagicMock(return_value=1.29)  # gpu_1x_a100 reference price
     client.launch.return_value = ["i-test-1234"]
     client.terminate.return_value = {"data": {"terminated_instances": [{"id": "i-test-1234"}]}}
     inst = LambdaInstance(
@@ -37,6 +46,7 @@ def _mk_client(active_status: str = "active", ip: str = "10.0.0.1"):
         launched_at=None,
     )
     client.get_instance.return_value = inst
+    client.list_instances.return_value = []
     client.list_instance_types.return_value = {}
     return client
 

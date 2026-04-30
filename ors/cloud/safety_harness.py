@@ -43,11 +43,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from .lambda_client import LambdaClient, LambdaInstance
+from .protocol import CloudClient, CloudInstance
 
 
-_AUDIT_LOG_PATH = Path.home() / ".ors-lambda-audit.log"
-_HEARTBEAT_DIR = Path.home() / ".ors-lambda-heartbeats"
+# Audit + heartbeat directories. These were previously named after Lambda
+# specifically; the harness is now vendor-agnostic so paths use the generic
+# "cloud" namespace. Old `~/.ors-lambda-*` paths are kept readable for any
+# tooling that still consumes them, but new writes go to the new locations.
+_AUDIT_LOG_PATH = Path.home() / ".ors-cloud-audit.log"
+_HEARTBEAT_DIR = Path.home() / ".ors-cloud-heartbeats"
 
 
 class BudgetExceeded(RuntimeError):
@@ -127,12 +131,12 @@ class SafetyHarness:
     and terminate the instance after `watchdog_stale_s`.
     """
 
-    def __init__(self, client: LambdaClient, config: HarnessConfig):
+    def __init__(self, client: CloudClient, config: HarnessConfig):
         self._client = client
         self._config = config
         self._instance_id: Optional[str] = None
         self._instance_ids: list[str] = []          # ALL launched instance IDs (multi-instance safe)
-        self._instance: Optional[LambdaInstance] = None
+        self._instance: Optional[CloudInstance] = None
         self._launch_t: Optional[float] = None
         self._idle_streak_s: int = 0
         self._watchdog_proc: Optional[subprocess.Popen] = None
@@ -145,12 +149,11 @@ class SafetyHarness:
 
         # Edge case #9: refuse to launch with unknown pricing — budget tracking
         # would silently report $0 and the budget cap would never trigger.
-        from .lambda_client import INSTANCE_PRICING
-        if INSTANCE_PRICING.get(config.instance_type, 0.0) == 0.0:
+        if client.hourly_rate(config.instance_type) == 0.0:
             raise ValueError(
-                f"unknown hourly pricing for instance_type={config.instance_type!r}. "
-                f"Add it to INSTANCE_PRICING in lambda_client.py before launching, "
-                f"or budget caps will silently fail."
+                f"unknown hourly pricing for instance_type={config.instance_type!r} "
+                f"on vendor={client.vendor_name!r}. Add it to the vendor client's "
+                f"pricing table before launching, or budget caps will silently fail."
             )
 
         # Pre-launch validation
@@ -186,30 +189,28 @@ class SafetyHarness:
             existing = self._client.list_instances()
             active = [i for i in existing if i.status not in ("terminated", "terminating")]
             if active:
+                vendor = self._client.vendor_name
                 print()
-                print("  ⚠ WARNING: %d instance(s) already active on this API key:" % len(active))
+                print(f"  ⚠ WARNING: {len(active)} instance(s) already active on this {vendor} API key:")
                 for inst in active:
-                    rate = INSTANCE_PRICING.get(inst.instance_type, 0.0) if False else None  # noqa
-                    from .lambda_client import INSTANCE_PRICING as _P
-                    r = _P.get(inst.instance_type, 0.0)
+                    r = self._client.hourly_rate(inst.instance_type)
                     print(f"    - {inst.instance_id}  {inst.instance_type}  status={inst.status}  ${r}/hr")
                 print("  Concurrent launches do NOT share budget caps.")
-                print("  If these aren't yours, run: python -m scripts.lambda_terminate_all")
+                print(f"  If these aren't yours, run: python -m scripts.{vendor}_terminate_all")
                 print()
         except Exception as e:
             sys.stderr.write(f"[SafetyHarness] WARNING: couldn't list existing instances: {e}\n")
 
     def _pre_launch_approval(self):
         """Print a cost preview and require interactive confirmation."""
-        from .lambda_client import INSTANCE_PRICING
         cfg = self._config
-        rate = INSTANCE_PRICING.get(cfg.instance_type, 0.0)
+        rate = self._client.hourly_rate(cfg.instance_type)
         max_cost_at_duration = (cfg.max_duration_s / 3600.0) * rate
 
         preview = [
             "",
             "=" * 70,
-            "  LAMBDA GPU LAUNCH — APPROVAL REQUIRED",
+            f"  {self._client.vendor_name.upper()} GPU LAUNCH — APPROVAL REQUIRED",
             "=" * 70,
             f"  Purpose         : {cfg.purpose or '(not specified)'}",
             f"  Instance type   : {cfg.instance_type}",
@@ -240,9 +241,11 @@ class SafetyHarness:
         print("\n".join(preview))
 
         # Auto-approve only if explicitly env-var-disabled (e.g. inside a CLI that
-        # has already shown the preview to the user).
-        if os.environ.get("ORS_LAMBDA_AUTO_APPROVE") == "1":
-            print("  [ORS_LAMBDA_AUTO_APPROVE=1 — proceeding without prompt]")
+        # has already shown the preview to the user). Both the legacy Lambda-only
+        # flag and the new generic flag are honored, so existing tooling keeps
+        # working.
+        if os.environ.get("ORS_CLOUD_AUTO_APPROVE") == "1" or os.environ.get("ORS_LAMBDA_AUTO_APPROVE") == "1":
+            print("  [ORS_CLOUD_AUTO_APPROVE=1 — proceeding without prompt]")
             return
 
         try:
@@ -384,9 +387,7 @@ class SafetyHarness:
 
     def _launch(self):
         cfg = self._config
-        rate = self._client.list_instance_types() if False else None  # avoid extra API call
-        from .lambda_client import INSTANCE_PRICING
-        rate = INSTANCE_PRICING.get(cfg.instance_type, 0.0)
+        rate = self._client.hourly_rate(cfg.instance_type)
         if rate == 0.0:
             sys.stderr.write(
                 f"[SafetyHarness] WARNING: unknown pricing for {cfg.instance_type}; "
@@ -395,6 +396,7 @@ class SafetyHarness:
         _audit(
             "pre_launch",
             {
+                "vendor": self._client.vendor_name,
                 "instance_type": cfg.instance_type,
                 "region": cfg.region,
                 "budget_usd": cfg.budget_usd,
@@ -409,7 +411,9 @@ class SafetyHarness:
             name=cfg.name,
         )
         if not ids:
-            raise RuntimeError("Lambda launch returned no instance IDs")
+            raise RuntimeError(
+                f"{self._client.vendor_name} launch returned no instance IDs"
+            )
         # Edge case #8: track ALL returned IDs in case quantity > 1.
         # Currently we always launch quantity=1 but defensive nonetheless.
         self._instance_ids = list(ids)
@@ -498,16 +502,16 @@ class SafetyHarness:
             except Exception:
                 pass
             time.sleep(delay_s)
+        vendor = self._client.vendor_name
         sys.stderr.write(
             f"[SafetyHarness] CRITICAL: instance(s) {ids} still appear active after "
-            f"{retries} retry attempts. Manually verify with `python -m scripts.lambda_status` "
-            f"and force-kill with `python -m scripts.lambda_terminate_all`.\n"
+            f"{retries} retry attempts. Manually verify with `python -m scripts.{vendor}_status` "
+            f"and force-kill with `python -m scripts.{vendor}_terminate_all`.\n"
         )
         _audit("terminate_unverified", {"instance_ids": ids, "retries": retries})
 
     def _cost_so_far(self) -> float:
-        from .lambda_client import INSTANCE_PRICING
-        rate = INSTANCE_PRICING.get(self._config.instance_type, 0.0)
+        rate = self._client.hourly_rate(self._config.instance_type)
         return self.elapsed_s / 3600.0 * rate
 
     def _poll_gpu_util(self) -> Optional[float]:
@@ -563,26 +567,49 @@ class SafetyHarness:
         instance_id = self._instance_id
         api_key = self._client._api_key  # noqa: passed via stdin, never on cmdline
 
-        # The script reads its own API key from a 0600 file we wrote earlier.
+        # Vendor-agnostic curl assembly:
+        #   - body comes from `client.terminate_request_body(instance_id)`
+        #   - either an `Authorization` header or a `-u user:pass` flag is used
+        #   - endpoint URL comes from `client.terminate_endpoint()`
+        # The actual API key is loaded at firing time from a 0600 file on the
+        # instance — never embedded in the script body.
+        endpoint = self._client.terminate_endpoint()
+        # Build with API_KEY placeholder; the script substitutes from $API_KEY.
+        auth_header = self._client.terminate_auth_header("$API_KEY")
+        curl_user = self._client.terminate_curl_auth_flag("$API_KEY")
+        body = self._client.terminate_request_body(str(instance_id))
+        # Escape body for safe embedding in a bash double-quoted string.
+        body_bash = body.replace("\\", "\\\\").replace("\"", "\\\"").replace("$", "\\$")
+
+        curl_cmd_parts = ["curl -sS -X POST"]
+        if curl_user:
+            curl_cmd_parts.append(f'-u "{curl_user}"')
+        if auth_header:
+            curl_cmd_parts.append(f'-H "{auth_header}"')
+        curl_cmd_parts.extend([
+            f'"{endpoint}"',
+            "-H 'Content-Type: application/json'",
+            f'-d "{body_bash}"',
+            ">> /tmp/ors-self-terminate.log 2>&1",
+        ])
+        curl_line = " ".join(curl_cmd_parts)
+
         remote_script = (
             "#!/usr/bin/env bash\n"
             "set -uo pipefail\n"
-            "KEY_FILE=/tmp/.ors-lambda-key\n"
+            "KEY_FILE=/tmp/.ors-cloud-key\n"
             "INSTANCE_ID=" + str(instance_id) + "\n"
             "MAX_S=" + str(cap_s) + "\n"
-            "echo \"[ors-self-terminate] start $(date -u +%FT%TZ) max_s=$MAX_S\" >> /tmp/ors-self-terminate.log\n"
+            "VENDOR=" + self._client.vendor_name + "\n"
+            "echo \"[ors-self-terminate $VENDOR] start $(date -u +%FT%TZ) max_s=$MAX_S\" >> /tmp/ors-self-terminate.log\n"
             "sleep $MAX_S\n"
             "if [ ! -f \"$KEY_FILE\" ]; then\n"
             "  echo \"[ors-self-terminate] missing key file at firing time\" >> /tmp/ors-self-terminate.log\n"
             "  exit 1\n"
             "fi\n"
             "API_KEY=$(cat \"$KEY_FILE\")\n"
-            "echo \"[ors-self-terminate] firing at $(date -u +%FT%TZ)\" >> /tmp/ors-self-terminate.log\n"
-            "curl -sS -X POST -u \"${API_KEY}:\" \\\n"
-            "  https://cloud.lambda.ai/api/v1/instance-operations/terminate \\\n"
-            "  -H 'Content-Type: application/json' \\\n"
-            "  -d \"{\\\"instance_ids\\\": [\\\"${INSTANCE_ID}\\\"]}\" \\\n"
-            "  >> /tmp/ors-self-terminate.log 2>&1\n"
+            "echo \"[ors-self-terminate $VENDOR] firing at $(date -u +%FT%TZ)\" >> /tmp/ors-self-terminate.log\n"
+            + curl_line + "\n"
             "shred -u \"$KEY_FILE\" 2>/dev/null || rm -f \"$KEY_FILE\"\n"
         )
 
@@ -597,9 +624,9 @@ class SafetyHarness:
         ]
 
         try:
-            # Step 1: write the API key to /tmp/.ors-lambda-key with 0600
+            # Step 1: write the API key to /tmp/.ors-cloud-key with 0600
             r1 = subprocess.run(
-                ssh_base + ["bash", "-c", "umask 077; cat > /tmp/.ors-lambda-key && chmod 600 /tmp/.ors-lambda-key"],
+                ssh_base + ["bash", "-c", "umask 077; cat > /tmp/.ors-cloud-key && chmod 600 /tmp/.ors-cloud-key"],
                 input=api_key,
                 text=True,
                 capture_output=True,
@@ -663,11 +690,20 @@ class SafetyHarness:
         self.heartbeat()  # write initial timestamp
 
         env = os.environ.copy()
-        # Pass API key via env to watchdog (don't expose on cmdline)
-        env["LAMBDA_API_KEY"] = self._client._api_key  # noqa
+        # Pass API key via env to watchdog (don't expose on cmdline). Both the
+        # legacy LAMBDA_API_KEY and the vendor-specific name are set so the
+        # watchdog can pick up either depending on `--vendor`.
+        vendor = self._client.vendor_name
+        if vendor == "lambda":
+            env["LAMBDA_API_KEY"] = self._client._api_key  # noqa
+        elif vendor == "runpod":
+            env["RUNPOD_API_KEY"] = self._client._api_key  # noqa
+        else:
+            env[f"{vendor.upper()}_API_KEY"] = self._client._api_key  # noqa
         self._watchdog_proc = subprocess.Popen(
             [
                 sys.executable, "-m", "ors.cloud.watchdog",
+                "--vendor", vendor,
                 "--instance-id", self._instance_id or "",
                 "--heartbeat", str(self._heartbeat_path),
                 "--stale-s", str(self._config.watchdog_stale_s),

@@ -164,14 +164,18 @@ def _install_guest_agent(ip: str, key_path: Path, user: str = "ubuntu") -> int:
 
 def _rsync_repo(ip: str, key_path: Path, user: str = "ubuntu") -> int:
     """Push the repo (excluding venv/data/results/secrets) to the instance."""
+    # IMPORTANT: rsync `--exclude foo/` matches `foo/` AT ANY DEPTH. Anchoring
+    # with `/foo/` matches only the top-level directory. We need this for
+    # `data/` because `ors/data/` is a real Python package we MUST ship.
+    # Same for `results/` — keep it anchored to root only.
     cmd = [
         "rsync", "-az", "--delete",
         "-e", f"ssh -i {key_path} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null",
         "--exclude", "venv*/",
-        "--exclude", "data/",
-        "--exclude", "results/",
-        "--exclude", ".secrets/",
-        "--exclude", ".git/",
+        "--exclude", "/data/",            # top-level dataset dir only — NOT ors/data/
+        "--exclude", "/results/",
+        "--exclude", "/.secrets/",
+        "--exclude", "/.git/",
         "--exclude", "__pycache__/",
         "--exclude", "*.pth",
         f"{REPO_ROOT}/",

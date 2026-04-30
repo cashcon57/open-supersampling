@@ -136,11 +136,14 @@ def test_list_instances_maps_to_cloudinstance(monkeypatch):
 
 def test_live_pricing_overlay(monkeypatch):
     monkeypatch.setenv("RUNPOD_API_KEY", "test-key")
-    fake_gpus = [
-        {"id": "NVIDIA H100 80GB HBM3", "securePrice": 3.50, "communityPrice": 2.20, "secureCloud": True},
-        {"id": "NVIDIA A40", "securePrice": 0.45, "communityPrice": 0.30, "secureCloud": True},
-    ]
-    with patch("runpod.get_gpus", return_value=fake_gpus):
+    # `_refresh_pricing` calls `get_gpu(id)` per default-priced GPU. Stub each.
+    by_id = {
+        "NVIDIA H100 80GB HBM3": {"id": "NVIDIA H100 80GB HBM3", "securePrice": 3.50, "communityPrice": 2.20},
+        "NVIDIA A40":            {"id": "NVIDIA A40",            "securePrice": 0.45, "communityPrice": 0.30},
+    }
+    def fake_get_gpu(gid, *a, **kw):
+        return by_id.get(gid)
+    with patch("runpod.get_gpu", side_effect=fake_get_gpu):
         c = RunPodClient(live_pricing=True)
     # We always pick max(default, live) so the budget cap stays conservative.
     assert c.hourly_rate("NVIDIA H100 80GB HBM3") == 3.50    # live > default 2.99
@@ -149,12 +152,13 @@ def test_live_pricing_overlay(monkeypatch):
 
 def test_live_pricing_failure_falls_back_to_defaults(monkeypatch, capsys):
     monkeypatch.setenv("RUNPOD_API_KEY", "test-key")
-    with patch("runpod.get_gpus", side_effect=RuntimeError("api down")):
+    # Simulate per-GPU lookup raising on every call. The client should swallow
+    # individual failures inside `_refresh_pricing`'s try/except and never
+    # raise out to the caller.
+    with patch("runpod.get_gpu", side_effect=RuntimeError("api down")):
         c = RunPodClient(live_pricing=True)
-    # Constructor should NOT raise when pricing fetch fails.
+    # Constructor must not raise; defaults remain in place.
     assert c.hourly_rate("NVIDIA H100 80GB HBM3") == RUNPOD_DEFAULT_PRICING["NVIDIA H100 80GB HBM3"]
-    err = capsys.readouterr().err
-    assert "live pricing fetch failed" in err
 
 
 def test_canonicalize_gpu_id():

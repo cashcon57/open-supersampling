@@ -36,6 +36,11 @@ dev = ["pytest>=8.0", "pytest-cov>=5.0", "ruff>=0.6"]
 # ship pre-built wheels for macOS arm64 and Linux x86_64. See
 # docs/research/2026-04-30-vulkan-runtime-eval.md for the rationale.
 vulkan = ["ncnn>=1.0.20240102", "pnnx>=20240410"]
+# RunPod compute provider (second cloud vendor alongside Lambda).
+# Used by `ors.cloud.runpod_client` and the `scripts/runpod_*.py` launchers.
+# The Lambda code path does NOT require this package — it's intentionally
+# a pure optional extra so Lambda-only setups stay slim.
+runpod = ["runpod>=1.7"]
 
 [tool.setuptools.packages.find]
 include = ["ors*"]

@@ -57,33 +57,33 @@ def main():
         print(f"  (no local key file at {key_path}; using env var instead)")
 
     # 3. GPU availability + pricing
+    # `list_gpus()` only returns (id, displayName, memoryInGb). For prices +
+    # cloud-tier availability we have to call `get_gpu(<id>)` per GPU.
     print()
-    try:
-        gpus = client.list_gpus()
-        gpus_by_id = {g["id"]: g for g in gpus if "id" in g}
-        print(f"Relevant GPU availability ({client._cloud_type} cloud, "
-              f"{'spot' if client._spot else 'on-demand'}):")
-        for gid in _RELEVANT:
-            g = gpus_by_id.get(gid)
-            if g is None:
-                print(f"  — {gid:<32}  not in catalog")
-                continue
-            secure = g.get("secureCloud")
-            community = g.get("communityCloud")
-            sp = g.get("securePrice") or 0.0
-            cp = g.get("communityPrice") or 0.0
-            avail_marks = []
-            if secure:
-                avail_marks.append(f"secure ${sp:.2f}/hr")
-            if community:
-                avail_marks.append(f"community ${cp:.2f}/hr")
-            mark = "✓" if avail_marks else "—"
-            availability = ", ".join(avail_marks) if avail_marks else "NONE LISTED"
-            canonical = client.canonicalize_gpu_id(gid) or "—"
-            print(f"  {mark} {gid:<32}  {availability:<40}  canonical={canonical}")
-    except Exception as e:
-        print(f"✗ Failed to list GPU types: {e}")
-        return 4
+    print(f"Relevant GPU availability ({client._cloud_type} cloud, "
+          f"{'spot' if client._spot else 'on-demand'}):")
+    for gid in _RELEVANT:
+        try:
+            g = client._runpod.get_gpu(gid)
+        except Exception as e:
+            print(f"  ! {gid:<32}  failed to fetch detail: {e}")
+            continue
+        if not g:
+            print(f"  — {gid:<32}  not in catalog")
+            continue
+        secure = g.get("secureCloud")
+        community = g.get("communityCloud")
+        sp = g.get("securePrice") or 0.0
+        cp = g.get("communityPrice") or 0.0
+        avail_marks = []
+        if secure:
+            avail_marks.append(f"secure ${sp:.2f}/hr")
+        if community:
+            avail_marks.append(f"community ${cp:.2f}/hr")
+        mark = "✓" if avail_marks else "—"
+        availability = ", ".join(avail_marks) if avail_marks else "NONE LISTED"
+        canonical = client.canonicalize_gpu_id(gid) or "—"
+        print(f"  {mark} {gid:<32}  {availability:<40}  canonical={canonical}")
 
     # 4. Active pods (anything currently billing?)
     print()

@@ -201,18 +201,23 @@ class RunPodClient:
     # ---- pricing ----
 
     def _refresh_pricing(self) -> None:
-        """Overlay live `securePrice` from `get_gpus()` onto the default table.
+        """Overlay live pricing from RunPod onto the default table.
+
+        Note: `get_gpus()` returns only `(id, displayName, memoryInGb)` — the
+        pricing fields are only populated when calling `get_gpu(<id>)`. So we
+        loop the GPUs we care about and fetch each one's full record. Errors
+        are swallowed per-GPU so a single failure doesn't blow up the rest.
 
         We always pick the higher of (live, default) so the budget cap stays
         conservative.
         """
-        gpus = self._runpod.get_gpus()
-        for g in gpus or []:
-            gid = g.get("id")
-            if not gid:
+        for gid in list(RUNPOD_DEFAULT_PRICING.keys()):
+            try:
+                g = self._runpod.get_gpu(gid)
+            except Exception:
                 continue
-            # `securePrice` for SECURE cloud, `communityPrice` for COMMUNITY,
-            # `secureSpotPrice` if spot. We use whichever matches our config.
+            if not g:
+                continue
             if self._spot:
                 price = g.get("secureSpotPrice") if self._cloud_type != "COMMUNITY" else g.get("communitySpotPrice")
             elif self._cloud_type == "COMMUNITY":

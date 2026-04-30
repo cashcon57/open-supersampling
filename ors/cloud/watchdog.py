@@ -1,4 +1,4 @@
-"""External watchdog process — terminates a Lambda instance if the parent
+"""External watchdog process — terminates a cloud GPU instance if the parent
 training process dies without orderly shutdown.
 
 This is a SEPARATE process spawned by `SafetyHarness`. It is the last line
@@ -6,27 +6,44 @@ of defense against orphaned billable instances. Even if the harness's
 context-manager exit, signal handlers, and atexit handler all fail to fire
 (e.g., the parent process is `kill -9`'d, or the machine reboots, or Python
 crashes), the watchdog independently polls a heartbeat file and calls
-terminate via the same Lambda API.
+terminate via the same vendor API.
 
 Invoked via:
-    python -m ors.cloud.watchdog --instance-id <id> --heartbeat <path> ...
+    python -m ors.cloud.watchdog --vendor <name> --instance-id <id> \\
+                                 --heartbeat <path> ...
 
-The watchdog reads `LAMBDA_API_KEY` from the environment so the key never
-appears on the command line.
+The watchdog reads the API key from a vendor-specific env var so the key
+never appears on the command line:
+    --vendor lambda    -> LAMBDA_API_KEY
+    --vendor runpod    -> RUNPOD_API_KEY
 """
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 import time
 from pathlib import Path
 
-from .lambda_client import LambdaClient
+
+def _make_client(vendor: str):
+    """Construct the matching CloudClient for `vendor`. Lazy imports keep the
+    runpod SDK optional for Lambda-only setups."""
+    if vendor == "lambda":
+        from .lambda_client import LambdaClient
+        return LambdaClient()  # picks up LAMBDA_API_KEY
+    if vendor == "runpod":
+        from .runpod_client import RunPodClient
+        # Skip live pricing fetch in the watchdog — we don't need it for
+        # terminate, and avoiding the extra API call keeps the watchdog
+        # resilient when the vendor's read API is briefly down.
+        return RunPodClient(live_pricing=False)
+    raise ValueError(f"unknown vendor: {vendor!r}")
 
 
 def main():
     p = argparse.ArgumentParser()
+    p.add_argument("--vendor", default="lambda",
+                   help="cloud vendor: lambda | runpod (default: lambda for back-compat)")
     p.add_argument("--instance-id", required=True)
     p.add_argument("--heartbeat", required=True, type=Path)
     p.add_argument("--stale-s", type=int, default=120,
@@ -37,17 +54,17 @@ def main():
     args = p.parse_args()
 
     started = time.time()
-    client = LambdaClient()  # picks up LAMBDA_API_KEY from env
+    client = _make_client(args.vendor)
 
     def terminate(reason: str):
         try:
             client.terminate([args.instance_id])
             sys.stderr.write(
-                f"[watchdog {args.instance_id}] TERMINATED: {reason}\n"
+                f"[watchdog {args.vendor} {args.instance_id}] TERMINATED: {reason}\n"
             )
         except Exception as e:
             sys.stderr.write(
-                f"[watchdog {args.instance_id}] terminate failed: {e}\n"
+                f"[watchdog {args.vendor} {args.instance_id}] terminate failed: {e}\n"
             )
 
     while True:

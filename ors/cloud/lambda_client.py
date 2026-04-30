@@ -138,7 +138,15 @@ class LambdaInstance:
         return INSTANCE_PRICING.get(self.instance_type, 0.0)
 
 
+# `LambdaInstance` happens to be field-compatible with `CloudInstance` from
+# `ors.cloud.protocol` — the dataclasses share the same field names and types.
+# The harness treats either one structurally, so no conversion layer is needed.
+
+
 class LambdaClient:
+    """Implements the `CloudClient` Protocol from `ors.cloud.protocol`."""
+
+    vendor_name: str = "lambda"
     """Lambda Cloud REST API client.
 
     Reads the API key from one of (in priority order):
@@ -321,3 +329,23 @@ class LambdaClient:
             hostname=d.get("hostname"),
             launched_at=d.get("created_at") or d.get("launched_at"),
         )
+
+    # ----- CloudClient protocol surface (vendor-agnostic) -----
+
+    def hourly_rate(self, instance_type_name: str) -> float:
+        return INSTANCE_PRICING.get(instance_type_name, 0.0)
+
+    def terminate_endpoint(self) -> str:
+        return f"{_API_BASE}/instance-operations/terminate"
+
+    def terminate_auth_header(self, api_key: str) -> str:
+        # Lambda uses HTTP Basic via curl -u, no Authorization header.
+        return ""
+
+    def terminate_curl_auth_flag(self, api_key: str) -> Optional[str]:
+        # Lambda Cloud accepts API key as username, empty password.
+        return f"{api_key}:"
+
+    def terminate_request_body(self, instance_id: str) -> str:
+        import json as _json
+        return _json.dumps({"instance_ids": [instance_id]})
