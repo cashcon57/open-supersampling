@@ -10,7 +10,7 @@
     {
       "id": 1,
       "subject": "Task 1: Mitsuba 3 paired rendering pipeline",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         0
       ],
@@ -19,7 +19,7 @@
     {
       "id": 2,
       "subject": "Task 2: ORD model (kernel-prediction U-Net)",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         0
       ],
@@ -28,7 +28,7 @@
     {
       "id": 3,
       "subject": "Task 3: ORU model (3-mode temporal upscaler)",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         2
       ],
@@ -37,7 +37,7 @@
     {
       "id": 4,
       "subject": "Task 4: Feature handoff contract + PairedORS",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         2,
         3
@@ -47,7 +47,7 @@
     {
       "id": 5,
       "subject": "Task 5: Training pipeline (data + losses + 3 trainers)",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         1,
         4
@@ -57,7 +57,7 @@
     {
       "id": 6,
       "subject": "Task 6: Valuation harness (metrics + bench + comparison)",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         5
       ],
@@ -66,12 +66,12 @@
     {
       "id": 7,
       "subject": "Task 7: Reproducibility scripts + README + tag v0.1.0-mvp",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         6
       ],
       "description": "**Goal:** One-shot reproducibility scripts, full-pipeline smoke test, updated README, tag v0.1.0-mvp.\n\n**Files:** scripts/{train_all.sh,run_compare.sh}, tests/test_smoke.py, README.md update\n\n**Verify:** `pytest tests/ -v -m 'not gpu'` passes on CPU; full pipeline runs end-to-end on a CUDA box.\n\n```json:metadata\n{\"files\": [\"scripts/train_all.sh\", \"scripts/run_compare.sh\", \"tests/test_smoke.py\", \"README.md\"], \"verifyCommand\": \"pytest tests/ -v -m 'not gpu'\", \"acceptanceCriteria\": [\"train_all.sh chained pipeline\", \"smoke test <30s on CPU\", \"README documents reproduction + known limits\", \"git tag v0.1.0-mvp\"]}\n```"
     }
   ],
-  "lastUpdated": "2026-04-30T01:57:12Z"
+  "lastUpdated": "2026-04-30T02:35:15Z"
 }
