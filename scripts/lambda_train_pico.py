@@ -138,6 +138,30 @@ def _ssh_command(ip: str, key_path: Path, user: str = "ubuntu") -> list[str]:
     ]
 
 
+def _install_guest_agent(ip: str, key_path: Path, user: str = "ubuntu") -> int:
+    """Install Lambda's Guest Agent for GPU/VRAM/system metrics in the dashboard.
+
+    Per https://docs.lambda.ai/public-cloud/guest-agent/. Idempotent: safe to
+    re-run; the install script handles existing installs.
+    """
+    ssh = _ssh_command(ip, key_path, user)
+    cmd = (
+        "curl -fsSL https://lambdalabs-guest-agent.s3.us-west-2.amazonaws.com/scripts/install.sh "
+        "| sudo bash 2>&1 | tail -20 && "
+        "sudo systemctl --no-pager status 'lambda-guest-agent*' 2>&1 | head -20 || "
+        "echo '[lambda_train_pico] guest-agent status check failed (non-fatal)'"
+    )
+    print(f"[lambda_train_pico] installing Lambda Guest Agent on {ip} ...")
+    rc = subprocess.run(ssh + ["bash", "-c", cmd]).returncode
+    if rc != 0:
+        print(
+            "[lambda_train_pico] Guest Agent install returned non-zero (non-fatal); "
+            "metrics dashboard may be unavailable for this run.",
+            file=sys.stderr,
+        )
+    return 0  # never block training on guest-agent install
+
+
 def _rsync_repo(ip: str, key_path: Path, user: str = "ubuntu") -> int:
     """Push the repo (excluding venv/data/results/secrets) to the instance."""
     cmd = [
@@ -216,6 +240,8 @@ def _run_training(harness: SafetyHarness, ip: str, key_path: Path, args) -> int:
     ssh = _ssh_command(ip, key_path)
 
     # Install + run as a single shell pipeline; heartbeat by polling exit code.
+    # Stream pip install via tee so we see errors in real-time AND keep the
+    # full log on the instance for post-mortem if it fails.
     smoke_flag = "--smoke-test" if args.smoke_test else ""
     data_arg = "" if args.smoke_test else "--data ${OSS_DATA_DIR}/noisebase"
     remote_cmd = (
@@ -223,8 +249,8 @@ def _run_training(harness: SafetyHarness, ip: str, key_path: Path, args) -> int:
         "cd ~/ors && "
         "python3 -m venv venv-cloud --upgrade-deps 2>&1 | tail -3 && "
         "source venv-cloud/bin/activate && "
-        # Tail pip install log so harness sees progress; full output to file
-        "pip install -e .[dev] > /tmp/ors-pip-install.log 2>&1 && "
+        "echo '--- pip install starting ---' && "
+        "pip install -e .[dev] 2>&1 | tee /tmp/ors-pip-install.log | tail -100 && "
         "echo '--- pip install OK ---' && "
         f"python -m ors.train.train_pico "
         f"{smoke_flag} {data_arg} "
@@ -354,6 +380,9 @@ def main():
     with harness as inst:
         print(f"[lambda_train_pico] instance {inst.instance_id} active at {inst.ip}")
 
+        # Install Lambda Guest Agent (best-effort; metrics in the dashboard).
+        _install_guest_agent(inst.ip, cfg.ssh_key_path)
+
         rc = _rsync_repo(inst.ip, cfg.ssh_key_path)
         if rc != 0:
             print(
@@ -376,6 +405,20 @@ def main():
         rc = _run_training(harness, inst.ip, cfg.ssh_key_path, args)
         if rc != 0:
             print(f"[lambda_train_pico] training exited rc={rc}", file=sys.stderr)
+            # Pull remote logs back for post-mortem before harness terminates.
+            log_local = REPO_ROOT / "results" / "pico-cloud" / "ors-pip-install.log"
+            log_local.parent.mkdir(parents=True, exist_ok=True)
+            scp_log = [
+                "scp",
+                "-i", str(cfg.ssh_key_path),
+                "-o", "StrictHostKeyChecking=no",
+                "-o", "UserKnownHostsFile=/dev/null",
+                f"ubuntu@{inst.ip}:/tmp/ors-pip-install.log",
+                str(log_local),
+            ]
+            subprocess.run(scp_log, check=False, capture_output=True)
+            if log_local.exists():
+                print(f"[lambda_train_pico] saved pip install log to {log_local}", file=sys.stderr)
             return rc
 
         # Pull the trained checkpoint back before the harness terminates.
