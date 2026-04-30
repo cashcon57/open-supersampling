@@ -10,11 +10,14 @@ import numpy as np
 
 def _select_variant():
     """Pick the best available Mitsuba variant. Try CUDA, fall back to LLVM."""
+    # Mitsuba raises ImportError ("Requested an unsupported variant ...") when an
+    # unbuilt variant is requested, and AttributeError if the variant name is
+    # unknown to the build. Catching only those two keeps unrelated bugs loud.
     for v in ("cuda_ad_rgb", "llvm_ad_rgb", "scalar_rgb"):
         try:
             mi.set_variant(v)
             return v
-        except Exception:
+        except (ImportError, AttributeError):
             continue
     raise RuntimeError("No usable Mitsuba variant found")
 
@@ -70,6 +73,31 @@ def render_pair(
     resolution: tuple[int, int] = (1920, 1080),
     out_dir: Optional[Path] = None,
 ) -> dict[str, np.ndarray]:
+    """Render a paired (noisy + ground truth + G-buffer) image triplet.
+
+    Returns a dict with keys ``noisy, ground_truth, albedo, normal, depth, motion``;
+    all values are ``np.float32`` arrays in linear HDR (not tonemapped). The two
+    radiance renders use deterministic but distinct seeds derived from
+    ``view_index`` so re-runs are reproducible and the noisy/GT pair is
+    decorrelated.
+
+    Parameters
+    ----------
+    scene_name
+        ``"cbox"`` (Mitsuba bundled, used by the test) or ``"bistro"`` (loaded
+        via the ``ORS_BISTRO_XML`` environment variable). See ``scenes.py``.
+    view_index
+        Index into the scene's ``_VIEWS`` list (0 for cbox; 0–3 for bistro).
+    spp_noisy, spp_gt
+        Samples per pixel for the noisy and ground-truth renders.
+    resolution
+        Output image resolution as ``(width, height)``.
+    out_dir
+        If provided, every buffer is also written to disk as
+        ``<scene>_v<view:04d>_<key>.exr`` under this directory. The directory
+        is created if missing. When ``None``, the function only returns the
+        in-memory dict.
+    """
     from .scenes import load_scene
     scene = load_scene(scene_name, view_index, resolution)
     noisy = _render_radiance(scene, spp=spp_noisy, seed=view_index * 7919 + 1)

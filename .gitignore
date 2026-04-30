@@ -16,3 +16,6 @@ results/
 !results/.gitkeep
 data/
 .DS_Store
+venv-py312/
+venv-*/
+data/
