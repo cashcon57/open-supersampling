@@ -75,9 +75,11 @@ RUNPOD_DEFAULT_PRICING: dict[str, float] = {
     "NVIDIA A100-SXM4-40GB":       1.39,
     "NVIDIA A100-SXM4-80GB":       1.49,   # secure $1.49, community $1.39
     "NVIDIA H100 PCIe":            2.79,   # placeholder above live $2.39 for safety
+    "NVIDIA H100 SXM":             2.99,   # SXM variant (alias used by some regions)
     "NVIDIA H100 80GB HBM3":       2.99,   # SXM variant
     "NVIDIA H100 NVL":             3.39,
     "NVIDIA H200":                 3.99,
+    "NVIDIA B200":                 5.99,   # placeholder
 }
 
 
