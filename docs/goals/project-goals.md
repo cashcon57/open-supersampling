@@ -46,15 +46,19 @@ Pure-PyTorch reference implementation on macOS arm64. ORD denoiser (kernel-predi
 
 **Denoising is NOT needed for the upscaler ship.** Pure upscalers (DLSS-SR, FSR, XeSS) consume clean input from the game's existing pipeline (rasterized or pre-denoised RT). The game's own denoiser handles noise BEFORE the upscaler runs. ORS-upscaler is a drop-in for the same contract.
 
-**Hardware tiering (3 weight sets, same DLL, runtime detection):**
+**Hardware tiering (3 NN weight sets + 1 fallback path, same DLL, runtime detection):**
 
-| Tier | Params | Target HW | Quality target | Perf target @ 1080p |
+| Tier | Type | Target HW | Quality target | Perf target @ 1080p |
 |---|---|---|---|---|
-| **ORU-Tiny** | ~500K | GTX 10/16 series, RX 5000, integrated GPUs (no ML accel, no RT) | match FSR 2 spatial+temporal | <2 ms on GTX 1660 |
-| **ORU-Lite** | ~1M | RTX 20+, RDNA 2+, M-series base, Steam Deck | match DLSS-SR Quality | <1.5 ms RTX 4070 |
-| **ORU-Standard** | ~2.6M | RTX 4080+, RX 9070 XT+, M3 Pro+, coop_matrix HW | beat DLSS-SR Quality | <2.5 ms RTX 4090 |
+| **Spatial fallback** (inside ORU-Tiny DLL) | G-buffer-aware bicubic + adaptive sharpen, no NN | DX11/Vulkan 1.0/Metal 2.0 baseline (~2012+: Kepler/Maxwell, GCN 1-3, pre-Iris-Xe Intel) | beat FSR 1 / NIS via G-buffer edge awareness | ~0.5-1 ms @ 4K on Polaris-class |
+| **ORU-Tiny** (~500K) | NN, FP16 compute | Pascal/Polaris+ (2016+), GTX 10/16, RX 400+, Iris Pro | match FSR 2 spatial+temporal | <2 ms on GTX 1660 |
+| **ORU-Lite** (~1M) | NN, FP16 packed | RTX 20+, RDNA 2+, M-series base, Steam Deck | match DLSS-SR Quality | <1.5 ms RTX 4070 |
+| **ORU-Standard** (~2.6M) | NN, coop_matrix | RTX 4080+, RX 9070 XT+, M3 Pro+ | beat DLSS-SR Quality | <2.5 ms RTX 4090 |
 
-**Hardware coverage spans the entire gaming GPU market since ~2016.** Massive reach.
+**Hardware coverage spans the entire gaming GPU market since ~2012.** The spatial fallback is a ~600-line shader (HLSL/GLSL/MSL combined) inside ORU-Tiny's dispatcher — not a separate tier with its own training/QA. Activates automatically when NN can't allocate or hardware can't run FP16 compute.
+
+Marketing claim:
+> ORS runs on any GPU with DX11 / Vulkan 1.0 / Metal 2.0 support (~2012+). Real-time NN-quality upscaling on Pascal/Polaris+ (2016+). G-buffer-aware spatial upscaling on older hardware — better than NIS or FSR 1 at similar perf cost. Bilinear fallback at the absolute floor.
 
 **v0.2 deliverables:**
 1. PyTorch architecture rebuild: ORU at 500K / 1M / 2.6M tiers (currently 121K, undersized).
