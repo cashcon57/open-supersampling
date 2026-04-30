@@ -175,7 +175,7 @@ LoRA = low-rank weight-update decomposition. Frozen base + small adapter (1-5% o
 - DLSS hallucinates on Skyrim modded content because training data lacks those material distributions
 - Per-game LoRA solves this **better than DLSS structurally can** (DLSS is one frozen model per release)
 - Modded games get LoRAs from the modding community itself
-- Corkscrew (existing project) is the perfect distribution channel for Wine/CrossOver users
+- Linux/Wine/Proton users covered via standard package distribution
 
 ## 7. RE / leaked-source decision (2026-04-30)
 

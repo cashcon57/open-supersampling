@@ -39,7 +39,7 @@ Highlights:
    - `libxess.dll` (XeSS)
 5. **Per-game compatibility shim layer** (community-maintainable game profiles).
 6. **First integration test** — popular game with FSR/DLSS-SR support (Helldivers 2, Starfield, or CP2077 raster mode).
-7. **Corkscrew integration** (bundle ORS for Wine/CrossOver users).
+7. **Wine/Proton compatibility** validated for Linux gaming users.
 8. Total budget estimate: ~$1500 cloud GPU + ~$60 first-test game license, ~2-3 months solo engineering.
 
 **Note: denoising is NOT bundled in v0.2.** Pure upscalers consume clean input from the game's existing pipeline. The game's own denoiser (NRD, hand-tuned, or DLSS-RR if installed) handles noise BEFORE the upscaler runs. ORS-upscaler is a drop-in for the same contract FSR/XeSS/DLSS-SR all already meet.

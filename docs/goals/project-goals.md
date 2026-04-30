@@ -67,7 +67,7 @@ Marketing claim:
 4. **Drop-in DLL replacements**: `nvngx_dlss.dll` (DLSS-SR) + `amd_fidelityfx_dx12.dll` / `amd_fidelityfx_vk.dll` (FSR) + `libxess.dll` (XeSS). Three DLLs, one inference engine.
 5. Per-game compatibility shim layer (community-maintainable game profiles).
 6. First integration test: a popular game with FSR/DLSS-SR support (e.g., Helldivers 2, Starfield, Cyberpunk 2077 raster mode).
-7. Corkscrew integration (bundle ORS for Wine/CrossOver users).
+7. Wine/Proton compatibility validated for Linux gaming users.
 
 **Out of v0.2 scope (deferred to v0.3):**
 - ORD denoiser DLL ship
