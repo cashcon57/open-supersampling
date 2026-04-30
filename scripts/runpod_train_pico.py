@@ -148,6 +148,17 @@ def _run_training(harness: SafetyHarness, ip: str, port: int, args) -> int:
     ssh = _ssh_command(ip, port)
     smoke_flag = "--smoke-test" if args.smoke_test else ""
     data_arg = "" if args.smoke_test else "--data /root/data/noisebase"
+    # If --volume-gb > 0, RunPod mounts a persistent network volume at
+    # /workspace. Save the checkpoint there so it survives pod termination
+    # — critical when the user is offline and can't grab the checkpoint
+    # before the pod self-terminates.
+    out_path = "/workspace/pico-cloud" if args.volume_gb > 0 else "results/pico-cloud"
+    persist_msg = (
+        " && echo '--- copying checkpoint to /workspace (persists pod terminate) ---' && "
+        f"cp -v {out_path}/oru_pico.pth /workspace/oru_pico.pth 2>/dev/null || true"
+        if args.volume_gb > 0 and out_path != "/workspace/pico-cloud"
+        else ""
+    )
     # CUDA driver pin: RunPod pods can have older drivers (we've seen CUDA
     # 12.5). torch>=2.6 wants CUDA 13+. Force-install torch 2.5.x first
     # (compatible with CUDA 12.x drivers), then let pip install -e fill in
@@ -167,13 +178,15 @@ def _run_training(harness: SafetyHarness, ip: str, port: int, args) -> int:
         "pip install -e .[dev] 2>&1 | tee /tmp/ors-pip-install.log | tail -50 && "
         "echo '--- pip install OK ---' && "
         "python -c 'import torch; print(\"torch\", torch.__version__, \"cuda\", torch.cuda.is_available(), torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"\")' && "
+        f"mkdir -p {out_path} && "
         f"python -m ors.train.train_pico "
         f"{smoke_flag} {data_arg} "
-        f"--out results/pico-cloud "
+        f"--out {out_path} "
         f"--epochs {args.epochs} "
         f"--sequence-length {args.sequence_length} "
         f"--batch-size {args.batch_size} "
         f"--scale-factor {args.scale_factor}"
+        + persist_msg
     )
     full = ssh + ["bash", "-lc", shlex.quote(remote_cmd)]
 
