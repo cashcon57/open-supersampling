@@ -200,7 +200,7 @@ def _run_training(harness: SafetyHarness, ip: str, port: int, args) -> int:
         "--index-url https://download.pytorch.org/whl/cu121 "
         "2>&1 | tee /tmp/ors-torch-install.log | tail -10 && "
         "echo '--- pip install -e .[dev] (rest of deps) ---' && "
-        "pip install setuptools && "
+        "pip install 'setuptools<80' && "
         "pip install -e .[dev] 2>&1 | tee /tmp/ors-pip-install.log | tail -50 && "
         "echo '--- pip install OK ---' && "
         "python -c 'import torch; print(\"torch\", torch.__version__, \"cuda\", torch.cuda.is_available(), torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"\")' && "
