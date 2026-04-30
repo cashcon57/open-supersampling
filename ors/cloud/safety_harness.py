@@ -421,8 +421,13 @@ class SafetyHarness:
         self._launch_t = time.time()
         _audit("launched", {"instance_ids": self._instance_ids})
 
-        # Wait for instance to become active (or timeout after 5 minutes)
-        deadline = time.time() + 300
+        # Wait for instance to become active. Default 15-minute deadline —
+        # Lambda A100/H100 in capacity-tight regions can take 5-12 minutes.
+        # Print progress every 30s so the user sees the harness is alive.
+        boot_timeout_s = 15 * 60
+        deadline = time.time() + boot_timeout_s
+        last_status = None
+        last_log_t = time.time()
         while time.time() < deadline:
             inst = self._client.get_instance(self._instance_id)
             self._instance = inst
@@ -435,14 +440,32 @@ class SafetyHarness:
                         "wait_s": time.time() - self._launch_t,
                     },
                 )
+                print(
+                    f"[SafetyHarness] instance {self._instance_id} active at {inst.ip} "
+                    f"after {time.time() - self._launch_t:.0f}s"
+                )
                 return
             if inst.status in ("terminated", "failed", "unhealthy"):
                 self._terminated = True
                 raise RuntimeError(f"instance entered status={inst.status} during boot")
+            # Periodic progress log so long boots don't appear hung
+            now = time.time()
+            if inst.status != last_status or (now - last_log_t) >= 30:
+                elapsed = now - self._launch_t
+                remaining = deadline - now
+                print(
+                    f"[SafetyHarness] {self._instance_id} status={inst.status} "
+                    f"after {elapsed:.0f}s, {remaining:.0f}s remaining before boot timeout",
+                    flush=True,
+                )
+                last_status = inst.status
+                last_log_t = now
             time.sleep(10)
         # Timed out waiting for active — terminate to avoid orphaning.
         self._terminate_idempotent("boot_timeout")
-        raise RuntimeError("instance did not reach 'active' within 5 minutes")
+        raise RuntimeError(
+            f"instance did not reach 'active' within {boot_timeout_s/60:.0f} minutes"
+        )
 
     def _terminate_idempotent(self, reason: str):
         if self._terminated or not self._instance_ids:
