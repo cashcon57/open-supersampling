@@ -242,13 +242,30 @@ def _run_training(harness: SafetyHarness, ip: str, key_path: Path, args) -> int:
     # Install + run as a single shell pipeline; heartbeat by polling exit code.
     # Stream pip install via tee so we see errors in real-time AND keep the
     # full log on the instance for post-mortem if it fails.
+    #
+    # Lambda's stock Ubuntu 22.04 image ships Python 3.10. Our pyproject
+    # requires >=3.11. Install python3.11 via deadsnakes PPA and use it for
+    # the cloud venv. This adds ~30s to first-boot install but is fully
+    # reproducible across Lambda images.
     smoke_flag = "--smoke-test" if args.smoke_test else ""
     data_arg = "" if args.smoke_test else "--data ${OSS_DATA_DIR}/noisebase"
     remote_cmd = (
         "set -uo pipefail && "
         "cd ~/ors && "
-        "python3 -m venv venv-cloud --upgrade-deps 2>&1 | tail -3 && "
+        # Python 3.11+ bootstrap (idempotent — skip if already present)
+        "if ! command -v python3.11 >/dev/null 2>&1; then "
+        "  echo '--- bootstrapping python3.11 (Lambda image ships 3.10) ---' && "
+        "  sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq && "
+        "  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "
+        "    software-properties-common 2>&1 | tail -3 && "
+        "  sudo add-apt-repository -y ppa:deadsnakes/ppa 2>&1 | tail -3 && "
+        "  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "
+        "    python3.11 python3.11-venv python3.11-dev 2>&1 | tail -3; "
+        "fi && "
+        "python3.11 --version && "
+        "python3.11 -m venv venv-cloud --upgrade-deps 2>&1 | tail -3 && "
         "source venv-cloud/bin/activate && "
+        "python --version && "
         "echo '--- pip install starting ---' && "
         "pip install -e .[dev] 2>&1 | tee /tmp/ors-pip-install.log | tail -100 && "
         "echo '--- pip install OK ---' && "
