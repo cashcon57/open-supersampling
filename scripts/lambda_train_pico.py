@@ -45,6 +45,27 @@ PICO_WORKLOAD_TFLOPS = 200.0  # rough estimate of total FP16 compute needed
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
+# Realistic per-instance recommended max epochs that fit within --max-hours
+# given the model + dataset scale. Keeps us from booking 50 epochs on an
+# instance that can only finish 25 in the time we cap.
+INSTANCE_EPOCH_CAPS_AT_4H: dict[str, int] = {
+    "gpu_1x_a10":       25,   # ~3.5h for 25 epochs at our scale
+    "gpu_1x_a6000":     35,
+    "gpu_1x_a100":      50,
+    "gpu_1x_a100_sxm4": 60,
+    "gpu_1x_h100_pcie": 100,
+    "gpu_1x_h100_sxm5": 120,
+}
+
+
+def _recommended_epochs(instance_type: str, requested: int, max_hours: float) -> int:
+    """Cap epochs to what the chosen instance can realistically finish in
+    `max_hours`, scaled from the 4h reference table. Always honors `requested`
+    if it's already smaller."""
+    base = INSTANCE_EPOCH_CAPS_AT_4H.get(instance_type, 25)
+    scaled = int(base * (max_hours / 4.0))
+    return min(requested, max(1, scaled))
+
 
 def _ssh_command(ip: str, key_path: Path, user: str = "ubuntu") -> list[str]:
     return [
@@ -76,18 +97,77 @@ def _rsync_repo(ip: str, key_path: Path, user: str = "ubuntu") -> int:
     return subprocess.run(cmd).returncode
 
 
+def _provision_noisebase(harness: "SafetyHarness", ip: str, key_path: Path, user: str = "ubuntu") -> int:
+    """Clone NoiseBase repo on the instance + fetch a sample sequence.
+
+    NoiseBase data is hosted separately from the github repo (Zenodo / mirror).
+    The repo ships utilities to fetch sample data.
+
+    For our smoke / first-real run we don't need the full ~370 GB; a few
+    sample sequences suffice. The user can scale up later.
+    """
+    ssh = _ssh_command(ip, key_path, user)
+    # Clone repo + try to fetch sample data via its own scripts. If the repo's
+    # own download tooling fails, we fall back to a minimal manual fetch and
+    # report so the user can intervene.
+    remote = (
+        "set -euo pipefail && "
+        "if [ ! -d ~/noisebase ]; then "
+        "  git clone --depth 1 https://github.com/balintio/noisebase ~/noisebase || exit 11; "
+        "fi && "
+        "mkdir -p ~/data && "
+        "cd ~/noisebase && "
+        # Attempt to use the repo's own download utility if present
+        "if [ -f download.py ]; then "
+        "  python3 download.py --out ~/data/noisebase --subset sample 2>&1 | tail -20 || true; "
+        "fi && "
+        # Fallback: pull a tiny set of test data shipped with the repo, if any
+        "if [ -d test-data ]; then "
+        "  cp -r test-data ~/data/noisebase-test 2>/dev/null || true; "
+        "fi && "
+        # Report what landed
+        "echo '---noisebase contents---' && "
+        "(ls -la ~/data/ 2>&1 | head -20) && "
+        "(du -sh ~/data/* 2>/dev/null || echo 'empty')"
+    )
+    print(f"[lambda_train_pico] provisioning NoiseBase on instance ...")
+    proc = subprocess.Popen(ssh + ["bash", "-lc", remote], stdout=sys.stdout, stderr=sys.stderr)
+    try:
+        while proc.poll() is None:
+            if harness is not None:
+                harness.heartbeat()
+                harness.check_limits()
+            time.sleep(15)
+        rc = proc.returncode or 0
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+    if rc != 0:
+        print(
+            f"[lambda_train_pico] NoiseBase provisioning failed (rc={rc}). "
+            "You may need to extend the launcher with a known-good download URL.",
+            file=sys.stderr,
+        )
+    return rc
+
+
 def _run_training(harness: SafetyHarness, ip: str, key_path: Path, args) -> int:
     """SSH in, install deps, run training. Heartbeat regularly."""
     ssh = _ssh_command(ip, key_path)
 
     # Install + run as a single shell pipeline; heartbeat by polling exit code.
+    smoke_flag = "--smoke-test" if args.smoke_test else ""
+    data_arg = "" if args.smoke_test else "--data ${OSS_DATA_DIR}/noisebase"
     remote_cmd = (
+        "set -uo pipefail && "
         "cd ~/ors && "
-        "python3 -m venv venv-cloud --upgrade-deps && "
+        "python3 -m venv venv-cloud --upgrade-deps 2>&1 | tail -3 && "
         "source venv-cloud/bin/activate && "
-        "pip install -e .[dev] 2>&1 | tail -20 && "
+        # Tail pip install log so harness sees progress; full output to file
+        "pip install -e .[dev] > /tmp/ors-pip-install.log 2>&1 && "
+        "echo '--- pip install OK ---' && "
         f"python -m ors.train.train_pico "
-        f"--data ${OSS_REMOTE_HOME}/noisebase "
+        f"{smoke_flag} {data_arg} "
         f"--out results/pico-cloud "
         f"--epochs {args.epochs} "
         f"--sequence-length {args.sequence_length} "
@@ -127,6 +207,13 @@ def main():
                    help="override auto-select; e.g. 'gpu_1x_h100_pcie'")
     p.add_argument("--region", type=str, default=None,
                    help="override auto-select; required if --instance-type is set")
+    p.add_argument("--smoke-test", action="store_true",
+                   help="run synthetic-data smoke training only (no NoiseBase). "
+                        "Validates pip install + ssh + harness + checkpoint + scp pipeline. "
+                        "Cheap (~$0.40 / 30 min on A10).")
+    p.add_argument("--no-epoch-cap", action="store_true",
+                   help="Don't cap requested epochs to what the instance can finish in "
+                        "max_hours. Off by default.")
     args = p.parse_args()
 
     client = LambdaClient()
@@ -158,6 +245,17 @@ def main():
         print(f"  estimated cost      : ~${est_cost:.2f}")
         print(f"  hourly rate         : ${rate:.2f}/hr")
 
+    # 1.5 Cap epochs to what fits in max_hours on the chosen instance
+    if not args.no_epoch_cap and not args.smoke_test:
+        capped = _recommended_epochs(instance_type, args.epochs, args.max_hours)
+        if capped < args.epochs:
+            print(
+                f"[lambda_train_pico] capping epochs {args.epochs} -> {capped} "
+                f"(realistic for {instance_type} in {args.max_hours:.1f}h). "
+                f"Pass --no-epoch-cap to override."
+            )
+            args.epochs = capped
+
     # 2. Build HarnessConfig — pre-launch approval will print full preview + prompt
     cfg = HarnessConfig(
         instance_type=instance_type,
@@ -184,6 +282,16 @@ def main():
                 file=sys.stderr,
             )
             return rc
+
+        # Provision NoiseBase on instance for non-smoke runs
+        if not args.smoke_test:
+            rc = _provision_noisebase(harness, inst.ip, cfg.ssh_key_path)
+            if rc != 0:
+                print(
+                    f"[lambda_train_pico] NoiseBase provisioning failed (rc={rc}); aborting.",
+                    file=sys.stderr,
+                )
+                return rc
 
         rc = _run_training(harness, inst.ip, cfg.ssh_key_path, args)
         if rc != 0:
