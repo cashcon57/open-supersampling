@@ -35,6 +35,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -130,14 +131,27 @@ class SafetyHarness:
         self._client = client
         self._config = config
         self._instance_id: Optional[str] = None
+        self._instance_ids: list[str] = []          # ALL launched instance IDs (multi-instance safe)
         self._instance: Optional[LambdaInstance] = None
         self._launch_t: Optional[float] = None
         self._idle_streak_s: int = 0
         self._watchdog_proc: Optional[subprocess.Popen] = None
         self._heartbeat_path: Optional[Path] = None
         self._terminated: bool = False
+        self._heartbeat_thread: Optional[threading.Thread] = None
+        self._heartbeat_stop = threading.Event()
         self._original_sigint = None
         self._original_sigterm = None
+
+        # Edge case #9: refuse to launch with unknown pricing — budget tracking
+        # would silently report $0 and the budget cap would never trigger.
+        from .lambda_client import INSTANCE_PRICING
+        if INSTANCE_PRICING.get(config.instance_type, 0.0) == 0.0:
+            raise ValueError(
+                f"unknown hourly pricing for instance_type={config.instance_type!r}. "
+                f"Add it to INSTANCE_PRICING in lambda_client.py before launching, "
+                f"or budget caps will silently fail."
+            )
 
         # Pre-launch validation
         if config.budget_usd > 50.0 and config.require_explicit_high_budget:
@@ -155,12 +169,35 @@ class SafetyHarness:
 
     def __enter__(self) -> LambdaInstance:
         if self._config.require_pre_launch_approval:
+            self._warn_existing_instances()
             self._pre_launch_approval()
         self._install_signal_handlers()
         atexit.register(self._terminate_idempotent, "atexit")
         self._launch()
+        self._start_heartbeat_thread()
         self._start_watchdog()
+        self._install_self_terminate_on_instance()
         return self._instance  # type: ignore[return-value]
+
+    def _warn_existing_instances(self):
+        """Edge case #11: warn if other instances are already running on this
+        API key — concurrent harnesses don't share a budget cap."""
+        try:
+            existing = self._client.list_instances()
+            active = [i for i in existing if i.status not in ("terminated", "terminating")]
+            if active:
+                print()
+                print("  ⚠ WARNING: %d instance(s) already active on this API key:" % len(active))
+                for inst in active:
+                    rate = INSTANCE_PRICING.get(inst.instance_type, 0.0) if False else None  # noqa
+                    from .lambda_client import INSTANCE_PRICING as _P
+                    r = _P.get(inst.instance_type, 0.0)
+                    print(f"    - {inst.instance_id}  {inst.instance_type}  status={inst.status}  ${r}/hr")
+                print("  Concurrent launches do NOT share budget caps.")
+                print("  If these aren't yours, run: python -m scripts.lambda_terminate_all")
+                print()
+        except Exception as e:
+            sys.stderr.write(f"[SafetyHarness] WARNING: couldn't list existing instances: {e}\n")
 
     def _pre_launch_approval(self):
         """Print a cost preview and require interactive confirmation."""
@@ -220,14 +257,58 @@ class SafetyHarness:
         try:
             self._terminate_idempotent("context_exit")
         finally:
+            self._stop_heartbeat_thread()
             self._stop_watchdog()
             self._restore_signal_handlers()
         return False  # never suppress exceptions
 
     def heartbeat(self):
-        """Advance the watchdog timer. Call from your training loop."""
+        """Advance the watchdog timer. Manual heartbeat from training loop.
+
+        The harness ALSO runs an internal background thread that ticks the
+        heartbeat unconditionally — see `_start_heartbeat_thread`. So even if
+        the user forgets to call this, the watchdog will still see fresh
+        heartbeats while the Python interpreter is alive.
+        """
         if self._heartbeat_path is not None:
             self._heartbeat_path.write_text(str(time.time()))
+
+    def _start_heartbeat_thread(self):
+        """Edge case #7: a daemon thread ticks the heartbeat file on a fixed
+        cadence regardless of caller activity. Without this, a long compute
+        step in the main thread (>watchdog_stale_s seconds with no
+        `heartbeat()` calls) would cause the watchdog to false-positive and
+        kill an actively-training instance.
+
+        The thread exits when `_heartbeat_stop` is set or when the interpreter
+        shuts down (daemon=True)."""
+        if self._heartbeat_path is None:
+            return
+        interval = max(1, self._config.heartbeat_interval_s)
+        stop_evt = self._heartbeat_stop
+        path = self._heartbeat_path
+
+        def _tick():
+            while not stop_evt.wait(interval):
+                try:
+                    path.write_text(str(time.time()))
+                except Exception:
+                    pass
+
+        self._heartbeat_thread = threading.Thread(
+            target=_tick, name="ors-heartbeat", daemon=True
+        )
+        self._heartbeat_thread.start()
+
+    def _stop_heartbeat_thread(self):
+        if self._heartbeat_thread is None:
+            return
+        self._heartbeat_stop.set()
+        try:
+            self._heartbeat_thread.join(timeout=2)
+        except Exception:
+            pass
+        self._heartbeat_thread = None
 
     def check_limits(self):
         """Check duration / budget. Raises if exceeded.
@@ -329,9 +410,12 @@ class SafetyHarness:
         )
         if not ids:
             raise RuntimeError("Lambda launch returned no instance IDs")
+        # Edge case #8: track ALL returned IDs in case quantity > 1.
+        # Currently we always launch quantity=1 but defensive nonetheless.
+        self._instance_ids = list(ids)
         self._instance_id = ids[0]
         self._launch_t = time.time()
-        _audit("launched", {"instance_id": self._instance_id})
+        _audit("launched", {"instance_ids": self._instance_ids})
 
         # Wait for instance to become active (or timeout after 5 minutes)
         deadline = time.time() + 300
@@ -357,15 +441,18 @@ class SafetyHarness:
         raise RuntimeError("instance did not reach 'active' within 5 minutes")
 
     def _terminate_idempotent(self, reason: str):
-        if self._terminated or not self._instance_id:
+        if self._terminated or not self._instance_ids:
             return
         self._terminated = True
+
+        # Edge case #8: terminate ALL tracked instance IDs, not just the first.
+        ids_to_kill = list(self._instance_ids)
         try:
-            self._client.terminate([self._instance_id])
+            self._client.terminate(ids_to_kill)
             _audit(
                 "terminated",
                 {
-                    "instance_id": self._instance_id,
+                    "instance_ids": ids_to_kill,
                     "reason": reason,
                     "elapsed_s": self.elapsed_s,
                     "cost_usd": self._cost_so_far(),
@@ -374,12 +461,49 @@ class SafetyHarness:
         except Exception as e:
             _audit(
                 "terminate_failed",
-                {"instance_id": self._instance_id, "reason": reason, "error": str(e)},
+                {"instance_ids": ids_to_kill, "reason": reason, "error": str(e)},
             )
             sys.stderr.write(
-                f"[SafetyHarness] CRITICAL: terminate failed for {self._instance_id}: {e}\n"
+                f"[SafetyHarness] CRITICAL: terminate failed for {ids_to_kill}: {e}\n"
                 f"  Run `python -m scripts.lambda_terminate_all` to clean up.\n"
             )
+
+        # Edge case #6: verify termination took effect by polling list_instances.
+        # If the instance is still in our active list, retry a few times before
+        # giving up loudly.
+        self._verify_terminated(ids_to_kill)
+
+    def _verify_terminated(self, ids: list[str], retries: int = 5, delay_s: float = 6.0):
+        """Confirm the instances no longer appear active. Retry terminate on failure."""
+        for attempt in range(retries):
+            try:
+                active = {i.instance_id for i in self._client.list_instances()
+                          if i.status not in ("terminated", "terminating")}
+            except Exception as e:
+                sys.stderr.write(
+                    f"[SafetyHarness] couldn't verify termination (attempt {attempt+1}/{retries}): {e}\n"
+                )
+                time.sleep(delay_s)
+                continue
+            still_alive = [i for i in ids if i in active]
+            if not still_alive:
+                _audit("terminate_verified", {"instance_ids": ids, "attempts": attempt + 1})
+                return
+            sys.stderr.write(
+                f"[SafetyHarness] WARNING: {still_alive} still active after terminate "
+                f"(attempt {attempt+1}/{retries}); retrying.\n"
+            )
+            try:
+                self._client.terminate(still_alive)
+            except Exception:
+                pass
+            time.sleep(delay_s)
+        sys.stderr.write(
+            f"[SafetyHarness] CRITICAL: instance(s) {ids} still appear active after "
+            f"{retries} retry attempts. Manually verify with `python -m scripts.lambda_status` "
+            f"and force-kill with `python -m scripts.lambda_terminate_all`.\n"
+        )
+        _audit("terminate_unverified", {"instance_ids": ids, "retries": retries})
 
     def _cost_so_far(self) -> float:
         from .lambda_client import INSTANCE_PRICING
@@ -409,6 +533,127 @@ class SafetyHarness:
             return float(line)
         except (subprocess.TimeoutExpired, ValueError, IndexError):
             return None
+
+    def _install_self_terminate_on_instance(self):
+        """Edge cases #4 + #5: ULTIMATE fail-safe. Install a script ON THE
+        INSTANCE that calls Lambda's terminate API on itself after
+        `max_duration_s` seconds, regardless of what happens on our local
+        machine.
+
+        If our laptop catches fire, our network goes down, the watchdog dies,
+        and every other layer fails — the instance still kills itself. This
+        is the only protection against "local infrastructure totally
+        unavailable" scenarios.
+
+        The script is written to /tmp on the instance with mode 0600. The API
+        key is passed via SSH stdin (never on the cmdline). The script runs
+        with nohup+disown so it survives SSH disconnect.
+        """
+        if not self._instance or not self._instance.ip or not self._config.ssh_key_path:
+            sys.stderr.write(
+                "[SafetyHarness] WARNING: self-terminate skipped — no IP or SSH key path.\n"
+                "  Local-only protection is active; instance has NO autonomous kill-switch.\n"
+            )
+            return
+
+        # The script runs entirely on the instance. It sleeps, then POSTs
+        # terminate. A buffer is added on top of max_duration_s so we don't
+        # race with the harness's own termination at the same wall-clock.
+        cap_s = self._config.max_duration_s + 300  # 5-min grace window
+        instance_id = self._instance_id
+        api_key = self._client._api_key  # noqa: passed via stdin, never on cmdline
+
+        # The script reads its own API key from a 0600 file we wrote earlier.
+        remote_script = (
+            "#!/usr/bin/env bash\n"
+            "set -uo pipefail\n"
+            "KEY_FILE=/tmp/.ors-lambda-key\n"
+            "INSTANCE_ID=" + str(instance_id) + "\n"
+            "MAX_S=" + str(cap_s) + "\n"
+            "echo \"[ors-self-terminate] start $(date -u +%FT%TZ) max_s=$MAX_S\" >> /tmp/ors-self-terminate.log\n"
+            "sleep $MAX_S\n"
+            "if [ ! -f \"$KEY_FILE\" ]; then\n"
+            "  echo \"[ors-self-terminate] missing key file at firing time\" >> /tmp/ors-self-terminate.log\n"
+            "  exit 1\n"
+            "fi\n"
+            "API_KEY=$(cat \"$KEY_FILE\")\n"
+            "echo \"[ors-self-terminate] firing at $(date -u +%FT%TZ)\" >> /tmp/ors-self-terminate.log\n"
+            "curl -sS -X POST -u \"${API_KEY}:\" \\\n"
+            "  https://cloud.lambda.ai/api/v1/instance-operations/terminate \\\n"
+            "  -H 'Content-Type: application/json' \\\n"
+            "  -d \"{\\\"instance_ids\\\": [\\\"${INSTANCE_ID}\\\"]}\" \\\n"
+            "  >> /tmp/ors-self-terminate.log 2>&1\n"
+            "shred -u \"$KEY_FILE\" 2>/dev/null || rm -f \"$KEY_FILE\"\n"
+        )
+
+        ssh_base = [
+            "ssh",
+            "-i", str(self._config.ssh_key_path),
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "ConnectTimeout=20",
+            "-o", "BatchMode=yes",
+            f"{self._config.ssh_user}@{self._instance.ip}",
+        ]
+
+        try:
+            # Step 1: write the API key to /tmp/.ors-lambda-key with 0600
+            r1 = subprocess.run(
+                ssh_base + ["bash", "-c", "umask 077; cat > /tmp/.ors-lambda-key && chmod 600 /tmp/.ors-lambda-key"],
+                input=api_key,
+                text=True,
+                capture_output=True,
+                timeout=30,
+            )
+            if r1.returncode != 0:
+                raise RuntimeError(f"key upload failed (rc={r1.returncode}): {r1.stderr}")
+
+            # Step 2: write the self-terminate script with 0700
+            r2 = subprocess.run(
+                ssh_base + ["bash", "-c", "umask 077; cat > /tmp/ors-self-terminate.sh && chmod 700 /tmp/ors-self-terminate.sh"],
+                input=remote_script,
+                text=True,
+                capture_output=True,
+                timeout=30,
+            )
+            if r2.returncode != 0:
+                raise RuntimeError(f"script upload failed (rc={r2.returncode}): {r2.stderr}")
+
+            # Step 3: run it under nohup+disown so it survives SSH disconnect
+            r3 = subprocess.run(
+                ssh_base + [
+                    "bash", "-c",
+                    "nohup /tmp/ors-self-terminate.sh > /tmp/ors-self-terminate.boot.log 2>&1 & disown; echo $!",
+                ],
+                capture_output=True, text=True, timeout=20,
+            )
+            if r3.returncode != 0:
+                raise RuntimeError(f"script launch failed (rc={r3.returncode}): {r3.stderr}")
+
+            _audit(
+                "self_terminate_installed",
+                {
+                    "instance_id": self._instance_id,
+                    "ip": self._instance.ip,
+                    "cap_s": cap_s,
+                    "remote_pid": r3.stdout.strip(),
+                },
+            )
+            print(
+                f"[SafetyHarness] on-instance self-terminate installed "
+                f"(fires at +{cap_s/3600:.1f}h, pid={r3.stdout.strip()})"
+            )
+        except Exception as e:
+            sys.stderr.write(
+                f"[SafetyHarness] WARNING: failed to install on-instance self-terminate: {e}\n"
+                f"  Local-only protection is active. The watchdog + harness will still\n"
+                f"  catch normal failures, but if your local machine becomes unreachable\n"
+                f"  before max_duration_s, the instance will keep billing.\n"
+            )
+            _audit(
+                "self_terminate_install_failed",
+                {"instance_id": self._instance_id, "error": str(e)},
+            )
 
     def _start_watchdog(self):
         """Spawn an external watchdog process that kills the instance if our
