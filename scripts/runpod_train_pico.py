@@ -82,13 +82,22 @@ def _ssh_command(ip: str, port: int = 22, user: str = "root") -> list[str]:
 
 
 def _rsync_repo(ip: str, port: int = 22, user: str = "root") -> int:
-    """Push the local repo to the pod using `tar | ssh tar`.
+    """Push the committed repo to the pod via `git archive HEAD | ssh tar`.
 
-    RunPod's runpod/pytorch image apt repos don't always have rsync. tar +
-    ssh works on any container with a shell + tar (universal). Same exclude
-    semantics as our anchored rsync configuration.
+    Why git archive instead of plain tar:
+    - bsdtar (macOS) `--exclude=./data` matches BASENAME `data` anywhere,
+      not just top-level — strips out `ors/data/` too. We tried `--anchored`
+      but bsdtar doesn't support GNU's anchored mode.
+    - git archive packages exactly what's tracked in HEAD: respects
+      .gitignore (so venv/, data/, results/, .secrets/ never ship), and
+      includes packages we DO want like ors/data/.
+    - Bonus: deterministic. Whatever was committed is what goes to the pod.
+
+    Note: untracked work-in-progress files won't ship until committed. For
+    smoke runs that's fine — and a feature, since we want training to use
+    the version we'd push to GitHub, not work-in-progress changes.
     """
-    print(f"[runpod_train_pico] tar+ssh push of repo to {ip}:~/ors/ ...")
+    print(f"[runpod_train_pico] git-archive+ssh push of HEAD to {ip}:~/ors/ ...")
     ssh_cmd = [
         "ssh",
         "-i", str(_RUNPOD_SSH_KEY),
@@ -99,27 +108,16 @@ def _rsync_repo(ip: str, port: int = 22, user: str = "root") -> int:
         f"{user}@{ip}",
         "mkdir -p ~/ors && cd ~/ors && tar xf -",
     ]
-    tar_cmd = [
-        "tar", "cf", "-",
-        "--exclude=./venv*",
-        "--exclude=./data",
-        "--exclude=./results",
-        "--exclude=./.secrets",
-        "--exclude=./.git",
-        "--exclude=__pycache__",
-        "--exclude=*.pth",
-        "-C", str(REPO_ROOT),
-        ".",
-    ]
-    tar = subprocess.Popen(tar_cmd, stdout=subprocess.PIPE)
-    ssh = subprocess.Popen(ssh_cmd, stdin=tar.stdout, stdout=sys.stdout, stderr=sys.stderr)
-    if tar.stdout:
-        tar.stdout.close()  # let SIGPIPE propagate
+    git_cmd = ["git", "-C", str(REPO_ROOT), "archive", "--format=tar", "HEAD"]
+    g = subprocess.Popen(git_cmd, stdout=subprocess.PIPE)
+    ssh = subprocess.Popen(ssh_cmd, stdin=g.stdout, stdout=sys.stdout, stderr=sys.stderr)
+    if g.stdout:
+        g.stdout.close()
     rc_ssh = ssh.wait()
-    rc_tar = tar.wait()
-    if rc_tar != 0 or rc_ssh != 0:
-        print(f"[runpod_train_pico] tar+ssh failed (tar={rc_tar} ssh={rc_ssh})", file=sys.stderr)
-        return rc_ssh or rc_tar
+    rc_g = g.wait()
+    if rc_g != 0 or rc_ssh != 0:
+        print(f"[runpod_train_pico] git-archive+ssh failed (git={rc_g} ssh={rc_ssh})", file=sys.stderr)
+        return rc_ssh or rc_g
     return 0
 
 
