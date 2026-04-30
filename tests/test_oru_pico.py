@@ -1,11 +1,13 @@
 """Tests for the Pico-tier ORU (Steam Deck / RDNA 2 target)."""
+import pytest
 import torch
 
 from ors.model.oru_pico import ORUPico
 
 
-def test_oru_pico_forward_shapes():
-    m = ORUPico().train(False)
+@pytest.mark.parametrize("use_wavelet", [False, True])
+def test_oru_pico_forward_shapes(use_wavelet):
+    m = ORUPico(use_wavelet=use_wavelet).train(False)
     B, H_lr, W_lr = 2, 64, 64
     H_hr, W_hr = 128, 128
     color_lr = torch.randn(B, 3, H_lr, W_lr)
@@ -22,8 +24,14 @@ def test_oru_pico_forward_shapes():
 
 
 def test_oru_pico_param_budget():
-    n = sum(p.numel() for p in ORUPico().parameters())
-    assert 200_000 <= n <= 320_000, f"ORU-Pico params {n} out of [200K, 320K]"
+    """Param-count test runs against the ship config (use_wavelet=True).
+
+    The wavelet head adds ~50K params on top of the ~270K U-Net trunk, so the
+    upper bound is relaxed to 350K. Ablation runs (use_wavelet=False) drop
+    well under this bound.
+    """
+    n = sum(p.numel() for p in ORUPico(use_wavelet=True).parameters())
+    assert 200_000 <= n <= 350_000, f"ORU-Pico params {n} out of [200K, 350K]"
 
 
 def test_oru_pico_hidden_state_propagation():
