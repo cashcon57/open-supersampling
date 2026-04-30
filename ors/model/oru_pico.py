@@ -27,6 +27,7 @@ import torch.nn.functional as F
 
 from .blocks import ConvBlock, DownBlock, KernelPredictionHead, UpBlock
 from .temporal import RecurrentLatentCell
+from .wavelet import WaveletKPNHead
 
 
 # Channel widths per the v0.2-pico design spec. All multiples of 8.
@@ -46,29 +47,49 @@ def _refine_stack(ch: int, depth: int = _REFINE_DEPTH) -> nn.Sequential:
 
 
 class ORUPico(nn.Module):
-    """Pico-tier ORU.
+    """Pico-tier ORU with radiance demodulation (NSRD Li 2024).
 
     Inputs (all expected float32):
         color_lr   : (B, 3, H_lr, W_lr) - noisy LR radiance (linear).
         depth_lr   : (B, 1, H_lr, W_lr) - LR depth.
         motion_lr  : (B, 2, H_lr, W_lr) - LR motion vectors.
         normals_lr : (B, 3, H_lr, W_lr) - LR normals (sh_normal style).
+        albedo_lr  : (B, 3, H_lr, W_lr) - LR albedo (reflectance).
         history_hr : (B, 3, H_hr, W_hr) - prior frame's denoised HR output.
                                           Pass zeros at sequence boundary.
         hidden_state : (B, 24, H_lr/4, W_lr/4) | None - recurrent state.
                                           Pass None at sequence boundary.
 
     Outputs:
-        rgb_hr : (B, 3, H_hr, W_hr) - denoised + upscaled RGB.
+        rgb_hr : (B, 3, H_hr, W_hr) - denoised + upscaled RGB (re-modulated).
         new_hidden_state : (B, 24, H_lr/4, W_lr/4) - propagate to next frame.
+
+    Radiance demodulation (NSRD):
+    - Before network: color_demod = color_lr / (albedo_lr + epsilon)
+      (network learns lighting, not material)
+    - After network: rgb_hr = rgb_hr * albedo_hr_upsampled
+      (re-modulate with upsampled HR albedo)
     """
 
     # Exposed for tests / external code that needs to allocate a zero hidden.
     HIDDEN_CHANNELS = _PICO_HIDDEN_CHANNELS
     SCALE_FACTOR = _PICO_SCALE_FACTOR
 
-    def __init__(self):
+    def __init__(self, use_wavelet: bool = True):
+        """Construct an ORU-Pico network.
+
+        Args:
+            use_wavelet: When ``True`` (default, ship config), the final HR
+                kernel-prediction head operates in stationary-wavelet space
+                per Poudel 2025 (arXiv:2508.16024) — predicts a kernel for
+                each of the 7 SWT subbands (1 LL + 2x3 details at db2 / 2
+                levels), then inverse-SWT recombines into RGB. Per-paper
+                expected gain: +1.5 dB PSNR / -17% LPIPS at <0.1 ms / 800p
+                inference cost. ``False`` keeps the legacy single-RGB-kernel
+                head — retained for ablation comparison only.
+        """
         super().__init__()
+        self.use_wavelet = use_wavelet
         c = _PICO_CHANNELS
 
         # ---- Two-branch encoder, late-fused at level 0 ------------------
@@ -107,7 +128,18 @@ class ORUPico(nn.Module):
         self.penult = nn.Conv2d(c[0] * 2, 32, kernel_size=3, padding=1)
 
         # ---- Kernel-prediction head at HR -------------------------------
-        self.kpn = KernelPredictionHead(32, kernel_size=5)
+        # Wavelet-space head (Poudel 2025) is the default; legacy RGB-space
+        # head retained behind use_wavelet=False for ablation comparison.
+        if use_wavelet:
+            self.kpn = WaveletKPNHead(
+                feature_ch=32,
+                kernel_size=5,
+                scale_factor=int(_PICO_SCALE_FACTOR),
+                levels=2,
+                wavelet="db2",
+            )
+        else:
+            self.kpn = KernelPredictionHead(32, kernel_size=5)
 
     @staticmethod
     def _hr_size(lr_h: int, lr_w: int) -> tuple[int, int]:
@@ -124,10 +156,16 @@ class ORUPico(nn.Module):
         depth_lr: torch.Tensor,
         motion_lr: torch.Tensor,
         normals_lr: torch.Tensor,
+        albedo_lr: torch.Tensor,
         history_hr: torch.Tensor,
         hidden_state: torch.Tensor | None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         B, _, H_lr, W_lr = color_lr.shape
+
+        # ---- Radiance demodulation (NSRD) ---------------------------------
+        # Divide color by albedo to remove material; network learns lighting only.
+        # Epsilon avoids division by zero in dark regions.
+        color_demod = color_lr / (albedo_lr + 1e-3)
 
         # Downsample history HR -> LR for late-fused recurrent context.
         # External warping (motion-vector reproject) is the trainer's job; this
@@ -137,7 +175,9 @@ class ORUPico(nn.Module):
         )
 
         # ---- Encoder ---------------------------------------------------
-        rad = self.color_in(torch.cat([color_lr, history_lr], dim=1))
+        # Use demodulated color instead of raw color.
+        rad = self.color_in(torch.cat([color_demod, history_lr], dim=1))
+        # G-buffer unchanged: depth, motion, normals (no material dependence).
         gbuf = self.gbuf_in(torch.cat([depth_lr, motion_lr, normals_lr], dim=1))
         x0 = self.fuse(torch.cat([rad, gbuf], dim=1))
         x0 = self.enc0_refine(x0)
@@ -159,15 +199,23 @@ class ORUPico(nn.Module):
         # ---- Penultimate features at LR --------------------------------
         feats_lr = self.penult(torch.cat([d1, x0], dim=1))
 
-        # ---- Bilinear upsample features and noisy color to HR ----------
+        # ---- Bilinear upsample features and demodulated color to HR -----
         out_h, out_w = self._hr_size(H_lr, W_lr)
         feats_hr = F.interpolate(
             feats_lr, size=(out_h, out_w), mode="bilinear", align_corners=False
         )
-        color_hr_bilinear = F.interpolate(
-            color_lr, size=(out_h, out_w), mode="bilinear", align_corners=False
+        color_demod_hr_bilinear = F.interpolate(
+            color_demod, size=(out_h, out_w), mode="bilinear", align_corners=False
         )
 
-        # ---- Kernel-prediction head at HR ------------------------------
-        rgb_hr = self.kpn(feats_hr, color_hr_bilinear)
+        # ---- Kernel-prediction head at HR (on demodulated lighting) ------
+        rgb_demod_hr = self.kpn(feats_hr, color_demod_hr_bilinear)
+
+        # ---- Radiance re-modulation (NSRD) --------------------------------
+        # Upsample LR albedo to HR, then multiply back in.
+        albedo_hr = F.interpolate(
+            albedo_lr, size=(out_h, out_w), mode="bilinear", align_corners=False
+        )
+        rgb_hr = rgb_demod_hr * albedo_hr
+
         return rgb_hr, new_hidden

@@ -74,10 +74,11 @@ def _unroll_sequence(
         depth_lr = batch["depth_lr"][:, t].to(device)
         motion_lr = batch["motion_lr"][:, t].to(device)
         normals_lr = batch["normals_lr"][:, t].to(device)
+        albedo_lr = batch["albedo_lr"][:, t].to(device)
         gt_hr = batch["gt_hr"][:, t].to(device)
 
         rgb_pred, hidden = model(
-            color_lr, depth_lr, motion_lr, normals_lr, history_hr, hidden
+            color_lr, depth_lr, motion_lr, normals_lr, albedo_lr, history_hr, hidden
         )
         per_frame_loss = loss_fn(rgb_pred, gt_hr)
         if prev_pred is not None:

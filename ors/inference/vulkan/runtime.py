@@ -223,7 +223,7 @@ class VulkanPicoRuntime:
     # PNNX emits these blob names in the order it traced the forward
     # signature. They are part of the ABI between this runtime and the
     # converted artifacts.
-    _INPUT_NAMES = ("in0", "in1", "in2", "in3", "in4", "in5")
+    _INPUT_NAMES = ("in0", "in1", "in2", "in3", "in4", "in5", "in6")
     _OUTPUT_NAMES = ("out0", "out1")
 
     def __init__(self, artifacts: _ConvertedArtifacts, *, prefer_vulkan: bool = True):
@@ -330,6 +330,7 @@ class VulkanPicoRuntime:
         depth_lr: np.ndarray,
         motion_lr: np.ndarray,
         normals_lr: np.ndarray,
+        albedo_lr: np.ndarray,
         history_hr: np.ndarray,
         hidden_state: np.ndarray,
     ) -> Tuple[np.ndarray, np.ndarray]:
@@ -341,7 +342,7 @@ class VulkanPicoRuntime:
         """
         import ncnn
 
-        inputs = (color_lr, depth_lr, motion_lr, normals_lr, history_hr, hidden_state)
+        inputs = (color_lr, depth_lr, motion_lr, normals_lr, albedo_lr, history_hr, hidden_state)
         for i, (arr, expected) in enumerate(zip(inputs, self._artifacts.input_shapes)):
             if arr.shape != expected:
                 raise ValueError(
@@ -387,6 +388,7 @@ def run_pico_vulkan(
     depth_lr,
     motion_lr,
     normals_lr,
+    albedo_lr,
     history_hr,
     hidden_state,
     *,
@@ -408,7 +410,7 @@ def run_pico_vulkan(
 
     arrs = tuple(
         _to_numpy(x)
-        for x in (color_lr, depth_lr, motion_lr, normals_lr, history_hr, hidden_state)
+        for x in (color_lr, depth_lr, motion_lr, normals_lr, albedo_lr, history_hr, hidden_state)
     )
 
     if runtime is None:

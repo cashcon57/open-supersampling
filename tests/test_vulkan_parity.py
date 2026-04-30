@@ -79,6 +79,7 @@ def pico_inputs():
         "depth_lr": torch.randn(B, 1, H_LR, W_LR, generator=g),
         "motion_lr": torch.randn(B, 2, H_LR, W_LR, generator=g),
         "normals_lr": torch.randn(B, 3, H_LR, W_LR, generator=g),
+        "albedo_lr": torch.randn(B, 3, H_LR, W_LR, generator=g),
         "history_hr": torch.randn(B, 3, H_HR, W_HR, generator=g),
         "hidden_state": torch.zeros(B, ORUPico.HIDDEN_CHANNELS, H_HIDDEN, W_HIDDEN),
     }
@@ -111,6 +112,7 @@ def test_pico_vulkan_parity(tmp_path, pico_model, pico_inputs):
             pico_inputs["depth_lr"],
             pico_inputs["motion_lr"],
             pico_inputs["normals_lr"],
+            pico_inputs["albedo_lr"],
             pico_inputs["history_hr"],
             pico_inputs["hidden_state"],
         )
@@ -122,7 +124,7 @@ def test_pico_vulkan_parity(tmp_path, pico_model, pico_inputs):
     # self-contained.
     shapes = tuple(
         tuple(pico_inputs[name].shape)
-        for name in ("color_lr", "depth_lr", "motion_lr", "normals_lr", "history_hr", "hidden_state")
+        for name in ("color_lr", "depth_lr", "motion_lr", "normals_lr", "albedo_lr", "history_hr", "hidden_state")
     )
     runtime = VulkanPicoRuntime.from_model(
         pico_model, shapes, cache_root=tmp_path / "vulkan-cache"
@@ -134,6 +136,7 @@ def test_pico_vulkan_parity(tmp_path, pico_model, pico_inputs):
         pico_inputs["depth_lr"],
         pico_inputs["motion_lr"],
         pico_inputs["normals_lr"],
+        pico_inputs["albedo_lr"],
         pico_inputs["history_hr"],
         pico_inputs["hidden_state"],
         runtime=runtime,
@@ -173,7 +176,7 @@ def test_runtime_caches_converted_artifacts(tmp_path, pico_model, pico_inputs):
 
     shapes = tuple(
         tuple(pico_inputs[name].shape)
-        for name in ("color_lr", "depth_lr", "motion_lr", "normals_lr", "history_hr", "hidden_state")
+        for name in ("color_lr", "depth_lr", "motion_lr", "normals_lr", "albedo_lr", "history_hr", "hidden_state")
     )
     cache_root = tmp_path / "vulkan-cache"
 
