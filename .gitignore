@@ -19,3 +19,17 @@ results/
 venv-py312/
 venv-*/
 
+# Secrets — do NOT commit
+*.txt
+!docs/**/*.txt
+.lambda/
+.secrets/
+secrets/
+*api*key*
+*.api_key
+.env.*
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+
