@@ -68,11 +68,13 @@ from typing import Optional
 # numbers for the harness's worst-case-cost preview. The defaults below are
 # pure fallbacks for offline tests where the live call is mocked out.
 RUNPOD_DEFAULT_PRICING: dict[str, float] = {
-    "NVIDIA A40":                  0.39,
-    "NVIDIA GeForce RTX 4090":     0.69,
-    "NVIDIA A100 80GB PCIe":       1.89,
-    "NVIDIA A100-SXM4-80GB":       1.89,
-    "NVIDIA H100 PCIe":            2.79,
+    "NVIDIA A40":                  0.44,   # secure $0.44, community $0.34 (2026-04 verified)
+    "NVIDIA RTX A6000":            0.49,   # secure $0.49, community $0.33
+    "NVIDIA GeForce RTX 4090":     0.69,   # secure $0.69, community $0.34
+    "NVIDIA A100 80GB PCIe":       1.39,   # secure $1.39, community $1.19
+    "NVIDIA A100-SXM4-40GB":       1.39,
+    "NVIDIA A100-SXM4-80GB":       1.49,   # secure $1.49, community $1.39
+    "NVIDIA H100 PCIe":            2.79,   # placeholder above live $2.39 for safety
     "NVIDIA H100 80GB HBM3":       2.99,   # SXM variant
     "NVIDIA H100 NVL":             3.39,
     "NVIDIA H200":                 3.99,
