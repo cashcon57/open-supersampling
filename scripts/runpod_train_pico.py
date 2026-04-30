@@ -213,8 +213,10 @@ def main():
         name="ors-pico-training",
         max_duration_s=int(args.max_hours * 3600),
         budget_usd=args.budget,
-        # No local SSH key path — RunPod injects account keys into the pod.
-        ssh_key_path=None,
+        # SSH key path needed so harness can install on-instance self-terminate
+        # cron + run idle detection. RunPod uses dedicated key in .secrets/.
+        ssh_key_path=_RUNPOD_SSH_KEY,
+        ssh_user="root",
         purpose=args.purpose,
     )
 
@@ -229,6 +231,20 @@ def main():
             print(f"[runpod_train_pico] SSH endpoint never appeared: {e}", file=sys.stderr)
             return 4
         print(f"[runpod_train_pico] SSH endpoint: {ip}:{port}")
+
+        # RunPod's PyTorch container ships without rsync. Install before sync.
+        # Idempotent — apt-get returns 0 if already present.
+        prep_rc = subprocess.run(
+            _ssh_command(ip, port) + [
+                "bash", "-c",
+                "apt-get update -qq 2>&1 | tail -3 && "
+                "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq rsync 2>&1 | tail -3 && "
+                "rsync --version | head -1"
+            ],
+        ).returncode
+        if prep_rc != 0:
+            print(f"[runpod_train_pico] rsync install failed (rc={prep_rc}); aborting", file=sys.stderr)
+            return 6
 
         rc = _rsync_repo(ip, port)
         if rc != 0:
