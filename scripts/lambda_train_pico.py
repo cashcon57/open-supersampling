@@ -67,6 +67,66 @@ def _recommended_epochs(instance_type: str, requested: int, max_hours: float) ->
     return min(requested, max(1, scaled))
 
 
+def _expand_wait_target(short: str) -> list[str]:
+    """Map shorthand --wait-for value to the list of acceptable instance type names."""
+    mapping = {
+        "h100":       ["gpu_1x_h100_sxm5", "gpu_1x_h100_pcie"],  # accept either flavor
+        "h100_sxm5":  ["gpu_1x_h100_sxm5"],
+        "h100_pcie":  ["gpu_1x_h100_pcie"],
+        "a100":       ["gpu_1x_a100_sxm4", "gpu_1x_a100"],
+        "a100_sxm4":  ["gpu_1x_a100_sxm4"],
+    }
+    return mapping[short]
+
+
+def _wait_for_capacity(
+    client: LambdaClient,
+    targets: list[str],
+    max_minutes: int = 180,
+    poll_interval_s: int = 60,
+) -> tuple[Optional[str], Optional[str]]:
+    """Poll Lambda's instance-types endpoint until any of `targets` has capacity.
+
+    Returns (instance_type, region) when capacity is found, or (None, None)
+    on timeout. Prints progress every poll. Ctrl-C to cancel.
+    """
+    print(f"[lambda_train_pico] polling for capacity in {targets} (max {max_minutes}min) ...")
+    started = time.time()
+    deadline = started + max_minutes * 60
+    poll_n = 0
+    while time.time() < deadline:
+        poll_n += 1
+        try:
+            types = client.list_instance_types()
+            for tname in targets:
+                entry = types.get(tname, {})
+                regions = entry.get("regions_with_capacity_available", []) or []
+                region_names = [r.get("name") if isinstance(r, dict) else r for r in regions]
+                if region_names:
+                    elapsed_min = (time.time() - started) / 60.0
+                    print(
+                        f"[lambda_train_pico] ✓ {tname} now available in {region_names[0]} "
+                        f"after {elapsed_min:.1f}min ({poll_n} polls)"
+                    )
+                    return tname, region_names[0]
+            elapsed_min = (time.time() - started) / 60.0
+            remaining_min = (deadline - time.time()) / 60.0
+            print(
+                f"[lambda_train_pico] poll {poll_n}: still no capacity for {targets}. "
+                f"Elapsed {elapsed_min:.1f}min, remaining {remaining_min:.0f}min. "
+                f"Ctrl-C to abort.",
+                flush=True,
+            )
+        except Exception as e:
+            sys.stderr.write(f"[lambda_train_pico] poll {poll_n} failed: {e}\n")
+        try:
+            time.sleep(poll_interval_s)
+        except KeyboardInterrupt:
+            print("\n[lambda_train_pico] poll cancelled by user.")
+            return None, None
+    return None, None
+
+
 def _ssh_command(ip: str, key_path: Path, user: str = "ubuntu") -> list[str]:
     return [
         "ssh",
@@ -214,12 +274,32 @@ def main():
     p.add_argument("--no-epoch-cap", action="store_true",
                    help="Don't cap requested epochs to what the instance can finish in "
                         "max_hours. Off by default.")
+    p.add_argument("--wait-for", type=str, default=None,
+                   choices=["h100", "h100_sxm5", "h100_pcie", "a100", "a100_sxm4"],
+                   help="Poll Lambda capacity until the requested tier opens, then launch. "
+                        "Polls every 60s. Useful when H100 is out of capacity but you don't "
+                        "want to settle for A10. Combine with --wait-mins to set a timeout.")
+    p.add_argument("--wait-mins", type=int, default=180,
+                   help="Max minutes to poll for --wait-for tier. Default 180 (3 hours). "
+                        "Aborts if capacity doesn't open in that window.")
     args = p.parse_args()
 
     client = LambdaClient()
 
-    # 1. Pick instance
-    if args.instance_type:
+    # 1. Pick instance — with optional capacity poll if --wait-for set
+    if args.wait_for:
+        wait_targets = _expand_wait_target(args.wait_for)
+        instance_type, region = _wait_for_capacity(
+            client, wait_targets, max_minutes=args.wait_mins
+        )
+        if instance_type is None:
+            print(
+                f"[lambda_train_pico] capacity for {args.wait_for!r} did not open within "
+                f"{args.wait_mins} minutes; aborting.",
+                file=sys.stderr,
+            )
+            return 4
+    elif args.instance_type:
         if not args.region:
             print("error: --region required when --instance-type is set", file=sys.stderr)
             return 2

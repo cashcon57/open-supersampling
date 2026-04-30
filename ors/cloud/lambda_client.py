@@ -10,6 +10,8 @@ auto-termination, idle detection, and budget tracking lives in
 from __future__ import annotations
 
 import os
+import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -215,6 +217,11 @@ class LambdaClient:
 
         WARNING: this starts billing. Always call from inside SafetyHarness
         so that termination is guaranteed.
+
+        Lambda's launch API can be slow (seen 60-90s server-side processing
+        when capacity is tight). We use a longer timeout here than for
+        read endpoints. If we timeout but the launch succeeded server-side,
+        a stale instance may end up unowned — see `_recover_orphaned_launch`.
         """
         body = {
             "region_name": region_name,
@@ -226,22 +233,78 @@ class LambdaClient:
             body["file_system_names"] = file_system_names
         if name:
             body["name"] = name
-        r = self._session.post(
-            f"{_API_BASE}/instance-operations/launch",
-            json=body,
-            timeout=self._timeout,
-        )
-        r.raise_for_status()
-        return r.json().get("data", {}).get("instance_ids", [])
+
+        # Snapshot active instances BEFORE the launch so we can detect any
+        # instance Lambda created even if our POST times out.
+        try:
+            pre_existing_ids = {i.instance_id for i in self.list_instances()}
+        except Exception:
+            pre_existing_ids = set()
+
+        try:
+            r = self._session.post(
+                f"{_API_BASE}/instance-operations/launch",
+                json=body,
+                timeout=180.0,  # generous; launch can be slow when capacity tight
+            )
+            r.raise_for_status()
+            return r.json().get("data", {}).get("instance_ids", [])
+        except requests.exceptions.RequestException as e:
+            # Did Lambda create an instance anyway despite our timeout?
+            recovered = self._recover_orphaned_launch(
+                pre_existing_ids, instance_type_name, region_name
+            )
+            if recovered:
+                sys.stderr.write(
+                    f"[LambdaClient] launch POST raised {type(e).__name__} but found new "
+                    f"instance(s) {recovered} — recovered.\n"
+                )
+                return recovered
+            raise
+
+    def _recover_orphaned_launch(
+        self,
+        pre_existing_ids: set[str],
+        instance_type_name: str,
+        region_name: str,
+        retries: int = 6,
+        delay_s: float = 10.0,
+    ) -> list[str]:
+        """After a launch POST raises, poll list_instances for up to ~60s
+        to detect whether Lambda created an instance server-side that we
+        weren't told about. Returns its ID(s) so the harness can track it
+        properly (and terminate it on exit if needed)."""
+        for _ in range(retries):
+            try:
+                current = self.list_instances()
+                new_matching = [
+                    i.instance_id for i in current
+                    if i.instance_id not in pre_existing_ids
+                    and i.instance_type == instance_type_name
+                    and i.region == region_name
+                    and i.status not in ("terminated", "terminating")
+                ]
+                if new_matching:
+                    return new_matching
+            except Exception as poll_err:
+                sys.stderr.write(
+                    f"[LambdaClient] orphan-recovery poll failed: {poll_err}\n"
+                )
+            time.sleep(delay_s)
+        return []
 
     def terminate(self, instance_ids: list[str]) -> dict:
-        """Terminate instance(s). Idempotent — safe to call multiple times."""
+        """Terminate instance(s). Idempotent — safe to call multiple times.
+
+        Uses a generous timeout because terminate is the safety operation
+        that MUST succeed and we don't want to give up early.
+        """
         if not instance_ids:
             return {}
         r = self._session.post(
             f"{_API_BASE}/instance-operations/terminate",
             json={"instance_ids": instance_ids},
-            timeout=self._timeout,
+            timeout=120.0,  # generous; terminate must succeed
         )
         # do NOT raise_for_status here — terminate must succeed best-effort
         # even if some instances are already gone
