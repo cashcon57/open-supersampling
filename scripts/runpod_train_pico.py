@@ -65,26 +65,36 @@ def _select_gpu(client: RunPodClient, preference: list[str]) -> str:
     )
 
 
+_RUNPOD_SSH_KEY = REPO_ROOT / ".secrets" / "runpod-ssh.pem"
+
+
 def _ssh_command(ip: str, port: int = 22, user: str = "root") -> list[str]:
     return [
         "ssh",
+        "-i", str(_RUNPOD_SSH_KEY),
         "-p", str(port),
         "-o", "StrictHostKeyChecking=no",
         "-o", "UserKnownHostsFile=/dev/null",
         "-o", "ConnectTimeout=20",
+        "-o", "BatchMode=yes",          # never prompt for password — fail fast
         f"{user}@{ip}",
     ]
 
 
 def _rsync_repo(ip: str, port: int = 22, user: str = "root") -> int:
+    ssh_args = (
+        f"ssh -i {_RUNPOD_SSH_KEY} -p {port} "
+        f"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
+        f"-o BatchMode=yes"
+    )
     cmd = [
         "rsync", "-az", "--delete",
-        "-e", f"ssh -p {port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null",
+        "-e", ssh_args,
         "--exclude", "venv*/",
-        "--exclude", "data/",
-        "--exclude", "results/",
-        "--exclude", ".secrets/",
-        "--exclude", ".git/",
+        "--exclude", "/data/",            # top-level dataset dir only — NOT ors/data/
+        "--exclude", "/results/",
+        "--exclude", "/.secrets/",
+        "--exclude", "/.git/",
         "--exclude", "__pycache__/",
         "--exclude", "*.pth",
         f"{REPO_ROOT}/",
