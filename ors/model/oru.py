@@ -99,7 +99,11 @@ class ORU(nn.Module):
         d1 = self.dec1(torch.cat([d2, x1], dim=1))
 
         feats_full = torch.cat([d1, x0], dim=1)
-        out_h = int(round(feats_full.shape[2] * self.scale_factor))
-        out_w = int(round(feats_full.shape[3] * self.scale_factor))
+        # Floor rather than banker's-round for deterministic round-trip with the
+        # downsample step in the paired trainer (T5). E.g. HR=64, scale=2.0 →
+        # LR=32 → ORU upscale → 64. Banker's rounding on odd inputs at
+        # non-integer scales produces platform-dependent sizes.
+        out_h = int(feats_full.shape[2] * self.scale_factor)
+        out_w = int(feats_full.shape[3] * self.scale_factor)
         upscaled = F.interpolate(feats_full, size=(out_h, out_w), mode="bilinear", align_corners=False)
         return self.out_proj(upscaled)
