@@ -83,6 +83,7 @@ class HarnessConfig:
     # SSH for idle detection
     ssh_key_path: Optional[Path] = None      # private key for SSH-into-instance
     ssh_user: str = "ubuntu"
+    ssh_port: int = 22                       # RunPod uses random high ports; Lambda is 22
 
     # Heartbeat / watchdog
     heartbeat_interval_s: int = 30
@@ -544,6 +545,7 @@ class SafetyHarness:
         cmd = [
             "ssh",
             "-i", str(self._config.ssh_key_path) if self._config.ssh_key_path else "",
+            "-p", str(self._config.ssh_port),
             "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
             "-o", "ConnectTimeout=10",
@@ -639,6 +641,7 @@ class SafetyHarness:
         ssh_base = [
             "ssh",
             "-i", str(self._config.ssh_key_path),
+            "-p", str(self._config.ssh_port),
             "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
             "-o", "ConnectTimeout=20",
