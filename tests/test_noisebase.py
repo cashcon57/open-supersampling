@@ -94,6 +94,21 @@ def test_noisebase_dataset_window_padding(synthetic_root: Path) -> None:
     assert item["gt_hr"].shape[0] == 10
 
 
+def test_motion_vectors_zero_at_sequence_start(synthetic_root: Path) -> None:
+    """Motion at frame 0 should be zero (no prior frame to compare against)."""
+    ds = NoiseBaseDataset(
+        root=synthetic_root,
+        sequence_length=4,
+        resolution=(32, 32),
+        scale_factor=2.0,
+        split="train",
+    )
+    item = ds[0]
+    motion_t0 = item["motion_lr"][0]  # [2, H, W]
+    # Frame 0 motion should be all zeros since there's no prior frame.
+    assert torch.allclose(motion_t0, torch.zeros_like(motion_t0), atol=1e-5)
+
+
 def test_noisebase_dataset_no_data_errors(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError):
         NoiseBaseDataset(root=tmp_path, sequence_length=2)

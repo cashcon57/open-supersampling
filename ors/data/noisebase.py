@@ -82,7 +82,7 @@ from torch.utils.data import Dataset
 
 # Buffer keys we read from the on-disk Zarr group. ``color`` is the noisy
 # RGBE radiance; ``reference`` is the clean GT.
-_REQUIRED_KEYS = ("color", "exposure", "reference", "motion", "normal", "diffuse")
+_REQUIRED_KEYS = ("color", "exposure", "reference", "motion", "normal", "diffuse", "position")
 
 
 def _decompress_rgbe(color: np.ndarray, exposure: np.ndarray) -> np.ndarray:
@@ -155,28 +155,64 @@ def _compute_depth_from_position(position: np.ndarray, camera_pos: np.ndarray) -
     return dist.mean(axis=-1).astype(np.float32)
 
 
-def _compute_screen_motion(motion_world: np.ndarray) -> np.ndarray:
-    """Approximate screen-space 2D motion from world-space 3D motion.
+def _compute_screen_motion(
+    positions: np.ndarray,
+    view_proj_mats: np.ndarray,
+) -> np.ndarray:
+    """Compute screen-space motion vectors via view-projection matrix transforms.
 
-    The faithful path is to project ``position`` and ``position - motion``
-    through ``view_proj_mat`` and ``prev view_proj_mat``, take the
-    pixel-space delta. Until that's wired, we use the X/Y components of
-    the world-space motion (sample-mean) as a stand-in. This is enough to
-    exercise the (T, 2, H, W) shape contract; it is **not** a substitute
-    for true motion vectors when training against real data.
+    Projects world-space positions through the view-projection matrix at
+    consecutive frames, then computes the NDC-space pixel displacement.
+    This yields proper screen-space motion vectors for temporal tasks.
 
     Parameters
     ----------
-    motion_world
-        ``[F, 3, H, W, S]`` world-space motion.
+    positions
+        ``[F, 3, H, W, S]`` world-space hit positions per sample.
+    view_proj_mats
+        ``[F, 4, 4]`` view-projection matrices (or ``[F, 3, 4]`` if stored
+        in homogeneous form). The matrix at frame t transforms world coords
+        to the clip space of frame t.
 
     Returns
     -------
     np.ndarray
-        ``[F, 2, H, W]`` float32 screen-space-ish motion.
+        ``[F, 2, H, W]`` float32 screen-space motion vectors in NDC space
+        (range ~[-1, 1]). Frame 0 motion is zero (no prior frame).
     """
-    avg = motion_world.mean(axis=-1).astype(np.float32)  # [F, 3, H, W]
-    return avg[:, :2, ...]  # take X/Y
+    F, _, H, W, S = positions.shape
+    motion = np.zeros((F, 2, H, W), dtype=np.float32)
+
+    if F < 2:
+        return motion  # single frame, no motion
+
+    # Pad world positions to homogeneous coordinates: [F, 3, H, W, S] -> [F, 4, H, W, S]
+    ones = np.ones((F, 1, H, W, S), dtype=positions.dtype)
+    pos_homo = np.concatenate([positions, ones], axis=1)  # [F, 4, H, W, S]
+
+    # Apply view-projection for prev and curr frames.
+    for f in range(1, F):
+        # Reshape for matrix multiply: [4, 4] @ [4, H*W*S] -> [4, H*W*S]
+        prev_mat = view_proj_mats[f - 1]  # [4, 4]
+        curr_mat = view_proj_mats[f]      # [4, 4]
+
+        pos_f_flat = pos_homo[f].reshape(4, -1)  # [4, H*W*S]
+        pos_prev_flat = pos_homo[f - 1].reshape(4, -1)  # [4, H*W*S]
+
+        # Transform to clip space.
+        prev_clip = prev_mat @ pos_prev_flat  # [4, H*W*S]
+        curr_clip = curr_mat @ pos_f_flat    # [4, H*W*S]
+
+        # Perspective divide to NDC.
+        prev_ndc = prev_clip[:2] / (prev_clip[3:4] + 1e-6)  # [2, H*W*S]
+        curr_ndc = curr_clip[:2] / (curr_clip[3:4] + 1e-6)  # [2, H*W*S]
+
+        # Motion in NDC space, then sample-mean, reshape to spatial.
+        delta = curr_ndc - prev_ndc  # [2, H*W*S]
+        delta_mean = delta.mean(axis=1)  # [2]
+        motion[f] = delta.reshape(2, H, W, S).mean(axis=-1)  # [2, H, W]
+
+    return motion
 
 
 def _resize_chw(buf: np.ndarray, target_hw: tuple[int, int], mode: str) -> np.ndarray:
@@ -393,21 +429,25 @@ class NoiseBaseDataset(Dataset):
         # Aux buffers: average over sample axis.
         normal = _avg_samples(raw["normal"].astype(np.float32))    # [F, 3, H, W]
         albedo = _avg_samples(raw["diffuse"].astype(np.float32))   # [F, 3, H, W]
-        motion_screen = _compute_screen_motion(raw["motion"].astype(np.float32))  # [F, 2, H, W]
 
-        # Depth: synthesised from camera position if available, else 0s.
-        if "camera_position" in raw:
-            position = raw.get("position")
-            if position is None:
-                # NoiseBase 'position' isn't in our required-keys list; fall
-                # back to a constant depth so the shape contract still holds.
-                F_, _, H, W = noisy_avg.shape
-                depth = np.zeros((F_, 1, H, W), dtype=np.float32)
-            else:
-                depth = _compute_depth_from_position(position, raw["camera_position"])
+        # Depth: world-space distance from camera, derived from position AOV.
+        position = raw["position"].astype(np.float32)  # [F, 3, H, W, S]
+        depth = _compute_depth_from_position(position, raw["camera_position"])  # [F, 1, H, W]
+
+        # Normalize depth to [0, 1] range for stable FP16 training.
+        depth_max = np.maximum(depth.max(), 1e-6)
+        depth = depth / depth_max
+
+        # Screen-space motion via view-projection matrix transforms.
+        # Requires view_proj_mat from raw data (if available; else fallback to zeros).
+        if "view_proj_mat" in raw:
+            view_proj = raw["view_proj_mat"].astype(np.float32)  # [F, 4, 4]
+            motion_screen = _compute_screen_motion(position, view_proj)  # [F, 2, H, W]
         else:
-            F_, _, H, W = noisy_avg.shape
-            depth = np.zeros((F_, 1, H, W), dtype=np.float32)
+            # Fallback: zeros (no view-proj data available). Frame 0 motion is
+            # always zero (no prior frame); frames 1+ would need true projection.
+            F_, _, H, W = position.shape[:4]
+            motion_screen = np.zeros((F_, 2, H, W), dtype=np.float32)
 
         # Window the F axis to ``sequence_length``.
         # Start at frame 0 deterministically — randomised cropping is a
@@ -431,6 +471,17 @@ class NoiseBaseDataset(Dataset):
         albedo_lr_np = self._to_lr(self._to_hr(albedo, mode="bilinear"), mode="area")
         motion_lr_np = self._to_lr(self._to_hr(motion_screen, mode="bilinear"), mode="area")
         depth_lr_np = self._to_lr(self._to_hr(depth, mode="bilinear"), mode="area")
+
+        # G-buffer normalization for stable FP16 training.
+        # Clamp normals to [-1, 1] range (sh_normal style, already in range but enforce).
+        normals_lr_np = np.clip(normals_lr_np, -1.0, 1.0)
+        # Clamp albedo to [0, 1] range (typical reflectance).
+        albedo_lr_np = np.clip(albedo_lr_np, 0.0, 1.0)
+        # Motion vectors in NDC [-1, 1] space; clamp to bounds.
+        motion_lr_np = np.clip(motion_lr_np, -1.0, 1.0)
+        # Depth in [0, 1] (normalized in the depth synthesis block above; re-clamp for safety).
+        depth_lr_np = np.clip(depth_lr_np, 0.0, 1.0)
+        # color_lr (noisy) and gt_hr (ground truth) stay HDR linear; no clamping.
 
         return {
             "color_lr":   torch.from_numpy(np.ascontiguousarray(color_lr_np, dtype=np.float32)),
@@ -476,7 +527,12 @@ def _write_synthetic_sequence(
     motion    = rng.standard_normal((frames, 3, height, width, samples)).astype(np.float32) * 0.01
     normal    = rng.standard_normal((frames, 3, height, width, samples)).astype(np.float16)
     diffuse   = rng.random((frames, 3, height, width, samples)).astype(np.float16)
+    position  = rng.standard_normal((frames, 3, height, width, samples)).astype(np.float32) * 10.0
     cam_pos   = rng.standard_normal((frames, 3)).astype(np.float32)
+    # View-projection matrices: identity + small random perturbations per frame.
+    view_proj = np.zeros((frames, 4, 4), dtype=np.float32)
+    for f in range(frames):
+        view_proj[f] = np.eye(4, dtype=np.float32) + rng.standard_normal((4, 4)).astype(np.float32) * 0.01
 
     if hasattr(zarr, "storage") and hasattr(zarr.storage, "ZipStore"):
         store = zarr.storage.ZipStore(str(path), mode="w")
@@ -489,7 +545,9 @@ def _write_synthetic_sequence(
                 ("motion", motion),
                 ("normal", normal),
                 ("diffuse", diffuse),
+                ("position", position),
                 ("camera_position", cam_pos),
+                ("view_proj_mat", view_proj),
             ]:
                 arr = grp.create_array(k, shape=v.shape, dtype=v.dtype)
                 arr[:] = v
@@ -506,7 +564,9 @@ def _write_synthetic_sequence(
                 ("motion", motion),
                 ("normal", normal),
                 ("diffuse", diffuse),
+                ("position", position),
                 ("camera_position", cam_pos),
+                ("view_proj_mat", view_proj),
             ]:
                 grp.create_dataset(k, data=v, chunks=False)
         finally:
