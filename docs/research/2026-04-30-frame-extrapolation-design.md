@@ -10,7 +10,11 @@
 
 Add a frame extrapolation module (ORU-FX) to ORS that generates only the frames needed to hit a user's target framerate. Handles 60→90fps, 60→120fps, and similar non-2× boosts natively. No BFI — dropped from scope.
 
-**Primary architecture: guided extrapolation.** The user only ever sees full-res frames — either rendered by the game or synthesized by ORU-FX. A cheap 1/4-res "guide" render at the target time is fed to ORU-FX as an oracle input and **never displayed**. It costs ~1/8–1/10 of a full render (1/16 pixel count, fixed overhead amortized), eliminates most blind-extrapolation failure modes (fast motion, disocclusion, lighting changes), and adds only ~2ms of latency vs ~16.7ms for traditional interpolation waiting on a full-res future frame.
+**Primary architecture: G-buffer-assisted extrapolation via DLL hook.** A proxy `dxgi.dll` / Vulkan layer intercepts `Present()` and extracts the depth buffer and motion vectors the game already computed for its own TAA/DLSS/FSR pass — zero extra render cost. These are fed to ORU-FX alongside the color frame to produce a full-res extrapolated frame at t+α. The user only ever sees full-res frames.
+
+**Why not color-only like GFFE?** Intel deliberately went color-only for driver-level portability (no hook required) and as a research claim ("G-buffer free is competitive"). For ORS via DLL hook, depth + motion vectors are available for free on any modern game with TAA, and they eliminate the heuristic estimation GFFE has to do from color alone. On older games without TAA, fall back to color-only gracefully.
+
+**Why not the 1/4-res guide frame?** Requires injecting an extra render pass into the game engine — needs SDK cooperation or very deep render pipeline hooks. Deferred to V2. The depth buffer from the DLL hook gives most of the same positional benefit at zero cost.
 
 ---
 
@@ -20,24 +24,25 @@ Add a frame extrapolation module (ORU-FX) to ORS that generates only the frames 
 
 Key insight: extrapolation (no future frame needed) is feasible with a heuristic warp + lightweight neural correction network.
 
-### ORU-FX pipeline (guided extrapolation, departs from GFFE)
+### ORU-FX pipeline
 
 ```
-Frame_t (full-res, displayed)  ──►  Background Collector  ──►  BG buffer
-                                ──►  History Tracker       ──►  Motion history
-Frame_t                         ──►  Geometry-aware warp   ──►  Warped_est
-Guide_t+α (1/4-res, NOT shown) ──┐
-Warped_est + history + guide    ──►  SCN (neural net)      ──►  Frame_t+α (full-res, displayed)
+DLL hook / Vulkan layer intercepts Present():
+  color(t)          ──►  History Tracker  ──►  Motion history
+  depth(t)          ──►  Geometry-aware warp  ──►  Warped_est
+  motion_vec(t-1→t) ──►  Flow extrapolation  ──►  F_{t→t+α}
+  Warped_est + history + depth + alpha_embed
+                    ──►  SCN (neural net)  ──►  Frame_t+α (full-res, displayed)
 ```
 
-The guide render is a rendering-engine hint, not a display output. The game renders full-res at t and 1/4-res at t+α; ORU-FX synthesizes the full-res t+α output entirely.
+Inputs extracted at zero extra render cost — the game already computed depth and motion vectors for TAA. On games without TAA (no motion vectors available), fall back to estimating flow from color frames only.
 
-1. **Background Collector** — identifies and tracks background pixels using temporal consistency; fills disoccluded regions without G-buffers
-2. **History Tracker** — accumulates temporal feature maps from prior frames for motion continuity
-3. **Geometry-aware Warp** — extends optical flow warp with depth-consistency heuristics to reduce smear on depth discontinuities
-4. **Shading Correction Network (SCN)** — small ConvNet; takes warped estimate + temporal features, outputs shading residual to correct the warp
+1. **Flow extrapolation** — motion_vec(t-1→t) linearly extrapolated: F_{t→t+α} = α × motion_vec. No separate flow estimator needed when motion vectors are present (saves ~3ms vs RAFT-Small).
+2. **Geometry-aware warp** — uses actual depth(t) to detect depth discontinuities and prevent color bleeding across edges. Replaces GFFE's luminance Laplacian heuristic with ground-truth depth.
+3. **History Tracker** — accumulates temporal feature maps from prior frames for disocclusion fill and motion continuity.
+4. **SCN** — takes warped estimate + depth + history features + α embedding, outputs residual correction. Handles disocclusion fill, shading correction, sub-pixel motion.
 
-The SCN is the only learned component. Everything else is heuristic/analytical.
+The SCN is the only learned component.
 
 ### GFFE latency (measured, Table 4 of paper)
 
@@ -110,7 +115,8 @@ The SCN is trained with α sampled uniformly from [0.1, 0.95] per sample, forcin
 - Vulkan/NCNN inference path (same as ORU-Pico via `vulkan` extra)
 
 **OUT of scope:**
-- G-buffer inputs — color-frame-only, matches GFFE design
+
+- 1/4-res guide frame render — deferred to V2, requires render pipeline injection
 - BFI (Black Frame Insertion) — dropped
 - Interpolation (needs future frame) — extrapolation only
 - Per-game tuning profiles (v1 ships one universal model)
@@ -138,7 +144,7 @@ ors/
 Small U-Net variant, ~2M params (larger than Pico because spatial coherence matters more for extrapolation artifacts):
 
 ```
-Input: [warped_t+α (3ch), history_feat (C_h ch), alpha_embed (32)] → concat on channel dim
+Input: [warped_t+α (3ch), depth_t (1ch), history_feat (C_h ch), alpha_embed (32)] → concat on channel dim
   ↓ EncoderBlock 32ch
   ↓ EncoderBlock 64ch
   ↓ Bottleneck 128ch + alpha_embed injected here
@@ -147,17 +153,30 @@ Input: [warped_t+α (3ch), history_feat (C_h ch), alpha_embed (32)] → concat o
 Output: residual (3ch) → warped_t+α + residual = Frame_t+α
 ```
 
+When motion vectors are unavailable (no TAA), flow is estimated from color frames via a lightweight estimator (adds ~3ms). depth_t channel is zeroed and the network falls back to luminance-based edge detection learned during training.
+
 Residual formulation keeps the warp as a strong prior; SCN only corrects shading errors and disocclusion fill.
 
-### Heuristic warp (oru_fx_warp.py)
+### Warp pipeline (oru_fx_warp.py)
 
-1. **Optical flow estimation** — use RAFT-Small (pretrained, frozen) to get flow F_{t-1→t}
-2. **Flow extrapolation** — linear extrapolation: F_{t→t+α} = α * F_{t-1→t}
-3. **Background collection** — pixels with |flow| < threshold across last N frames → BG pool
-4. **Disocclusion fill** — warped pixels with no source → fill from BG pool using nearest valid pixel in flow-aligned coordinates
-5. **Geometry-aware blend** — blend fill vs warp based on estimated depth discontinuity (Laplacian of luminance as proxy for depth edges)
+**Primary path (motion vectors available):**
 
-RAFT-Small is inference-only (no grad); flow estimation adds ~3ms at 720p on modern hardware.
+1. **Flow extrapolation** — game motion vectors linearly extrapolated: F_{t→t+α} = α × motion_vec(t-1→t). No separate flow estimator.
+2. **Depth-aware warp** — warp color(t) using F_{t→t+α}, masking pixels that cross depth discontinuities in depth(t) (∆depth > threshold → disoccluded).
+3. **Background collection** — pixels with |motion_vec| < threshold across last N frames → BG pool for disocclusion fill.
+4. **Disocclusion fill** — masked pixels filled from BG pool.
+
+**Fallback path (no motion vectors — color + depth only):**
+
+1. **Flow estimation** — RAFT-Small (pretrained, frozen) estimates F_{t-1→t} from color frames. Adds ~3ms.
+2. **Depth-aware warp** — same as primary path using estimated flow.
+3. **Background collection + disocclusion fill** — same as primary.
+
+**Color-only fallback (no motion vectors, no depth):**
+
+1. RAFT-Small flow estimation.
+2. Luminance Laplacian as depth discontinuity proxy (GFFE-equivalent).
+3. Background collection + disocclusion fill.
 
 ---
 
