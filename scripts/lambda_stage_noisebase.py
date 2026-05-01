@@ -1,26 +1,26 @@
-"""Stage NoiseBase dataset onto a Lambda persistent filesystem.
+"""Stage NoiseBase dataset to Cloudflare R2 via a Lambda instance.
 
     python -m scripts.lambda_stage_noisebase
 
 What it does:
-    1. Find or create a Lambda persistent filesystem named --filesystem-name
-       (default "ors-noisebase") in --region.
-    2. Launch a cheap instance (A10 or A6000) with that filesystem attached.
-    3. SSH in, install the noisebase package, download the requested subsets.
-    4. Terminate the instance (filesystem + data persist indefinitely).
+    1. Launch a cheap Lambda instance (A10 or A6000) — no filesystem needed.
+    2. SSH in, install noisebase + rclone, download each subset to /tmp.
+    3. rclone sync each subset to R2 bucket ors-noisebase/ with 32 parallel transfers.
+    4. Terminate the instance.  R2 data persists.
 
-The filesystem mounts at ${OSS_REMOTE_HOME}/<name>/ on every future instance.
-Point training at that path with --data ${OSS_REMOTE_HOME}/ors-noisebase.
+Lambda has no egress fees → R2 upload is free.
+R2 has no ingress fees.
+Training pulls R2 → Lambda filesystem at ~1 GB/s (sub-minute warm-up).
 
 Dataset sizes (upstream docs):
-    sampleset_training_v1  ~370 GB  (1024 sequences, 64 frames, 32 spp, 256²)
-    sampleset_test8_v1     ~80 GB
-    sampleset_test32_v1    ~30 GB
-    all                    ~480 GB  (fits on 1 TB volume with room for checkpoints)
+    sampleset_v1            ~370 GB  (1024 sequences, 64 frames, 32 spp, 256²)
+    sampleset_test8_v1      ~80 GB
+    sampleset_test32_v1     ~30 GB
+    all                     ~480 GB
 
 Cost reference (~Apr 2026):
-    Lambda filesystem  ~$0.20/GB/month  → 500 GB = $100/month = ~$3.30/day
-    A10 instance       $0.75/hr         → ~4h download = ~$3.00 one-time
+    A10 instance  $0.75/hr  →  ~4h download+upload ≈ $3.00 one-time
+    R2 storage    ~$0.015/GB/month  →  500 GB ≈ $7.50/month
 """
 from __future__ import annotations
 
@@ -59,22 +59,6 @@ def _ssh(ip: str, key_path: Path, user: str = "ubuntu") -> list[str]:
     ]
 
 
-def _find_or_create_filesystem(
-    client: LambdaClient,
-    name: str,
-    region: str,
-) -> dict:
-    filesystems = client.list_filesystems()
-    for fs in filesystems:
-        if fs.get("name") == name:
-            print(f"[stage] filesystem '{name}' already exists (id={fs['id']}, region={fs.get('region','?')})")
-            return fs
-    print(f"[stage] creating filesystem '{name}' in {region} ...")
-    fs = client.create_filesystem(name, region)
-    print(f"[stage] created: id={fs['id']}")
-    return fs
-
-
 def _pick_instance(client: LambdaClient, preferred_region: str) -> tuple[str, str]:
     """Return (instance_type, actual_region) — prefer requested region, fall back to any."""
     types = client.list_instance_types()
@@ -99,37 +83,70 @@ def _pick_instance(client: LambdaClient, preferred_region: str) -> tuple[str, st
     raise RuntimeError("no staging-suitable instances available")
 
 
-def _download_noisebase(
+def _load_r2_creds() -> dict[str, str]:
+    creds_path = Path(__file__).resolve().parents[1] / ".secrets" / "r2-credentials.env"
+    creds: dict[str, str] = {}
+    for line in creds_path.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            creds[k.strip()] = v.strip()
+    return creds
+
+
+def _download_noisebase_to_r2(
     harness: SafetyHarness,
     ip: str,
     key_path: Path,
-    mount_path: str,
     subsets: list[str],
 ) -> int:
+    """Download NoiseBase subsets to Cloudflare R2 via rclone.
+
+    Flow on instance:
+      nb-download → /tmp/noisebase/<subset>/  →  rclone sync → R2:ors-noisebase/<subset>/
+
+    Lambda has no egress fees so upload to R2 is free.
+    R2 has no ingress fees.
+    Subsequent training pulls R2 → Lambda filesystem at ~1 GB/s.
+    """
     ssh = _ssh(ip, key_path)
     subsets_str = " ".join(subsets)
+    creds = _load_r2_creds()
+    r2_access = creds["R2_ACCESS_KEY_ID"]
+    r2_secret = creds["R2_SECRET_ACCESS_KEY"]
+    r2_endpoint = creds["R2_ENDPOINT"]
+    r2_bucket = creds["R2_BUCKET"]
 
-    # NoiseBase ships a CLI via its pip package.  The download destination is
-    # the filesystem mount point so data survives instance termination.
-    # We try pip install first; if the package name differs, fall back to
-    # cloning the repo and using its download.py script directly.
     remote_cmd = (
         "set -euo pipefail && "
-        f"mkdir -p {mount_path} && "
-        # numpy<2.0 required: numpy 2.x removed numpy.lib.shape_base used by pyfvvdp
-        "echo '--- pip install noisebase (numpy<2.0 pin) ---' && "
+        # numpy<2.0: nb-download's pyfvvdp dep uses removed numpy.lib.shape_base
+        "echo '--- installing tools ---' && "
         "pip3 install --quiet 'numpy<2.0' noisebase && "
-        "echo '--- nb-download ready ---' && "
+        "curl -fsSL https://rclone.org/install.sh | sudo bash 2>&1 | tail -3 && "
+        # Configure rclone R2 remote
+        "rclone config create r2 s3 "
+        f"  provider=Cloudflare "
+        f"  access_key_id={r2_access} "
+        f"  secret_access_key={r2_secret} "
+        f"  endpoint={r2_endpoint} "
+        "  no_check_bucket=true 2>&1 | tail -3 && "
+        "echo '--- tools ready ---' && "
         f"for SUBSET in {subsets_str}; do "
-        f"  echo \"=== downloading $SUBSET to {mount_path} ===\"; "
-        f"  nb-download --data_path {mount_path} \"$SUBSET\"; "
+        f"  echo \"=== nb-download $SUBSET ===\"; "
+        f"  mkdir -p /tmp/noisebase && "
+        f"  nb-download --data_path /tmp/noisebase \"$SUBSET\" && "
+        f"  echo \"=== rclone sync $SUBSET -> r2:{r2_bucket}/$SUBSET ===\"; "
+        f"  rclone sync /tmp/noisebase/$SUBSET r2:{r2_bucket}/$SUBSET "
+        f"    --transfers=32 --checkers=16 --progress && "
+        f"  rm -rf /tmp/noisebase/$SUBSET && "
+        f"  echo \"=== $SUBSET done ===\"; "
         "done && "
-        f"echo '--- done ---' && "
-        f"du -sh {mount_path}/*"
+        f"echo '--- all subsets uploaded to R2 ---' && "
+        f"rclone ls r2:{r2_bucket} | tail -5"
     )
 
     full = ssh + ["bash", "-lc", shlex.quote(remote_cmd)]
-    print(f"[stage] downloading subsets: {subsets}")
+    print(f"[stage] downloading {subsets} → R2 bucket {r2_bucket}")
     proc = subprocess.Popen(full, stdout=sys.stdout, stderr=sys.stderr)
     try:
         while proc.poll() is None:
@@ -144,10 +161,8 @@ def _download_noisebase(
 
 def main() -> int:
     p = argparse.ArgumentParser()
-    p.add_argument("--filesystem-name", default="ors-noisebase",
-                   help="Lambda filesystem name (created if absent)")
-    p.add_argument("--region", default="us-west-2",
-                   help="Lambda region for filesystem + staging instance")
+    p.add_argument("--region", default="us-east-1",
+                   help="Lambda region for staging instance (default: us-east-1)")
     p.add_argument("--subset", default="all",
                    choices=list(_SUBSETS.keys()),
                    help="which NoiseBase subsets to download (default: all ~480 GB)")
@@ -159,57 +174,37 @@ def main() -> int:
     args = p.parse_args()
 
     client = LambdaClient()
-
-    # 1. Filesystem
-    fs = _find_or_create_filesystem(client, args.filesystem_name, args.region)
-    fs_id = fs["id"]
-    # Lambda returns the actual mount point in the API response
-    mount_path = fs.get("mount_point") or f"/lambda/nfs/{args.filesystem_name}"
     subsets = _SUBSETS[args.subset]
 
-    print(f"[stage] filesystem id={fs_id}, mount={mount_path}")
-    print(f"[stage] subsets to download: {subsets}")
+    print(f"[stage] subsets to upload to R2: {subsets}")
 
-    # 2. Pick instance type — must be in same region as filesystem
     instance_type, actual_region = _pick_instance(client, args.region)
-    if actual_region != args.region and fs.get("region", {}).get("name") != actual_region:
-        # Filesystem is in wrong region for the available instance — delete and recreate
-        print(f"[stage] filesystem region mismatch; recreating in {actual_region} ...")
-        client.delete_filesystem(fs_id)
-        fs = client.create_filesystem(args.filesystem_name, actual_region)
-        fs_id = fs["id"]
-        print(f"[stage] recreated: id={fs_id} in {actual_region}")
-    rate = INSTANCE_PRICING.get(instance_type, 0.0)
 
     cfg = HarnessConfig(
         instance_type=instance_type,
         region=actual_region,
         ssh_key_names=[args.ssh_key_name],
-        file_system_names=[args.filesystem_name],
-        name="ors-noisebase-staging",
+        name="ors-noisebase-r2-staging",
         max_duration_s=int(args.max_hours * 3600),
         budget_usd=args.budget,
         ssh_key_path=REPO_ROOT / ".secrets" / "lambda-ssh.pem",
-        purpose=f"NoiseBase staging → {args.filesystem_name} ({args.subset})",
+        purpose=f"NoiseBase → R2 staging ({args.subset})",
     )
 
     harness = SafetyHarness(client, cfg)
     with harness as inst:
         print(f"[stage] instance {inst.instance_id} active at {inst.ip}")
-        rc = _download_noisebase(harness, inst.ip, cfg.ssh_key_path, mount_path, subsets)
+        rc = _download_noisebase_to_r2(harness, inst.ip, cfg.ssh_key_path, subsets)
         if rc != 0:
-            print(f"[stage] download failed rc={rc}", file=sys.stderr)
+            print(f"[stage] upload failed rc={rc}", file=sys.stderr)
             return rc
 
-    print(f"\n[stage] DONE. Filesystem '{args.filesystem_name}' (id={fs_id}) ready.")
-    print(f"[stage] Pass --filesystem-name {args.filesystem_name} to lambda_train_pico.py")
-    print(f"[stage] Data path on instance: {mount_path}")
+    creds = _load_r2_creds()
+    print(f"\n[stage] DONE. NoiseBase uploaded to R2 bucket '{creds['R2_BUCKET']}'.")
+    print(f"[stage] Pull to Lambda filesystem with:")
+    print(f"[stage]   rclone sync r2:{creds['R2_BUCKET']} /lambda/nfs/ors-noisebase --transfers=32")
     return 0
 
 
 if __name__ == "__main__":
-    print(
-        "WARNING: This creates a persistent Lambda filesystem (billed until deleted).\n"
-        "Run `python -m scripts.lambda_list_filesystems` to see active filesystems.\n"
-    )
     sys.exit(main())
