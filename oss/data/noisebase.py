@@ -38,7 +38,7 @@ Test files drop the leading ``F`` axis.
 
 NoiseBase stores world-space motion + camera matrices, then projects to
 screen-space at load time (see ``noisebase.projective.motion_vectors``).
-For ORU-Pico we want screen-space motion vectors directly. Until we
+For OSS-Pico we want screen-space motion vectors directly. Until we
 implement the world->screen projection here, we synthesise screen-space
 motion from the sample-axis mean of the world-space motion projected onto
 the image plane via a simple finite-difference fallback. See
@@ -133,7 +133,7 @@ def _compute_depth_from_position(position: np.ndarray, camera_pos: np.ndarray) -
     """Per-sample world-space distance from camera, averaged over samples.
 
     NoiseBase does not store depth directly — it stores world-space
-    ``position`` per sample plus the camera trajectory. ORU-Pico only
+    ``position`` per sample plus the camera trajectory. OSS-Pico only
     needs *some* monotonic depth-ish channel for guidance, so we use the
     camera-to-sample distance.
 

@@ -14,7 +14,7 @@ Synthetic placeholders for v0.1 (T5):
   not extract these channels yet (Mitsuba 3.7 limitation noted in
   ``mitsuba_pipeline.py``). v0.2 will populate them.
 
-The 11-channel ``aux`` tensor is laid out to match ``ORD.forward``'s contract:
+The 11-channel ``aux`` tensor is laid out to match ``OSSRG.forward``'s contract:
 ``[albedo(3), normal(3), depth(1), roughness(1), spec_hit(1), motion(2)]``.
 """
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""Warp pipeline for ORU-FX: three-tier fallback.
+"""Warp pipeline for OSS-FX: three-tier fallback.
 
 Tier 1 (best):   game motion vectors available → extrapolate + depth-aware warp
 Tier 2 (good):   no motion vectors, depth available → RAFT-Small flow + depth-aware warp
@@ -84,7 +84,7 @@ def warp_with_motion_vectors(
     """Tier 1: game motion vectors + depth.
 
     Args:
-        color_hr:      (B, 3, H, W) full-res color from ORU-Pico output
+        color_hr:      (B, 3, H, W) full-res color from OSS-Pico output
         depth_lr:      (B, 1, h, w) LR depth from DLL hook
         motion_vec_lr: (B, 2, h, w) LR motion vectors (dx, dy in pixels at LR res)
         alpha:         scalar or (B,) temporal offset

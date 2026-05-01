@@ -224,7 +224,7 @@ class WaveletKPNHead(nn.Module):
     Pipeline
     --------
     Inputs are expected at HR already (matching the legacy
-    :class:`KernelPredictionHead` calling convention used by ORU-Pico's
+    :class:`KernelPredictionHead` calling convention used by OSS-Pico's
     ``forward``: the network bilinearly upsamples both the feature map and
     the noisy color before invoking the head). We do **not** repeat that
     upsample inside the head.

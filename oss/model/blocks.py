@@ -1,4 +1,4 @@
-"""Building blocks for ORD/ORU networks. Channel counts must be multiples of 8
+"""Building blocks for OSSRG/OSS networks. Channel counts must be multiples of 8
 for later cooperative-matrix tiling."""
 from __future__ import annotations
 import torch

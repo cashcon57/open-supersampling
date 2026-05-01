@@ -6,11 +6,11 @@ from pathlib import Path
 import pytest
 import torch
 
-from oss.model.oru_pico import OSSPico
+from oss.model.oss_pico import OSSPico
 
 
 def test_onnx_export_round_trip(tmp_path):
-    """Train a fresh ORU-Pico (random weights), save ckpt, export, compare."""
+    """Train a fresh OSS-Pico (random weights), save ckpt, export, compare."""
     pytest.importorskip("onnxruntime")  # skip if onnxruntime not installed locally
 
     model = OSSPico().train(False)

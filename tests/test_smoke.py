@@ -3,16 +3,16 @@ import torch
 import torch.nn.functional as F
 
 from oss.handoff import validate_handoff
-from oss.model import ORD, ORU
-from oss.model.adapter import PairedORS
+from oss.model import OSSRG, OSS
+from oss.model.adapter import PairedOSS
 from oss.train.losses import CompositeLoss
 
 
 def test_full_pipeline_smoke():
     H, W = 16, 16
-    ord_model = ORD(tier="lite").train(False)
-    oru_model = ORU(input_mode="features", scale_factor=2.0, tier="lite").train(False)
-    pair = PairedORS(ord_model, oru_model)
+    ossrg_model = OSSRG(tier="lite").train(False)
+    oss_model = OSS(input_mode="features", scale_factor=2.0, tier="lite").train(False)
+    pair = PairedOSS(ossrg_model, oss_model)
     loss_fn = CompositeLoss(w_lpips=0.0)  # skip LPIPS on CPU smoke
 
     noisy = torch.randn(1, 3, H, W)
@@ -26,7 +26,7 @@ def test_full_pipeline_smoke():
     assert rgb_hi.shape == (1, 3, H * 2, W * 2)
 
     # Handoff tensor itself must validate.
-    _, feats = ord_model(noisy, aux, history)
+    _, feats = ossrg_model(noisy, aux, history)
     validate_handoff(feats)
 
     target_hi = torch.randn(1, 3, H * 2, W * 2)

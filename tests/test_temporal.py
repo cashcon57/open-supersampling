@@ -1,4 +1,4 @@
-"""Tests for the recurrent latent cell used at the ORU-Pico bottleneck."""
+"""Tests for the recurrent latent cell used at the OSS-Pico bottleneck."""
 import torch
 
 from oss.model.temporal import RecurrentLatentCell

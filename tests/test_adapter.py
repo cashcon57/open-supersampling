@@ -6,8 +6,8 @@ from oss.handoff.contract import (
     HandoffContractError,
     validate_handoff,
 )
-from oss.model import ORD, ORU
-from oss.model.adapter import PairedORS
+from oss.model import OSSRG, OSS
+from oss.model.adapter import PairedOSS
 
 
 def test_handoff_contract_constants():
@@ -40,16 +40,16 @@ def test_validate_handoff_rejects_wrong_ndim():
 
 
 def test_paired_rejects_non_features_oru():
-    ord_model = ORD(tier="standard")
-    oru_rgb = ORU(input_mode="rgb", scale_factor=2.0, tier="standard")
+    ossrg_model = OSSRG(tier="standard")
+    oru_rgb = OSS(input_mode="rgb", scale_factor=2.0, tier="standard")
     with pytest.raises(ValueError, match="features"):
-        PairedORS(ord_model, oru_rgb)
+        PairedOSS(ossrg_model, oru_rgb)
 
 
 def test_paired_end_to_end():
-    ord_model = ORD(tier="standard").train(False)
-    oru_model = ORU(input_mode="features", scale_factor=2.0, tier="standard").train(False)
-    pair = PairedORS(ord_model, oru_model)
+    ossrg_model = OSSRG(tier="standard").train(False)
+    oss_model = OSS(input_mode="features", scale_factor=2.0, tier="standard").train(False)
+    pair = PairedOSS(ossrg_model, oss_model)
 
     B, H, W = 1, 32, 32
     rgb_lo, rgb_hi = pair(

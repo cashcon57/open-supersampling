@@ -1,8 +1,8 @@
-"""Tests for the Pico-tier ORU (Steam Deck / RDNA 2 target)."""
+"""Tests for the Pico-tier OSS (Steam Deck / RDNA 2 target)."""
 import pytest
 import torch
 
-from oss.model.oru_pico import OSSPico
+from oss.model.oss_pico import OSSPico
 
 
 @pytest.mark.parametrize("use_wavelet", [False, True])
@@ -31,7 +31,7 @@ def test_oru_pico_param_budget():
     well under this bound.
     """
     n = sum(p.numel() for p in OSSPico(use_wavelet=True).parameters())
-    assert 200_000 <= n <= 350_000, f"ORU-Pico params {n} out of [200K, 350K]"
+    assert 200_000 <= n <= 350_000, f"OSS-Pico params {n} out of [200K, 350K]"
 
 
 def test_oru_pico_hidden_state_propagation():

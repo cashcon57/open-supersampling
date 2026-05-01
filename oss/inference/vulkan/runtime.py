@@ -1,4 +1,4 @@
-"""Vulkan compute inference runtime for ORU-Pico, via NCNN + PNNX.
+"""Vulkan compute inference runtime for OSS-Pico, via NCNN + PNNX.
 
 This is the v0.2-alpha scaffold. It picks NCNN as the runtime (BSD-3-Clause,
 first-class Vulkan backend, mobile/RDNA-2 tuned) and PNNX as the PyTorch ->
@@ -216,7 +216,7 @@ def _convert_with_pnnx(
 
 
 class VulkanPicoRuntime:
-    """A loaded ORU-Pico graph ready to run forward passes via NCNN.
+    """A loaded OSS-Pico graph ready to run forward passes via NCNN.
 
     Construct with either:
 
@@ -291,7 +291,7 @@ class VulkanPicoRuntime:
                 workdir=workdir, param=param, bin=bin_, input_shapes=input_shapes
             )
         else:
-            log.info("converting ORU-Pico via PNNX -> %s", workdir)
+            log.info("converting OSS-Pico via PNNX -> %s", workdir)
             # PNNX expects the model to be in inference mode; we set it here
             # without mutating the caller's state by using a transient toggle.
             was_training = model.training
@@ -410,7 +410,7 @@ def run_pico_vulkan(
     model: Optional[nn.Module] = None,
     runtime: Optional[VulkanPicoRuntime] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Run ORU-Pico under Vulkan/NCNN. Same signature as ``OSSPico.forward``.
+    """Run OSS-Pico under Vulkan/NCNN. Same signature as ``OSSPico.forward``.
 
     Either ``runtime=`` (a pre-built ``VulkanPicoRuntime``) or ``model=`` (a
     PyTorch ``OSSPico`` we should convert on demand) must be provided. When

@@ -1,4 +1,4 @@
-"""End-to-end comparison: ORD-only vs Paired vs OIDN baseline.
+"""End-to-end comparison: OSSRG-only vs Paired vs OIDN baseline.
 
 Outputs CSV: model, scene, psnr, ssim, lpips, mean_ms.
 """
@@ -13,8 +13,8 @@ import torch.nn.functional as F
 
 from oss.valuation.bench import bench_model
 from oss.valuation.metrics import psnr, ssim, lpips_dist
-from oss.model import ORD, ORU
-from oss.model.adapter import PairedORS
+from oss.model import OSSRG, OSS
+from oss.model.adapter import PairedOSS
 from oss.train.data import ORSDataset
 
 log = logging.getLogger(__name__)
@@ -77,27 +77,27 @@ def main():
 
     rows = []
 
-    # ORD-only
-    if Path(args.ord_ckpt).exists() or args.smoke_test:
-        ord_model = ORD(tier="standard").to(device).train(False)
-        if Path(args.ord_ckpt).exists():
-            ord_model.load_state_dict(torch.load(args.ord_ckpt, map_location=device)["model"])
+    # OSSRG-only
+    if Path(args.ossrg_ckpt).exists() or args.smoke_test:
+        ossrg_model = OSSRG(tier="standard").to(device).train(False)
+        if Path(args.ossrg_ckpt).exists():
+            ossrg_model.load_state_dict(torch.load(args.ossrg_ckpt, map_location=device)["model"])
         with torch.no_grad():
             for i, s in enumerate(samples):
-                pred, _ = ord_model(s["noisy"], s["aux"], s["history"])
+                pred, _ = ossrg_model(s["noisy"], s["aux"], s["history"])
                 row = {"model": "ord", "scene": i, **_eval_quality(pred, s["ground_truth"])}
-                row["mean_ms"] = bench_model(lambda: ord_model(s["noisy"], s["aux"], s["history"]))["mean_ms"]
+                row["mean_ms"] = bench_model(lambda: ossrg_model(s["noisy"], s["aux"], s["history"]))["mean_ms"]
                 rows.append(row)
 
     # Paired
     if Path(args.paired_ckpt).exists() or args.smoke_test:
-        ord_model = ORD(tier="standard").to(device).train(False)
-        oru_model = ORU(input_mode="features", scale_factor=2.0, tier="standard").to(device).train(False)
+        ossrg_model = OSSRG(tier="standard").to(device).train(False)
+        oss_model = OSS(input_mode="features", scale_factor=2.0, tier="standard").to(device).train(False)
         if Path(args.paired_ckpt).exists():
             sd = torch.load(args.paired_ckpt, map_location=device)
-            ord_model.load_state_dict(sd["ord"])
-            oru_model.load_state_dict(sd["oru"])
-        pair = PairedORS(ord_model, oru_model)
+            ossrg_model.load_state_dict(sd["ord"])
+            oss_model.load_state_dict(sd["oru"])
+        pair = PairedOSS(ossrg_model, oss_model)
         with torch.no_grad():
             for i, s in enumerate(samples):
                 ds_kw = dict(scale_factor=0.5, mode="bilinear", align_corners=False)

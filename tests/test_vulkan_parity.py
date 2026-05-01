@@ -1,4 +1,4 @@
-"""Parity test: PyTorch ORU-Pico reference vs Vulkan/NCNN runtime.
+"""Parity test: PyTorch OSS-Pico reference vs Vulkan/NCNN runtime.
 
 The test:
 
@@ -30,7 +30,7 @@ import numpy as np
 import pytest
 import torch
 
-from oss.model.oru_pico import OSSPico
+from oss.model.oss_pico import OSSPico
 
 
 # Tolerance bands for the v0.2-alpha scaffold. We assert on the *bulk* of the
@@ -110,7 +110,7 @@ def test_runtime_module_imports():
     )
 )
 def test_pico_vulkan_parity(tmp_path, pico_model, pico_inputs):
-    """ORU-Pico PyTorch vs NCNN runtime, max-abs diff < ATOL."""
+    """OSS-Pico PyTorch vs NCNN runtime, max-abs diff < ATOL."""
     pytest.importorskip("ncnn")
     pytest.importorskip("pnnx")
 

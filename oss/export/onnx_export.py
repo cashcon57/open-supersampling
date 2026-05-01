@@ -1,4 +1,4 @@
-"""Export ORU-Pico from PyTorch checkpoint to ONNX.
+"""Export OSS-Pico from PyTorch checkpoint to ONNX.
 
 Usage:
     python -m ors.export.onnx_export --ckpt <path-to-pth> --out <path-to-onnx>
@@ -108,7 +108,7 @@ def _validate_parity(model, onnx_path, color_lr, depth_lr, motion_lr, normals_lr
 
 
 def main():
-    p = argparse.ArgumentParser(description="Export ORU-Pico to ONNX from checkpoint.")
+    p = argparse.ArgumentParser(description="Export OSS-Pico to ONNX from checkpoint.")
     p.add_argument("--ckpt", type=Path, required=True, help="Path to .pth checkpoint")
     p.add_argument("--out", type=Path, default=Path("oru_pico.onnx"), help="Output .onnx path")
     p.add_argument("--no-validate", action="store_true", help="Skip parity validation")

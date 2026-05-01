@@ -1,7 +1,7 @@
-"""Frozen feature-handoff contract between ORD and ORU.
+"""Frozen feature-handoff contract between OSSRG and OSS.
 
 This is a load-bearing public API. The tensor shape and dtype defined here
-MUST be honored by every shipping ORD weight set and every shipping ORU
+MUST be honored by every shipping OSSRG weight set and every shipping OSS
 weight set. Both networks may evolve internally; the contract may not, except
 via a major version bump (HandoffContract.VERSION).
 """

@@ -1,4 +1,4 @@
-"""ORU-Pico - Steam Deck (RDNA 2) tier of the ORU upscaler family.
+"""OSS-Pico - Steam Deck (RDNA 2) tier of the OSS upscaler family.
 
 Pico is a temporal-recurrent kernel-prediction U-Net targeting the lowest
 realistic shipping target for v0.2: an 8 CU RDNA 2 iGPU at 15 W with a 540p /
@@ -93,7 +93,7 @@ def _refine_stack(ch: int, depth: int = _REFINE_DEPTH) -> nn.Sequential:
 
 
 class OSSPico(nn.Module):
-    """Pico-tier ORU with radiance demodulation (NSRD Li 2024).
+    """Pico-tier OSS with radiance demodulation (NSRD Li 2024).
 
     Inputs (all expected float32):
         color_lr   : (B, 3, H_lr, W_lr) - noisy LR radiance (linear).
@@ -122,7 +122,7 @@ class OSSPico(nn.Module):
     SCALE_FACTOR = _PICO_DEFAULT_SCALE_FACTOR  # legacy alias
 
     def __init__(self, use_wavelet: bool = True, scale_factor: float = _PICO_DEFAULT_SCALE_FACTOR):
-        """Construct an ORU-Pico network.
+        """Construct an OSS-Pico network.
 
         Args:
             use_wavelet: When ``True`` (default, ship config), the final HR
