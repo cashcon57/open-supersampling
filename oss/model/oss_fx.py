@@ -22,7 +22,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from ors.model.blocks import ConvBlock, DownBlock, UpBlock
+from oss.model.blocks import ConvBlock, DownBlock, UpBlock
 
 HISTORY_CH = 32
 ALPHA_DIM = 32
@@ -57,7 +57,7 @@ class _AlphaInject(nn.Module):
         return feat + bias
 
 
-class ORUFx(nn.Module):
+class OSSFx(nn.Module):
     """Shading Correction Network for guided frame extrapolation.
 
     Architecture: shallow U-Net (3 levels), residual output.

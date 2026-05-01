@@ -11,8 +11,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from ors.cloud.lambda_client import LambdaInstance
-from ors.cloud.safety_harness import (
+from oss.cloud.lambda_client import LambdaInstance
+from oss.cloud.safety_harness import (
     BudgetExceeded,
     HarnessConfig,
     IdleTimeout,

@@ -10,7 +10,7 @@ from __future__ import annotations
 import sys
 from datetime import datetime, timezone
 
-from ors.cloud import RunPodClient
+from oss.cloud import RunPodClient
 
 
 def main():

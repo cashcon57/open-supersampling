@@ -1,13 +1,13 @@
 import pytest
 import torch
 
-from ors.handoff.contract import (
+from oss.handoff.contract import (
     HandoffContract,
     HandoffContractError,
     validate_handoff,
 )
-from ors.model import ORD, ORU
-from ors.model.adapter import PairedORS
+from oss.model import ORD, ORU
+from oss.model.adapter import PairedORS
 
 
 def test_handoff_contract_constants():

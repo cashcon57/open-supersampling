@@ -164,7 +164,7 @@ def wavelet_loss(
     """
     # Lazy-import the SWT primitive so this loss module stays decoupled from
     # the model package's import-time pytorch-wavelets dependency check.
-    from ors.model.wavelet import SWT2D
+    from oss.model.wavelet import SWT2D
 
     if len(weights) != levels + 1:
         raise ValueError(

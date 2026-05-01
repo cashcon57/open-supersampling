@@ -6,7 +6,7 @@ handoff contract.
 
 Stage B: Unfreeze ORD; optimize the whole pipeline at ``lr * 0.2``. Loss is
 ``loss(rgb_lo, target_lo) + loss(rgb_hi, target_hi)`` with target_lo built by
-the same floor-rounded downsample used in :mod:`ors.train.train_oru`.
+the same floor-rounded downsample used in :mod:`oss.train.train_sr`.
 """
 from __future__ import annotations
 
@@ -17,8 +17,8 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from ors.model import ORD, ORU
-from ors.model.adapter import PairedORS
+from oss.model import ORD, ORU
+from oss.model.adapter import PairedORS
 from .data import ORSDataset
 from .losses import CompositeLoss
 

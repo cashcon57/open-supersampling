@@ -2,12 +2,12 @@
 import pytest
 import torch
 
-from ors.model.oru_pico import ORUPico
+from oss.model.oru_pico import OSSPico
 
 
 @pytest.mark.parametrize("use_wavelet", [False, True])
 def test_oru_pico_forward_shapes(use_wavelet):
-    m = ORUPico(use_wavelet=use_wavelet).train(False)
+    m = OSSPico(use_wavelet=use_wavelet).train(False)
     B, H_lr, W_lr = 2, 64, 64
     H_hr, W_hr = 128, 128
     color_lr = torch.randn(B, 3, H_lr, W_lr)
@@ -30,12 +30,12 @@ def test_oru_pico_param_budget():
     upper bound is relaxed to 350K. Ablation runs (use_wavelet=False) drop
     well under this bound.
     """
-    n = sum(p.numel() for p in ORUPico(use_wavelet=True).parameters())
+    n = sum(p.numel() for p in OSSPico(use_wavelet=True).parameters())
     assert 200_000 <= n <= 350_000, f"ORU-Pico params {n} out of [200K, 350K]"
 
 
 def test_oru_pico_hidden_state_propagation():
-    m = ORUPico().train(False)
+    m = OSSPico().train(False)
     color_lr = torch.randn(1, 3, 32, 32)
     depth_lr = torch.randn(1, 1, 32, 32)
     motion_lr = torch.randn(1, 2, 32, 32)
@@ -55,7 +55,7 @@ def test_oru_pico_hidden_state_propagation():
 
 
 def test_oru_pico_backward():
-    m = ORUPico().train(True)
+    m = OSSPico().train(True)
     color_lr = torch.randn(1, 3, 32, 32, requires_grad=True)
     depth_lr = torch.randn(1, 1, 32, 32)
     motion_lr = torch.randn(1, 2, 32, 32)

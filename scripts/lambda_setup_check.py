@@ -15,7 +15,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from ors.cloud import LambdaClient, INSTANCE_PRICING
+from oss.cloud import LambdaClient, INSTANCE_PRICING
 
 
 def main():

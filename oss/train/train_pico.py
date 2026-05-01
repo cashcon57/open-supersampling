@@ -24,9 +24,9 @@ import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from ors.data.noisebase import NoiseBaseDataset
-from ors.model.oru_pico import ORUPico
-from ors.train.losses import CompositeLoss, temporal_consistency_loss
+from oss.data.noisebase import NoiseBaseDataset
+from oss.model.oru_pico import OSSPico
+from oss.train.losses import CompositeLoss, temporal_consistency_loss
 
 
 def _synthetic_sequence_loader(steps: int, sequence_length: int = 8) -> Iterable[dict]:
@@ -50,7 +50,7 @@ def _synthetic_sequence_loader(steps: int, sequence_length: int = 8) -> Iterable
 
 
 def _unroll_sequence(
-    model: ORUPico,
+    model: OSSPico,
     batch: dict,
     scale_factor: float,
     loss_fn: CompositeLoss,
@@ -96,7 +96,7 @@ def _unroll_sequence(
 
 def train(args: argparse.Namespace) -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = ORUPico().to(device)
+    model = OSSPico().to(device)
     # LPIPS disabled in pico trainer; see module docstring.
     loss_fn = CompositeLoss(w_l2=1.0, w_ssim=0.1, w_lpips=0.0).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr)

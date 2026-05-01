@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from ors.bench import QualityRunner
+from oss.bench import QualityRunner
 
 
 def _read_rgb(path: Path) -> np.ndarray:

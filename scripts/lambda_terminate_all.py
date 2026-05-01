@@ -13,7 +13,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from ors.cloud import LambdaClient
+from oss.cloud import LambdaClient
 
 
 def main():

@@ -31,7 +31,7 @@ _TIER_CHANNELS = {
 HANDOFF_FEATURE_CHANNELS = 32
 
 
-class ORD(nn.Module):
+class OSSRG(nn.Module):
     """Open Ray Denoiser.
 
     Inputs

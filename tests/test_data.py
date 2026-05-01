@@ -2,7 +2,7 @@ import numpy as np
 import pyexr
 import pytest
 
-from ors.train.data import ORSDataset
+from oss.train.data import ORSDataset
 
 
 @pytest.fixture

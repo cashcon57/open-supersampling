@@ -1,7 +1,7 @@
 """Smoke test: render one tiny image pair from Mitsuba's bundled cbox scene."""
 import numpy as np
 import pytest
-from ors.render.mitsuba_pipeline import render_pair
+from oss.render.mitsuba_pipeline import render_pair
 
 
 def test_render_pair_shapes():

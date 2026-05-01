@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 from tqdm import tqdm
-from ors.render import render_pair
+from oss.render import render_pair
 
 
 def main():

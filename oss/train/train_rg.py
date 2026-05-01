@@ -11,7 +11,7 @@ from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
 
-from ors.model import ORD
+from oss.model import ORD
 from .data import ORSDataset
 from .losses import CompositeLoss
 

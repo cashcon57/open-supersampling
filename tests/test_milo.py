@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import torch
 
-from ors.train.milo import milo_loss
+from oss.train.milo import milo_loss
 
 
 def test_milo_zero_at_identity() -> None:

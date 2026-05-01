@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import torch
 
-from ors.train.losses import temporal_consistency_loss
+from oss.train.losses import temporal_consistency_loss
 
 
 def test_temporal_consistency_zero_motion_identical_frames() -> None:

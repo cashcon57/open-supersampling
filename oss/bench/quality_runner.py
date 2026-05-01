@@ -7,8 +7,8 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from ors.bench.fsr1_reference import fsr1_upscale
-from ors.valuation.metrics import lpips_dist, psnr, ssim
+from oss.bench.fsr1_reference import fsr1_upscale
+from oss.valuation.metrics import lpips_dist, psnr, ssim
 
 
 def _to_nchw(x) -> torch.Tensor:
@@ -35,10 +35,10 @@ class QualityRunner:
     def _load_pico(self):
         if self._pico is not None or not self.ckpt_path:
             return self._pico
-        from ors.model.oru_pico import ORUPico
+        from oss.model.oru_pico import OSSPico
 
         state = torch.load(Path(self.ckpt_path), map_location=self.device)
-        model = ORUPico().to(self.device).train(False)
+        model = OSSPico().to(self.device).train(False)
         model.load_state_dict(state["model"])
         self._pico = model
         return self._pico

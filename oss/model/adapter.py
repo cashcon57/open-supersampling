@@ -11,8 +11,8 @@ import torch
 import torch.nn as nn
 
 from ..handoff import validate_handoff
-from .ord import ORD
-from .oru import ORU
+from .oss_rg import ORD
+from .oss_sr import ORU
 
 
 class PairedORS(nn.Module):

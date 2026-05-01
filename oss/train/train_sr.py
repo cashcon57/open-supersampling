@@ -13,7 +13,7 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from ors.model import ORU
+from oss.model import ORU
 from .data import ORSDataset
 from .losses import CompositeLoss
 

@@ -29,14 +29,14 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from ors.cloud import LambdaClient, SafetyHarness
-from ors.cloud.lambda_client import (
+from oss.cloud import LambdaClient, SafetyHarness
+from oss.cloud.lambda_client import (
     INSTANCE_PRICING,
     INSTANCE_EFFECTIVE_FP16_TFLOPS,
     SINGLE_GPU_PREFERENCE_ORDER,
     select_optimal_instance,
 )
-from ors.cloud.safety_harness import HarnessConfig
+from oss.cloud.safety_harness import HarnessConfig
 
 
 # Estimated total compute for ORU-Pico training (~250K params, 30K sequences,
@@ -342,7 +342,7 @@ def _run_training(harness: SafetyHarness, ip: str, key_path: Path, args) -> int:
         "echo '--- pip install starting ---' && "
         "pip install -e .[dev] 2>&1 | tee /tmp/ors-pip-install.log | tail -100 && "
         "echo '--- pip install OK ---' && "
-        f"python -m ors.train.train_pico "
+        f"python -m oss.train.train_pico "
         f"{smoke_flag} {data_arg} "
         f"--out results/pico-cloud "
         f"--epochs {args.epochs} "

@@ -31,7 +31,7 @@ import sys
 import time
 from pathlib import Path
 
-from ors.cloud import RunPodClient, SafetyHarness, HarnessConfig
+from oss.cloud import RunPodClient, SafetyHarness, HarnessConfig
 
 
 # Default preference for ORU-Pico — fastest H100 first, falling through.
@@ -206,7 +206,7 @@ def _run_training(harness: SafetyHarness, ip: str, port: int, args) -> int:
         "echo '--- pip install OK ---' && "
         "python -c 'import torch; print(\"torch\", torch.__version__, \"cuda\", torch.cuda.is_available(), torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"\")' && "
         f"mkdir -p {out_path} && "
-        f"python -m ors.train.train_pico "
+        f"python -m oss.train.train_pico "
         f"{smoke_flag} {data_arg} "
         f"--out {out_path} "
         f"--epochs {args.epochs} "

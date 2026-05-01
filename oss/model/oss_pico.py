@@ -92,7 +92,7 @@ def _refine_stack(ch: int, depth: int = _REFINE_DEPTH) -> nn.Sequential:
     return nn.Sequential(*(ConvBlock(ch, ch) for _ in range(depth)))
 
 
-class ORUPico(nn.Module):
+class OSSPico(nn.Module):
     """Pico-tier ORU with radiance demodulation (NSRD Li 2024).
 
     Inputs (all expected float32):

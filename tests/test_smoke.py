@@ -2,10 +2,10 @@
 import torch
 import torch.nn.functional as F
 
-from ors.handoff import validate_handoff
-from ors.model import ORD, ORU
-from ors.model.adapter import PairedORS
-from ors.train.losses import CompositeLoss
+from oss.handoff import validate_handoff
+from oss.model import ORD, ORU
+from oss.model.adapter import PairedORS
+from oss.train.losses import CompositeLoss
 
 
 def test_full_pipeline_smoke():

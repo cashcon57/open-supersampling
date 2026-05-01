@@ -7,7 +7,7 @@ handlers, watchdog timeout, idle detection, or budget cap.
 Two vendor clients ship out of the box; both implement the `CloudClient`
 Protocol so a single `SafetyHarness` instance works against either:
 
-    from ors.cloud import LambdaClient, RunPodClient, SafetyHarness, HarnessConfig
+    from oss.cloud import LambdaClient, RunPodClient, SafetyHarness, HarnessConfig
 
 The harness is the only API a training script should care about. The
 `*_client.py` modules are intentionally small and only know how to talk to

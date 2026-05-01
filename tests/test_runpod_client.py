@@ -15,7 +15,7 @@ import pytest
 # Lambda-only environments to run the rest of the test suite).
 runpod = pytest.importorskip("runpod")
 
-from ors.cloud.runpod_client import (
+from oss.cloud.runpod_client import (
     RunPodClient,
     RunPodInstance,
     RUNPOD_DEFAULT_PRICING,

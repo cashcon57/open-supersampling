@@ -1,7 +1,7 @@
 """Tests for the recurrent latent cell used at the ORU-Pico bottleneck."""
 import torch
 
-from ors.model.temporal import RecurrentLatentCell
+from oss.model.temporal import RecurrentLatentCell
 
 
 def test_recurrent_cell_shapes():

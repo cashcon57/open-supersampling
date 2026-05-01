@@ -31,9 +31,9 @@ import sys
 import time
 from pathlib import Path
 
-from ors.cloud import LambdaClient, SafetyHarness
-from ors.cloud.lambda_client import INSTANCE_PRICING
-from ors.cloud.safety_harness import HarnessConfig
+from oss.cloud import LambdaClient, SafetyHarness
+from oss.cloud.lambda_client import INSTANCE_PRICING
+from oss.cloud.safety_harness import HarnessConfig
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]

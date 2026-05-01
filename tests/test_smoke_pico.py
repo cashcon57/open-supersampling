@@ -11,7 +11,7 @@ def test_smoke_pico_runs(tmp_path) -> None:
         [
             sys.executable,
             "-m",
-            "ors.train.train_pico",
+            "oss.train.train_pico",
             "--smoke-test",
             "--out",
             str(out_dir),

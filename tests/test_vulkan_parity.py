@@ -2,7 +2,7 @@
 
 The test:
 
-1. Builds a fresh ``ORUPico`` with random weights (deterministic seed).
+1. Builds a fresh ``OSSPico`` with random weights (deterministic seed).
 2. Runs a forward pass in PyTorch -- this is the reference.
 3. Converts the same model to NCNN via PNNX, loads it in
    ``VulkanPicoRuntime``, and runs the same inputs through it.
@@ -30,7 +30,7 @@ import numpy as np
 import pytest
 import torch
 
-from ors.model.oru_pico import ORUPico
+from oss.model.oru_pico import OSSPico
 
 
 # Tolerance bands for the v0.2-alpha scaffold. We assert on the *bulk* of the
@@ -67,7 +67,7 @@ H_HIDDEN, W_HIDDEN = H_LR // 4, W_LR // 4
 @pytest.fixture(scope="module")
 def pico_model():
     torch.manual_seed(0)
-    model = ORUPico().train(False)
+    model = OSSPico().train(False)
     return model
 
 
@@ -81,13 +81,13 @@ def pico_inputs():
         "normals_lr": torch.randn(B, 3, H_LR, W_LR, generator=g),
         "albedo_lr": torch.randn(B, 3, H_LR, W_LR, generator=g),
         "history_hr": torch.randn(B, 3, H_HR, W_HR, generator=g),
-        "hidden_state": torch.zeros(B, ORUPico.HIDDEN_CHANNELS, H_HIDDEN, W_HIDDEN),
+        "hidden_state": torch.zeros(B, OSSPico.HIDDEN_CHANNELS, H_HIDDEN, W_HIDDEN),
     }
 
 
 def test_runtime_module_imports():
     """Sanity: the public surface imports cleanly even without ncnn/pnnx."""
-    from ors.inference.vulkan import (
+    from oss.inference.vulkan import (
         VulkanPicoRuntime,  # noqa: F401
         run_pico_vulkan,    # noqa: F401
         runtime_available,
@@ -114,7 +114,7 @@ def test_pico_vulkan_parity(tmp_path, pico_model, pico_inputs):
     pytest.importorskip("ncnn")
     pytest.importorskip("pnnx")
 
-    from ors.inference.vulkan import VulkanPicoRuntime, run_pico_vulkan, vulkan_available
+    from oss.inference.vulkan import VulkanPicoRuntime, run_pico_vulkan, vulkan_available
 
     # Reference forward in PyTorch (this is the "truth").
     with torch.no_grad():
@@ -187,7 +187,7 @@ def test_runtime_caches_converted_artifacts(tmp_path, pico_model, pico_inputs):
     pytest.importorskip("ncnn")
     pytest.importorskip("pnnx")
 
-    from ors.inference.vulkan import VulkanPicoRuntime
+    from oss.inference.vulkan import VulkanPicoRuntime
 
     shapes = tuple(
         tuple(pico_inputs[name].shape)

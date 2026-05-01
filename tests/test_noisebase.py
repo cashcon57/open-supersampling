@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from ors.data.noisebase import NoiseBaseDataset, _write_synthetic_sequence
+from oss.data.noisebase import NoiseBaseDataset, _write_synthetic_sequence
 
 
 # ---------------------------------------------------------------------------

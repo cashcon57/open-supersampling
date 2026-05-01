@@ -1,5 +1,5 @@
 import torch
-from ors.valuation.metrics import psnr, ssim, lpips_dist
+from oss.valuation.metrics import psnr, ssim, lpips_dist
 
 
 def test_psnr_identical():

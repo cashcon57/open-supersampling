@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ors"
+name = "oss"
 version = "0.0.1"
-description = "Open Reconstruction Suite"
+description = "OpenSuperSampling"
 readme = "README.md"
 license = { text = "Apache-2.0" }
 requires-python = ">=3.11"
@@ -31,19 +31,19 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "pytest-cov>=5.0", "ruff>=0.6"]
-# Vulkan compute inference for ORU-Pico. NCNN is the runtime (BSD-3-Clause,
+# Vulkan compute inference for OSS-Pico / OSS-FX. NCNN is the runtime (BSD-3-Clause,
 # first-class Vulkan backend); PNNX is the PyTorch -> NCNN exporter. Both
 # ship pre-built wheels for macOS arm64 and Linux x86_64. See
 # docs/research/2026-04-30-vulkan-runtime-eval.md for the rationale.
 vulkan = ["ncnn>=1.0.20240102", "pnnx>=20240410"]
 # RunPod compute provider (second cloud vendor alongside Lambda).
-# Used by `ors.cloud.runpod_client` and the `scripts/runpod_*.py` launchers.
+# Used by `oss.cloud.runpod_client` and the `scripts/runpod_*.py` launchers.
 # The Lambda code path does NOT require this package — it's intentionally
 # a pure optional extra so Lambda-only setups stay slim.
 runpod = ["runpod>=1.7"]
 
 [tool.setuptools.packages.find]
-include = ["ors*"]
+include = ["oss*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

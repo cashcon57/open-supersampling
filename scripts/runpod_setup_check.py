@@ -16,7 +16,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from ors.cloud import RunPodClient
+from oss.cloud import RunPodClient
 
 
 # GPUs we actually care about for ORU-Pico training. Order = preference.

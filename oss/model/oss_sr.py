@@ -15,7 +15,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .blocks import ConvBlock, DownBlock, UpBlock
-from .ord import HANDOFF_FEATURE_CHANNELS
+from .oss_rg import HANDOFF_FEATURE_CHANNELS
 
 
 _TIER_CHANNELS = {
@@ -27,7 +27,7 @@ _TIER_CHANNELS = {
 _VALID_SCALES = (1.3, 1.5, 1.7, 2.0)
 
 
-class ORU(nn.Module):
+class OSSSR(nn.Module):
     def __init__(
         self,
         input_mode: Literal["rgb", "rgb_aux", "features"] = "rgb",

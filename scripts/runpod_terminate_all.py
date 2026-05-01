@@ -13,7 +13,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from ors.cloud import RunPodClient
+from oss.cloud import RunPodClient
 
 
 def main():

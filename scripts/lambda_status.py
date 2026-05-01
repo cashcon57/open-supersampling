@@ -10,7 +10,7 @@ from __future__ import annotations
 import sys
 from datetime import datetime, timezone
 
-from ors.cloud import LambdaClient, INSTANCE_PRICING
+from oss.cloud import LambdaClient, INSTANCE_PRICING
 
 
 def main():

@@ -3,7 +3,7 @@
 Public surface (see ``runtime`` for full docs):
 
 - ``run_pico_vulkan(...)``  -- one-shot functional API mirroring
-  ``ORUPico.forward(...)``.
+  ``OSSPico.forward(...)``.
 - ``VulkanPicoRuntime``     -- persistent runtime for sequence inference.
 - ``runtime_available()``   -- True iff ncnn + pnnx are importable.
 - ``vulkan_available()``    -- True iff NCNN can see a Vulkan-capable GPU.

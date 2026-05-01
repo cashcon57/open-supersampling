@@ -1,7 +1,7 @@
 import torch
 import pytest
 
-from ors.model.ord import ORD
+from oss.model.ord import ORD
 
 
 def test_ord_forward_shapes():

@@ -6,14 +6,14 @@ from pathlib import Path
 import pytest
 import torch
 
-from ors.model.oru_pico import ORUPico
+from oss.model.oru_pico import OSSPico
 
 
 def test_onnx_export_round_trip(tmp_path):
     """Train a fresh ORU-Pico (random weights), save ckpt, export, compare."""
     pytest.importorskip("onnxruntime")  # skip if onnxruntime not installed locally
 
-    model = ORUPico().train(False)
+    model = OSSPico().train(False)
     ckpt = tmp_path / "test_pico.pth"
     torch.save({"model": model.state_dict(), "config": {"scale_factor": 2.0, "tier": "pico"}}, ckpt)
 

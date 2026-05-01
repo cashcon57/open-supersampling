@@ -12,7 +12,7 @@ from pathlib import Path
 
 import torch
 
-from ors.model.oru_pico import ORUPico
+from oss.model.oru_pico import OSSPico
 
 
 def export(ckpt_path: Path, out_path: Path, validate: bool = True):
@@ -25,7 +25,7 @@ def export(ckpt_path: Path, out_path: Path, validate: bool = True):
     """
     # Load checkpoint
     state = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-    model = ORUPico().train(False)
+    model = OSSPico().train(False)
     model.load_state_dict(state["model"])
 
     # Dummy inputs for tracing

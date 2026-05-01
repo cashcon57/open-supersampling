@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from ors.model.oru import ORU
+from oss.model.oru import ORU
 
 
 def test_oru_rgb_mode():

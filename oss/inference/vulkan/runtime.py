@@ -12,7 +12,7 @@ Public surface
 hidden_state, *, model=None, runtime=None) -> (rgb_hr, new_hidden_state)``
 
   Functional one-shot wrapper. Builds a runtime on demand from ``model`` (a
-  ``ORUPico`` instance in inference mode) the first time it is called for a
+  ``OSSPico`` instance in inference mode) the first time it is called for a
   given model identity, caches the converted NCNN files in the user cache,
   and runs a single forward pass returning numpy arrays. If a
   ``VulkanPicoRuntime`` is passed in via ``runtime=``, that is used directly
@@ -221,7 +221,7 @@ class VulkanPicoRuntime:
     Construct with either:
 
     - ``VulkanPicoRuntime.from_model(model, input_shapes)`` -- traces a
-      PyTorch ``ORUPico`` and converts it via PNNX, caching the converted
+      PyTorch ``OSSPico`` and converts it via PNNX, caching the converted
       NCNN files under ``$ORS_VULKAN_CACHE`` (default ``~/.cache/ors/vulkan``).
 
     - ``VulkanPicoRuntime.from_artifacts(param_path, bin_path, input_shapes)``
@@ -410,10 +410,10 @@ def run_pico_vulkan(
     model: Optional[nn.Module] = None,
     runtime: Optional[VulkanPicoRuntime] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Run ORU-Pico under Vulkan/NCNN. Same signature as ``ORUPico.forward``.
+    """Run ORU-Pico under Vulkan/NCNN. Same signature as ``OSSPico.forward``.
 
     Either ``runtime=`` (a pre-built ``VulkanPicoRuntime``) or ``model=`` (a
-    PyTorch ``ORUPico`` we should convert on demand) must be provided. When
+    PyTorch ``OSSPico`` we should convert on demand) must be provided. When
     converting on demand, this function caches the converted artifacts so
     repeated calls with the same weights are cheap.
 

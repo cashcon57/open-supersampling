@@ -3,8 +3,8 @@ from __future__ import annotations
 import numpy as np
 import torch
 
-from ors.bench.fsr1_reference import fsr1_upscale
-from ors.bench.quality_runner import QualityRunner
+from oss.bench.fsr1_reference import fsr1_upscale
+from oss.bench.quality_runner import QualityRunner
 
 
 def test_fsr1_runs_without_error() -> None:

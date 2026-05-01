@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import torch
 
-from ors.model.wavelet import ISWT2D, SWT2D, WaveletKPNHead
-from ors.train.losses import wavelet_loss
+from oss.model.wavelet import ISWT2D, SWT2D, WaveletKPNHead
+from oss.train.losses import wavelet_loss
 
 
 def test_swt_iswt_round_trip():

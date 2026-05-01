@@ -45,7 +45,7 @@ from pathlib import Path
 from typing import Optional
 
 # The runpod SDK is an optional dependency. We import lazily inside methods so
-# `from ors.cloud import RunPodClient` doesn't fail at import time when the
+# `from oss.cloud import RunPodClient` doesn't fail at import time when the
 # package isn't installed (e.g. during Lambda-only smoke tests).
 
 

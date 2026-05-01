@@ -11,11 +11,11 @@ from pathlib import Path
 import torch
 import torch.nn.functional as F
 
-from ors.valuation.bench import bench_model
-from ors.valuation.metrics import psnr, ssim, lpips_dist
-from ors.model import ORD, ORU
-from ors.model.adapter import PairedORS
-from ors.train.data import ORSDataset
+from oss.valuation.bench import bench_model
+from oss.valuation.metrics import psnr, ssim, lpips_dist
+from oss.model import ORD, ORU
+from oss.model.adapter import PairedORS
+from oss.train.data import ORSDataset
 
 log = logging.getLogger(__name__)
 
