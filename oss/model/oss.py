@@ -27,7 +27,7 @@ _TIER_CHANNELS = {
 _VALID_SCALES = (1.3, 1.5, 1.7, 2.0)
 
 
-class OSSSR(nn.Module):
+class OSS(nn.Module):
     def __init__(
         self,
         input_mode: Literal["rgb", "rgb_aux", "features"] = "rgb",

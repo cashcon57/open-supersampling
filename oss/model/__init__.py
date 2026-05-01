@@ -1,4 +1,4 @@
 from .oss_rg import OSSRG, HANDOFF_FEATURE_CHANNELS
-from .oss_sr import OSSSR
+from .oss import OSS
 
-__all__ = ["OSSRG", "OSSSR", "HANDOFF_FEATURE_CHANNELS"]
+__all__ = ["OSSRG", "OSS", "HANDOFF_FEATURE_CHANNELS"]
