@@ -252,7 +252,12 @@ def _run_training(harness: SafetyHarness, ip: str, key_path: Path, args) -> int:
     # the cloud venv. This adds ~30s to first-boot install but is fully
     # reproducible across Lambda images.
     smoke_flag = "--smoke-test" if args.smoke_test else ""
-    data_arg = "" if args.smoke_test else "--data ${OSS_DATA_DIR}/noisebase"
+    if args.smoke_test:
+        data_arg = ""
+    elif args.filesystem_name:
+        data_arg = f"--data ${OSS_REMOTE_HOME}/{args.filesystem_name}"
+    else:
+        data_arg = "--data ${OSS_DATA_DIR}/noisebase"
     remote_cmd = (
         "set -uo pipefail && "
         "cd ~/ors && "
@@ -329,6 +334,10 @@ def main():
     p.add_argument("--wait-mins", type=int, default=180,
                    help="Max minutes to poll for --wait-for tier. Default 180 (3 hours). "
                         "Aborts if capacity doesn't open in that window.")
+    p.add_argument("--filesystem-name", type=str, default=None,
+                   help="Lambda persistent filesystem to attach (created by lambda_stage_noisebase.py). "
+                        "Mounts at ${OSS_REMOTE_HOME}/<name>. When set, skips in-run NoiseBase provisioning "
+                        "and points training at ${OSS_REMOTE_HOME}/<name> directly.")
     args = p.parse_args()
 
     client = LambdaClient()
@@ -388,6 +397,7 @@ def main():
         instance_type=instance_type,
         region=region,
         ssh_key_names=[args.ssh_key_name],
+        file_system_names=[args.filesystem_name] if args.filesystem_name else [],
         name="ors-pico-training",
         max_duration_s=int(args.max_hours * 3600),
         budget_usd=args.budget,
@@ -413,8 +423,8 @@ def main():
             )
             return rc
 
-        # Provision NoiseBase on instance for non-smoke runs
-        if not args.smoke_test:
+        # Provision NoiseBase — skipped if a pre-staged filesystem is attached
+        if not args.smoke_test and not args.filesystem_name:
             rc = _provision_noisebase(harness, inst.ip, cfg.ssh_key_path)
             if rc != 0:
                 print(

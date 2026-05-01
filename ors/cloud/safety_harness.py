@@ -80,6 +80,9 @@ class HarnessConfig:
     idle_timeout_s: int = 15 * 60            # 15 minutes
     idle_check_interval_s: int = 60          # check once per minute
 
+    # Persistent filesystems to attach at launch (Lambda only)
+    file_system_names: list[str] = field(default_factory=list)
+
     # SSH for idle detection
     ssh_key_path: Optional[Path] = None      # private key for SSH-into-instance
     ssh_user: str = "ubuntu"
@@ -409,6 +412,7 @@ class SafetyHarness:
             instance_type_name=cfg.instance_type,
             region_name=cfg.region,
             ssh_key_names=cfg.ssh_key_names,
+            file_system_names=cfg.file_system_names or None,
             name=cfg.name,
         )
         if not ids:
