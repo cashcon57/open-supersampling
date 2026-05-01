@@ -1,23 +1,71 @@
 __pycache__/
 *.py[cod]
+*.pyo
+*.pyd
+.Python
 *.egg-info/
-.pytest_cache/
-.coverage
-.env
+dist/
+build/
+.eggs/
+*.egg
 .venv/
 venv/
-*.pth
-*.pt
-*.ckpt
-*.safetensors
-*.exr
-*.hdr
-results/
-!results/.gitkeep
-/data/
-.DS_Store
+env/
 venv-py312/
 venv-*/
+
+# Data and outputs
+data/
+results/
+!results/.gitkeep
+*.exr
+*.hdr
+*.zarr
+
+# Model artifacts
+*.onnx
+*.trt
+*.engine
+*.mlpackage
+*.mlmodel
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+
+# Logs and runs
+runs/
+wandb/
+lightning_logs/
+*.log
+
+# Cloud
+.env
+.env.*
+*.key
+*.pem
+.lambda/
+.secrets/
+secrets/
+*api*key*
+*.api_key
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Pytest / coverage
+.pytest_cache/
+.coverage
+
+# Secrets — do NOT commit
+*.txt
+!docs/**/*.txt
+id_rsa*
+id_ed25519*
 
 # Secrets — do NOT commit
 *.txt

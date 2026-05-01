@@ -4,6 +4,7 @@ import pytest
 from oss.render.mitsuba_pipeline import render_pair
 
 
+@pytest.mark.mitsuba
 def test_render_pair_shapes():
     result = render_pair(
         scene_name="cbox", view_index=0,

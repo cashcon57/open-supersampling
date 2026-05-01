@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "oss"
-version = "0.0.1"
+version = "0.2.0.dev0"
 description = "OpenSuperSampling"
 readme = "README.md"
 license = { text = "Apache-2.0" }
@@ -52,4 +52,7 @@ include = ["oss*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["gpu: requires CUDA GPU (deselect with -m 'not gpu')"]
+markers = [
+    "gpu: requires CUDA GPU (deselect with -m 'not gpu')",
+    "mitsuba: requires Mitsuba 3 installed",
+]
