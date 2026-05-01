@@ -14,8 +14,8 @@ env/
 venv-py312/
 venv-*/
 
-# Data and outputs
-data/
+# Data and outputs (root-anchored — does NOT exclude oss/data/ source package)
+/data/
 results/
 !results/.gitkeep
 *.exr
