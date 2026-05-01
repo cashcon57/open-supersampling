@@ -235,6 +235,7 @@ FX budget at 90fps display: ~11ms (1000/90). At 720p this is comfortable. FX is 
 | ------ | --- | --------- | --------- | ----------------- | --------- | ------------- |
 | Steam Deck | RDNA2 | 720p | 40 | 60 | 16.7ms | NCNN + Vulkan |
 | Steam Deck | RDNA2 | 720p | 60 | 90 | 11.1ms | NCNN + Vulkan |
+| MacBook Pro M3 Max 40-core | Apple GPU | 1080p | 60 | 120 | 8.3ms | NCNN + Metal / CoreML |
 | 4070 laptop (CachyOS) | RTX 4070m | 1080p | 60 | 120 | 8.3ms | TensorRT / ONNX CUDA |
 | 3080ti PC (Windows) | RTX 3080 Ti | 1080p | 60 | 120 | 8.3ms | TensorRT / ONNX CUDA |
 | 3080ti PC (Windows) | RTX 3080 Ti | 1440p | 60 | 120 | 8.3ms | TensorRT / ONNX CUDA |
