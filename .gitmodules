@@ -1,0 +1,3 @@
+[submodule "oss/gaussian/renderer/vendor/image_gs"]
+	path = oss/gaussian/renderer/vendor/image_gs
+	url = https://github.com/NYU-ICL/image-gs.git

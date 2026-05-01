@@ -31,6 +31,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "pytest-cov>=5.0", "ruff>=0.6"]
+# Anthropic SDK for the OSS-Gaussian sprint review pipeline (--use-api).
+# Optional because the pipeline runs a heuristic dry-run by default.
+review   = ["anthropic>=0.40"]
 cuda     = ["tensorrt>=10.0,<11.0", "onnxruntime-gpu>=1.18,<2.0"]
 directml = ["onnxruntime-directml>=1.18,<2.0"]
 rocm     = ["onnxruntime-rocm>=1.18,<2.0"]
