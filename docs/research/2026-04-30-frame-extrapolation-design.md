@@ -8,7 +8,9 @@
 
 ## Goal
 
-Add a frame extrapolation module (ORU-FX) to ORS that generates only the frames needed to hit a user's target framerate, with no requirement for future frames. Handles 60→90fps, 60→120fps, and similar non-2× boosts natively. No BFI (Black Frame Insertion) — dropped from scope, too visible on fast motion.
+Add a frame extrapolation module (ORU-FX) to ORS that generates only the frames needed to hit a user's target framerate. Handles 60→90fps, 60→120fps, and similar non-2× boosts natively. No BFI — dropped from scope.
+
+**Primary architecture: guided extrapolation.** The user only ever sees full-res frames — either rendered by the game or synthesized by ORU-FX. A cheap 1/4-res "guide" render at the target time is fed to ORU-FX as an oracle input and **never displayed**. It costs ~1/8–1/10 of a full render (1/16 pixel count, fixed overhead amortized), eliminates most blind-extrapolation failure modes (fast motion, disocclusion, lighting changes), and adds only ~2ms of latency vs ~16.7ms for traditional interpolation waiting on a full-res future frame.
 
 ---
 
@@ -18,14 +20,17 @@ Add a frame extrapolation module (ORU-FX) to ORS that generates only the frames 
 
 Key insight: extrapolation (no future frame needed) is feasible with a heuristic warp + lightweight neural correction network.
 
-### GFFE pipeline
+### ORU-FX pipeline (guided extrapolation, departs from GFFE)
 
 ```
-Frame_t-1, Frame_t  ──►  Background Collector  ──►  BG buffer
-                     ──►  History Tracker       ──►  Motion history
-Frame_t              ──►  Geometry-aware warp   ──►  Warped_est
-Warped_est + history ──►  SCN (neural net)      ──►  Frame_t+α
+Frame_t (full-res, displayed)  ──►  Background Collector  ──►  BG buffer
+                                ──►  History Tracker       ──►  Motion history
+Frame_t                         ──►  Geometry-aware warp   ──►  Warped_est
+Guide_t+α (1/4-res, NOT shown) ──┐
+Warped_est + history + guide    ──►  SCN (neural net)      ──►  Frame_t+α (full-res, displayed)
 ```
+
+The guide render is a rendering-engine hint, not a display output. The game renders full-res at t and 1/4-res at t+α; ORU-FX synthesizes the full-res t+α output entirely.
 
 1. **Background Collector** — identifies and tracks background pixels using temporal consistency; fills disoccluded regions without G-buffers
 2. **History Tracker** — accumulates temporal feature maps from prior frames for motion continuity
