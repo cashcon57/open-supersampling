@@ -4,9 +4,11 @@ Status snapshot of OSS-Gaussian project, generated while you were away.
 
 ## TL;DR
 
-- **All 7 sprint scaffolds landed.** ~6,000+ lines of Python + 1,500+ lines of C++ scaffolding + 7 detailed sprint plans + 5 design docs + code review pipeline.
-- **116 tests passing** on M3 Max + RTX 3080 Ti (parity).
+- **All 7 sprint scaffolds landed + Sprint 4 trainer wired + cross-sprint integration tests pass.**
+  ~7,000+ lines of Python + 1,500+ lines of C++ scaffolding + 7 detailed sprint plans + 6 design docs + code review pipeline.
+- **121 tests passing** on M3 Max + RTX 3080 Ti (parity).
 - **CUDA Toolkit 12.4** installing on 3080 Ti via SYSTEM scheduled task. Auto-watcher will trigger gsplat build + bench + Sprint 1 close-out the moment it lands.
+- **Cross-sprint integration validated**: classifier → network → renderer → canvas → extrapolation pipeline runs end-to-end with the right shapes.
 - All progress committed + pushed to `origin/v0.2-dev`.
 
 ## What was done
