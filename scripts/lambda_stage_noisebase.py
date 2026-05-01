@@ -172,7 +172,8 @@ def main() -> int:
     # 1. Filesystem
     fs = _find_or_create_filesystem(client, args.filesystem_name, args.region)
     fs_id = fs["id"]
-    mount_path = f"${OSS_REMOTE_HOME}/{args.filesystem_name}"
+    # Lambda returns the actual mount point in the API response
+    mount_path = fs.get("mount_point") or f"/lambda/nfs/{args.filesystem_name}"
     subsets = _SUBSETS[args.subset]
 
     print(f"[stage] filesystem id={fs_id}, mount={mount_path}")

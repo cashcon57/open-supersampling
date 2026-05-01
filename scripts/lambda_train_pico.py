@@ -255,7 +255,7 @@ def _run_training(harness: SafetyHarness, ip: str, key_path: Path, args) -> int:
     if args.smoke_test:
         data_arg = ""
     elif args.filesystem_name:
-        data_arg = f"--data ${OSS_REMOTE_HOME}/{args.filesystem_name}"
+        data_arg = f"--data /lambda/nfs/{args.filesystem_name}"
     else:
         data_arg = "--data ${OSS_DATA_DIR}/noisebase"
     remote_cmd = (

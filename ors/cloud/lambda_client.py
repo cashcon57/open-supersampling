@@ -31,6 +31,8 @@ INSTANCE_PRICING: dict[str, float] = {
     "gpu_1x_a100_sxm4": 1.79,
     "gpu_1x_h100_pcie": 2.49,
     "gpu_1x_h100_sxm5": 2.99,
+    "gpu_2x_h100_pcie": 4.98,
+    "gpu_2x_h100_sxm5": 5.98,
     "gpu_2x_a100":     2.58,
     "gpu_4x_a100":     5.16,
     "gpu_8x_a100":     10.32,
