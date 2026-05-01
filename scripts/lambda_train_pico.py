@@ -27,6 +27,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Optional
 
 from ors.cloud import LambdaClient, SafetyHarness
 from ors.cloud.lambda_client import (
@@ -185,6 +186,69 @@ def _rsync_repo(ip: str, key_path: Path, user: str = "ubuntu") -> int:
     return subprocess.run(cmd).returncode
 
 
+def _load_r2_creds() -> dict[str, str]:
+    creds_path = REPO_ROOT / ".secrets" / "r2-credentials.env"
+    creds: dict[str, str] = {}
+    for line in creds_path.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            creds[k.strip()] = v.strip()
+    return creds
+
+
+def _sync_r2_to_filesystem(
+    harness: "SafetyHarness",
+    ip: str,
+    key_path: Path,
+    filesystem_name: str,
+    user: str = "ubuntu",
+) -> int:
+    """Pull R2:ors-noisebase → Lambda filesystem before training.
+
+    Idempotent: if sampleset_v1/ already exists on the filesystem with data,
+    skips the sync entirely. This makes re-launches of interrupted runs cheap.
+    rclone runs at 32 parallel transfers (~1 GB/s from R2 to Lambda NFS).
+    """
+    ssh = _ssh_command(ip, key_path, user)
+    creds = _load_r2_creds()
+    mount = f"/lambda/nfs/{filesystem_name}"
+
+    remote_cmd = (
+        "set -euo pipefail && "
+        # Check if data already present (any .zip file under the mount)
+        f"if find {mount} -name '*.zip' -maxdepth 4 -quit 2>/dev/null | grep -q .; then "
+        f"  echo '[sync] {mount} already contains data — skipping R2 pull'; "
+        "  exit 0; "
+        "fi && "
+        "echo '[sync] installing rclone ...' && "
+        "curl -fsSL https://rclone.org/install.sh | sudo bash 2>&1 | tail -3 && "
+        "rclone config create r2 s3 "
+        f"  provider=Cloudflare "
+        f"  access_key_id={creds['R2_ACCESS_KEY_ID']} "
+        f"  secret_access_key={creds['R2_SECRET_ACCESS_KEY']} "
+        f"  endpoint={creds['R2_ENDPOINT']} "
+        "  no_check_bucket=true 2>&1 | tail -2 && "
+        f"echo '[sync] pulling R2:{creds['R2_BUCKET']} → {mount} ...' && "
+        f"rclone sync r2:{creds['R2_BUCKET']} {mount} "
+        f"  --transfers=32 --checkers=16 --progress && "
+        f"echo '[sync] done.' && "
+        f"du -sh {mount}/* 2>/dev/null || true"
+    )
+
+    print(f"[lambda_train_pico] syncing R2 → {mount} ...")
+    proc = subprocess.Popen(ssh + ["bash", "-lc", shlex.quote(remote_cmd)], stdout=sys.stdout, stderr=sys.stderr)
+    try:
+        while proc.poll() is None:
+            harness.heartbeat()
+            harness.check_limits()
+            time.sleep(30)
+        return proc.returncode or 0
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+
+
 def _provision_noisebase(harness: "SafetyHarness", ip: str, key_path: Path, user: str = "ubuntu") -> int:
     """Clone NoiseBase repo on the instance + fetch a sample sequence.
 
@@ -335,9 +399,10 @@ def main():
                    help="Max minutes to poll for --wait-for tier. Default 180 (3 hours). "
                         "Aborts if capacity doesn't open in that window.")
     p.add_argument("--filesystem-name", type=str, default=None,
-                   help="Lambda persistent filesystem to attach (created by lambda_stage_noisebase.py). "
-                        "Mounts at ${OSS_REMOTE_HOME}/<name>. When set, skips in-run NoiseBase provisioning "
-                        "and points training at ${OSS_REMOTE_HOME}/<name> directly.")
+                   help="Lambda persistent filesystem to attach. "
+                        "Mounts at /lambda/nfs/<name>. On first run, pulls R2:ors-noisebase → "
+                        "filesystem at ~1 GB/s (idempotent — subsequent runs skip the pull). "
+                        "Stage data first with lambda_stage_noisebase.py.")
     args = p.parse_args()
 
     client = LambdaClient()
@@ -423,15 +488,18 @@ def main():
             )
             return rc
 
-        # Provision NoiseBase — skipped if a pre-staged filesystem is attached
-        if not args.smoke_test and not args.filesystem_name:
-            rc = _provision_noisebase(harness, inst.ip, cfg.ssh_key_path)
-            if rc != 0:
-                print(
-                    f"[lambda_train_pico] NoiseBase provisioning failed (rc={rc}); aborting.",
-                    file=sys.stderr,
-                )
-                return rc
+        if not args.smoke_test:
+            if args.filesystem_name:
+                # Pull R2 → Lambda filesystem (idempotent; skips if data already present)
+                rc = _sync_r2_to_filesystem(harness, inst.ip, cfg.ssh_key_path, args.filesystem_name)
+                if rc != 0:
+                    print(f"[lambda_train_pico] R2 sync failed (rc={rc}); aborting.", file=sys.stderr)
+                    return rc
+            else:
+                rc = _provision_noisebase(harness, inst.ip, cfg.ssh_key_path)
+                if rc != 0:
+                    print(f"[lambda_train_pico] NoiseBase provisioning failed (rc={rc}); aborting.", file=sys.stderr)
+                    return rc
 
         rc = _run_training(harness, inst.ip, cfg.ssh_key_path, args)
         if rc != 0:
