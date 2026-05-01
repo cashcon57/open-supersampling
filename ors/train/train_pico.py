@@ -87,9 +87,9 @@ def _unroll_sequence(
             )
         total_loss = total_loss + per_frame_loss
 
-        # Detach history + prev_pred to cap BPTT at one timestep.
+        # Detach both history and prev_pred to cap BPTT at one timestep.
         history_hr = rgb_pred.detach()
-        prev_pred = rgb_pred
+        prev_pred = rgb_pred.detach()
 
     return total_loss / T
 
@@ -105,8 +105,6 @@ def train(args: argparse.Namespace) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     if args.smoke_test:
-        # Materialize as a list so we get a deterministic step count for the
-        # progress bar without hitting disk.
         loader = list(
             _synthetic_sequence_loader(steps=50, sequence_length=args.sequence_length)
         )
@@ -121,6 +119,7 @@ def train(args: argparse.Namespace) -> None:
         loader = DataLoader(ds, batch_size=args.batch_size, shuffle=True, num_workers=2)
         epochs = args.epochs
 
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max(epochs, 1))
     log_interval = 10 if args.smoke_test else 50
 
     model.train()
@@ -131,11 +130,15 @@ def train(args: argparse.Namespace) -> None:
             loss.backward()
             opt.step()
             if step % log_interval == 0:
-                print(f"ep{epoch} step{step} loss={loss.item():.4f}")
+                print(f"ep{epoch} step{step} loss={loss.item():.4f} lr={scheduler.get_last_lr()[0]:.2e}")
 
+        scheduler.step()
         torch.save(
             {
                 "model": model.state_dict(),
+                "optimizer": opt.state_dict(),
+                "scheduler": scheduler.state_dict(),
+                "epoch": epoch,
                 "config": {
                     "scale_factor": args.scale_factor,
                     "tier": "pico",
