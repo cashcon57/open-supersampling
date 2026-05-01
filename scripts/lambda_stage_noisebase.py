@@ -114,18 +114,18 @@ def _download_noisebase(
     # We try pip install first; if the package name differs, fall back to
     # cloning the repo and using its download.py script directly.
     remote_cmd = (
-        "set -uo pipefail && "
+        "set -euo pipefail && "
         f"mkdir -p {mount_path} && "
-        "echo '--- pip install noisebase ---' && "
-        "pip3 install --quiet noisebase && "
-        "echo '--- nb-download version ---' && "
-        "nb-download --help 2>&1 | head -5 || true && "
+        # numpy<2.0 required: numpy 2.x removed numpy.lib.shape_base used by pyfvvdp
+        "echo '--- pip install noisebase (numpy<2.0 pin) ---' && "
+        "pip3 install --quiet 'numpy<2.0' noisebase && "
+        "echo '--- nb-download ready ---' && "
         f"for SUBSET in {subsets_str}; do "
         f"  echo \"=== downloading $SUBSET to {mount_path} ===\"; "
-        f"  nb-download --data_path {mount_path} \"$SUBSET\" 2>&1; "
+        f"  nb-download --data_path {mount_path} \"$SUBSET\"; "
         "done && "
         f"echo '--- done ---' && "
-        f"du -sh {mount_path}/* 2>/dev/null || echo 'nothing downloaded yet'"
+        f"du -sh {mount_path}/*"
     )
 
     full = ssh + ["bash", "-lc", shlex.quote(remote_cmd)]
