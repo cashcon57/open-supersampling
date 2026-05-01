@@ -310,7 +310,7 @@ class LambdaClient:
     def create_filesystem(self, name: str, region: str) -> dict:
         """Create a persistent filesystem. Billed ~$0.20/GB/month."""
         r = self._session.post(
-            f"{_API_BASE}/file-systems",
+            f"{_API_BASE}/filesystems",
             json={"name": name, "region": region},
             timeout=60.0,
         )
@@ -319,7 +319,7 @@ class LambdaClient:
 
     def delete_filesystem(self, filesystem_id: str) -> None:
         """Delete a persistent filesystem. Irreversible."""
-        r = self._session.delete(f"{_API_BASE}/file-systems/{filesystem_id}", timeout=60.0)
+        r = self._session.delete(f"{_API_BASE}/filesystems/{filesystem_id}", timeout=60.0)
         r.raise_for_status()
 
     def terminate(self, instance_ids: list[str]) -> dict:
