@@ -42,10 +42,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 _STAGING_PREFERENCE = ["gpu_1x_a10", "gpu_1x_a6000", "gpu_1x_a100"]
 
 _SUBSETS = {
-    "training": ["sampleset_training_v1"],
+    "training": ["sampleset_v1"],
     "test8":    ["sampleset_test8_v1"],
     "test32":   ["sampleset_test32_v1"],
-    "all":      ["sampleset_training_v1", "sampleset_test8_v1", "sampleset_test32_v1"],
+    "all":      ["sampleset_v1", "sampleset_test8_v1", "sampleset_test32_v1"],
 }
 
 
@@ -116,22 +116,13 @@ def _download_noisebase(
     remote_cmd = (
         "set -uo pipefail && "
         f"mkdir -p {mount_path} && "
-        "echo '--- python/pip bootstrap ---' && "
-        "python3 --version && "
-        "pip3 install --quiet noisebase 2>&1 | tail -5 || "
-        "(echo 'noisebase pip failed, trying repo clone' && "
-        " git clone --depth 1 https://github.com/balintio/noisebase ~/noisebase-repo && "
-        " pip3 install --quiet -r ~/noisebase-repo/requirements.txt 2>/dev/null || true) && "
+        "echo '--- pip install noisebase ---' && "
+        "pip3 install --quiet noisebase && "
+        "echo '--- nb-download version ---' && "
+        "nb-download --help 2>&1 | head -5 || true && "
         f"for SUBSET in {subsets_str}; do "
         f"  echo \"=== downloading $SUBSET to {mount_path} ===\"; "
-        # Try the installed CLI first
-        f"  if command -v noisebase >/dev/null 2>&1; then "
-        f"    noisebase download \"$SUBSET\" --dest {mount_path} 2>&1; "
-        f"  elif [ -f ~/noisebase-repo/download.py ]; then "
-        f"    python3 ~/noisebase-repo/download.py \"$SUBSET\" --dest {mount_path} 2>&1; "
-        f"  else "
-        f"    echo 'ERROR: no noisebase download tool found'; exit 1; "
-        f"  fi; "
+        f"  nb-download --data_path {mount_path} \"$SUBSET\" 2>&1; "
         "done && "
         f"echo '--- done ---' && "
         f"du -sh {mount_path}/* 2>/dev/null || echo 'nothing downloaded yet'"
