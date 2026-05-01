@@ -1,54 +1,56 @@
 """OSS-Gaussian persistent canvas (Sprint 5).
 
-Sprint 5 produces the implementations of `PersistentCanvas` and `warp_canvas`
-in this package. Sprint 6 (frame extrapolation) reuses the same canvas and
-warp infrastructure unchanged — the only difference is the alpha multiplier
-on the motion magnitude.
+GPU-resident persistent buffer of N Gaussians warped each frame by
+motion vectors, with per-tile MSE driving prune+spawn. Pure PyTorch v1;
+runs on CPU and CUDA from one code path.
 
-This file declares the **public API contract** that Sprint 6 builds against.
-Sprint 5 may extend the surface, but must not reduce or rename the symbols
-listed here without coordinating with Sprint 6.
+Public API:
 
-API contract
-------------
+- ``PersistentCanvas``               — the canvas itself (state + lifecycle).
+- ``CanvasStats``                    — per-frame diagnostic snapshot.
+- ``warp_canvas``                    — Sprint 6 contract: returns a new
+                                       canvas with positions shifted by
+                                       ``motion × alpha`` (covariance frozen).
+- ``warp_positions``                 — low-level bilinear motion-vector warp
+                                       used by ``warp_canvas`` and the canvas
+                                       update loop.
+- ``per_tile_mse``                   — render-vs-LR per-tile error map.
+- ``gaussians_error_from_tiles``     — per-Gaussian error from tile map.
+- ``PrunePolicy``                    — tuneable prune-rule thresholds.
+- ``select_for_pruning``             — pure prune-selection function.
+- ``select_spawn_tiles``             — top-error tile picker.
+- ``apply_prune_spawn``              — in-place state mutation.
 
-    from oss.gaussian.canvas import PersistentCanvas, warp_canvas
+Sprint 6 (frame extrapolation) imports ``PersistentCanvas`` and
+``warp_canvas``; both are stable here.
 
-    canvas: PersistentCanvas         # mutable container of N Gaussians
-    canvas.gaussians: GaussianBatch  # current snapshot at frame t
-    canvas.render(output_hw) -> (F, H, W)   # convenience render through the
-                                            # Rasterizer at native resolution
-
-    warped: PersistentCanvas = warp_canvas(canvas, motion, alpha=1.0)
-        # motion: (2, H, W) per-pixel motion field at LR resolution.
-        #         Convention: motion[:, y, x] = (dx, dy) describing the
-        #         displacement that a feature at pixel (x, y) at frame t-1
-        #         travels to reach (x+dx, y+dy) at frame t. Scale: pixels
-        #         in the canvas's native coordinate frame (same as
-        #         GaussianBatch.xy).
-        # alpha:  scalar in [0, 1]. 0 → no shift (canvas unchanged).
-        #         1 → full t-1→t shift. 0 < alpha < 1 → fractional shift,
-        #         used by Sprint 6 frame extrapolation.
-        # Returns a new PersistentCanvas with positions shifted; covariance,
-        # rotation, and color are reused unchanged (per design spec §3.2 —
-        # "covariance frozen", network handles deltas elsewhere).
-
-Sprint 5 status
----------------
-
-At the time Sprint 6 was scaffolded, this package was still in flight.
-The frame-extrapolation code path defends against an absent implementation
-by importing lazily and raising a descriptive error explaining that
-Sprint 5 must land before extrapolation can run. See
-`oss.gaussian.extrapolation.extrapolator.FrameExtrapolator` for the lazy
-import block.
-
-Public re-exports below stay commented out until Sprint 5 wires the
-real symbols. Sprint 5's PR should uncomment them and add `__all__`.
+Spec: ``docs/superpowers/specs/2026-05-01-gaussian-temporal-canvas-design.md``
+Plan: ``docs/superpowers/plans/2026-05-01-gaussian-sprint-5-plan.md``
+Design notes: ``docs/superpowers/gaussian-canvas-design.md``
 """
 
-# TODO(sprint-5): Uncomment once oss/gaussian/canvas/{canvas.py,warp.py} land.
-# from oss.gaussian.canvas.canvas import PersistentCanvas
-# from oss.gaussian.canvas.warp import warp_canvas
-#
-# __all__ = ["PersistentCanvas", "warp_canvas"]
+from oss.gaussian.canvas.canvas import CanvasStats, PersistentCanvas
+from oss.gaussian.canvas.error_detection import (
+    gaussians_error_from_tiles,
+    per_tile_mse,
+)
+from oss.gaussian.canvas.prune_spawn import (
+    PrunePolicy,
+    apply_prune_spawn,
+    select_for_pruning,
+    select_spawn_tiles,
+)
+from oss.gaussian.canvas.warp import warp_canvas, warp_positions
+
+__all__ = [
+    "PersistentCanvas",
+    "CanvasStats",
+    "warp_canvas",
+    "warp_positions",
+    "per_tile_mse",
+    "gaussians_error_from_tiles",
+    "PrunePolicy",
+    "select_for_pruning",
+    "select_spawn_tiles",
+    "apply_prune_spawn",
+]

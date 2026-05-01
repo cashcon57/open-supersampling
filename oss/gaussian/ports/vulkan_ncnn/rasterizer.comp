@@ -1,0 +1,90 @@
+// OSS-Gaussian Vulkan compute renderer — Sprint 7 / T7.V.2 skeleton.
+//
+// Tile-based top-K 2D Gaussian rasterizer, port target of the vendored
+// Image-GS CUDA kernel. Tile size MUST match `oss.gaussian.renderer.TILE_SIZE`
+// (16) and `oss.gaussian.network.DEFAULT_TILE_SIZE` (16).
+//
+// Build (manual, see CMakeLists.txt):
+//     glslangValidator -V rasterizer.comp -o rasterizer.spv
+//
+// Sprint 7 prep ships the kernel signature only. The body is intentionally
+// stubbed; T7.V.2 ports the CUDA logic. See
+// `docs/superpowers/plans/2026-05-01-gaussian-sprint-7-plan.md` § Track V.
+
+#version 460
+#extension GL_KHR_shader_subgroup_basic    : require
+#extension GL_KHR_shader_subgroup_ballot   : require
+#extension GL_KHR_shader_subgroup_shuffle  : require
+#extension GL_EXT_shader_explicit_arithmetic_types : require
+
+// 16x16 tile per workgroup, one thread per pixel. RDNA 2 wave size is 64;
+// the workgroup spans two waves and we use subgroup ops within each wave.
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+// Per-Gaussian record. Layout matches the Metal `Gaussian` struct and the
+// Python `GaussianBatch` SoA-equivalent. std430 packs without padding gymnastics.
+struct Gaussian {
+    vec2 xy;
+    vec2 scale;
+    float rot;
+    float pad0;
+    vec4 feat;     // up to 4-channel feature vector
+};
+
+layout(set = 0, binding = 0, std430) readonly buffer GaussianBuffer {
+    Gaussian gaussians[];
+};
+
+// CSR-like per-tile Gaussian-id list. tile_index[tile_starts[t] .. tile_starts[t+1])
+// holds the Gaussian indices that overlap tile `t`.
+layout(set = 0, binding = 1, std430) readonly buffer TileIndexBuffer {
+    uint tile_index[];
+};
+
+layout(set = 0, binding = 2, std430) readonly buffer TileStartsBuffer {
+    uint tile_starts[];
+};
+
+layout(set = 0, binding = 3, std430) writeonly buffer OutImageBuffer {
+    vec4 out_image[];   // (out_h * out_w) RGBA
+};
+
+layout(push_constant) uniform DispatchParams {
+    uint num_gaussians;
+    uint out_h;
+    uint out_w;
+    uint feat_dim;     // 1, 3, or 4 — must be <= 4 in this kernel
+    uint topk;
+    uint pad0;
+    uint pad1;
+    uint pad2;
+} params;
+
+void main() {
+    // TODO: T7.V.2 — port the CUDA tile rasterizer body here.
+    //
+    // Reference algorithm (mirrors vendored Image-GS / gsplat CUDA path):
+    //  1. Per-tile shared memory holds up to TOPK Gaussian records (declare
+    //     with `shared Gaussian tile_cache[TOPK];`).
+    //  2. Workgroup cooperatively loads the next batch of candidate Gaussians
+    //     for this tile from `gaussians[tile_index[tile_starts[tile_id] + i]]`.
+    //  3. Each thread evaluates the Gaussian's 2D quadratic form at its pixel
+    //     and accumulates `w * feat` into a thread-local FP32 register.
+    //  4. After the Gaussian list is exhausted, top-K normalization (if
+    //     requested) divides by the sum of weights.
+    //  5. Final value is written to `out_image[gid.y * params.out_w + gid.x]`.
+    //
+    // Subgroup notes for the port:
+    //  - RDNA 2 wave size is 64 (NOT 32 as on Apple). Use gl_SubgroupSize
+    //    rather than hardcoding.
+    //  - Use `subgroupBallot()` + `subgroupShuffle()` for per-Gaussian skip
+    //    masks (skip Gaussians whose bounding box doesn't overlap this tile).
+    //
+    // The empty body below makes this kernel valid GLSL so Sprint 7 prep can
+    // verify the toolchain end-to-end without committing a real port.
+    uvec2 gid = gl_GlobalInvocationID.xy;
+    if (gid.x >= params.out_w || gid.y >= params.out_h) {
+        return;
+    }
+    out_image[gid.y * params.out_w + gid.x] = vec4(0.0);
+}
