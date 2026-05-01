@@ -231,13 +231,15 @@ FX budget at 90fps display: ~11ms (1000/90). At 720p this is comfortable. FX is 
 
 ## Performance Targets
 
-| Device | Resolution | Render fps | Target display fps | FX budget | Feasibility |
-|--------|-----------|-----------|-------------------|-----------|-------------|
-| Steam Deck | 720p | 40 | 60 | 16.7ms | ✓ easy |
-| Steam Deck | 720p | 60 | 90 | 11.1ms | ✓ (expect ~7ms) |
-| Steam Deck | 800p | 60 | 90 | 11.1ms | marginal |
-| Mid-range PC | 1080p | 60 | 120 | 8.3ms | ✓ (expect ~8ms) |
-| RTX 4070 Ti | 1080p | 120 | 144 | 6.9ms | ✓ (6.62ms measured) |
+| Device | GPU | Resolution | Render fps | Target display fps | FX budget | Inference path |
+| ------ | --- | --------- | --------- | ----------------- | --------- | ------------- |
+| Steam Deck | RDNA2 | 720p | 40 | 60 | 16.7ms | NCNN + Vulkan |
+| Steam Deck | RDNA2 | 720p | 60 | 90 | 11.1ms | NCNN + Vulkan |
+| 4070 laptop (CachyOS) | RTX 4070m | 1080p | 60 | 120 | 8.3ms | TensorRT / ONNX CUDA |
+| 3080ti PC (Windows) | RTX 3080 Ti | 1080p | 60 | 120 | 8.3ms | TensorRT / ONNX CUDA |
+| 3080ti PC (Windows) | RTX 3080 Ti | 1440p | 60 | 120 | 8.3ms | TensorRT / ONNX CUDA |
+
+**Primary dev machine:** 4070 laptop (CachyOS) — CUDA on Linux, local, no Tailnet hop. Vulkan layer development here translates directly to Steam Deck. Training also runs here before moving to Lambda H100 for longer runs.
 
 ---
 
