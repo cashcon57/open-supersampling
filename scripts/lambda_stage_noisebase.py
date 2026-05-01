@@ -75,25 +75,27 @@ def _find_or_create_filesystem(
     return fs
 
 
-def _pick_instance(client: LambdaClient, region: str) -> str:
+def _pick_instance(client: LambdaClient, preferred_region: str) -> tuple[str, str]:
+    """Return (instance_type, actual_region) — prefer requested region, fall back to any."""
     types = client.list_instance_types()
     for tname in _STAGING_PREFERENCE:
         entry = types.get(tname, {})
         regions = entry.get("regions_with_capacity_available", []) or []
         region_names = [r.get("name") if isinstance(r, dict) else r for r in regions]
-        if region in region_names:
+        if preferred_region in region_names:
             rate = INSTANCE_PRICING.get(tname, 0.0)
-            print(f"[stage] using {tname} @ ${rate:.2f}/hr in {region}")
-            return tname
-    # any region fallback
+            print(f"[stage] using {tname} @ ${rate:.2f}/hr in {preferred_region}")
+            return tname, preferred_region
+    # any region fallback — filesystem will be created in the same region
     for tname in _STAGING_PREFERENCE:
         entry = types.get(tname, {})
         regions = entry.get("regions_with_capacity_available", []) or []
         region_names = [r.get("name") if isinstance(r, dict) else r for r in regions]
         if region_names:
             rate = INSTANCE_PRICING.get(tname, 0.0)
-            print(f"[stage] no capacity in {region}; using {tname} in {region_names[0]} @ ${rate:.2f}/hr")
-            return tname
+            actual = region_names[0]
+            print(f"[stage] no capacity in {preferred_region}; using {tname} in {actual} @ ${rate:.2f}/hr")
+            return tname, actual
     raise RuntimeError("no staging-suitable instances available")
 
 
@@ -176,13 +178,20 @@ def main() -> int:
     print(f"[stage] filesystem id={fs_id}, mount={mount_path}")
     print(f"[stage] subsets to download: {subsets}")
 
-    # 2. Pick instance type
-    instance_type = _pick_instance(client, args.region)
+    # 2. Pick instance type — must be in same region as filesystem
+    instance_type, actual_region = _pick_instance(client, args.region)
+    if actual_region != args.region and fs.get("region", {}).get("name") != actual_region:
+        # Filesystem is in wrong region for the available instance — delete and recreate
+        print(f"[stage] filesystem region mismatch; recreating in {actual_region} ...")
+        client.delete_filesystem(fs_id)
+        fs = client.create_filesystem(args.filesystem_name, actual_region)
+        fs_id = fs["id"]
+        print(f"[stage] recreated: id={fs_id} in {actual_region}")
     rate = INSTANCE_PRICING.get(instance_type, 0.0)
 
     cfg = HarnessConfig(
         instance_type=instance_type,
-        region=args.region,
+        region=actual_region,
         ssh_key_names=[args.ssh_key_name],
         file_system_names=[args.filesystem_name],
         name="ors-noisebase-staging",
