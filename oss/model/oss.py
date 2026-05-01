@@ -1,11 +1,16 @@
-"""ORU - Open Ray Upscaler.
+"""OSS - OpenSuperSampling core upscaler.
 
 Architecture (Thomas/Liktor HPG 2022 derivative):
 - Mode-specific input head (one of three: rgb, rgb_aux, features)
 - Shared encoder (3 down stages) + shared decoder (3 up stages)
 - Bilinear upsample to scale_factor*input then 3x3 RGB projection
 - Standalone-competitive against FSR/XeSS in `rgb` mode; `features` mode unlocks
-  joint-architecture quality+perf when paired with ORD.
+  joint-architecture quality+perf when paired with OSS-RG.
+
+Tiers:
+  lite     ~1M params  — RTX 20+, RDNA2+, M-series base, Steam Deck (non-pico path)
+  standard ~2.6M params — RTX 4080+, RX 9070 XT+, M3 Max, mid-range and above
+  heavy    ~5.5M params — RTX 4090, flagship only
 """
 from __future__ import annotations
 from typing import Literal, Optional
@@ -19,9 +24,9 @@ from .oss_rg import HANDOFF_FEATURE_CHANNELS
 
 
 _TIER_CHANNELS = {
-    "lite":     [16, 24, 32, 48],
-    "standard": [24, 32, 48, 64],
-    "heavy":    [32, 48, 64, 96],
+    "lite":     [64,  96,  128, 192],   # ~1M params
+    "standard": [96,  144, 224, 320],   # ~2.6M params
+    "heavy":    [128, 192, 320, 512],   # ~5.5M params
 }
 
 _VALID_SCALES = (1.3, 1.5, 1.7, 2.0)
