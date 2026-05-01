@@ -35,7 +35,9 @@ DLL hook / Vulkan layer intercepts Present():
                     ──►  SCN (neural net)  ──►  Frame_t+α (full-res, displayed)
 ```
 
-Inputs extracted at zero extra render cost — the game already computed depth and motion vectors for TAA. On games without TAA (no motion vectors available), fall back to estimating flow from color frames only.
+Inputs extracted at zero extra render cost — depth and motion vectors are produced during the geometry pass, before TAA or any upscaling, so they exist regardless of whether TAA runs. Notably, ORU-Pico replaces TAA, so the game's TAA pass does not execute — but the game still computed these buffers earlier in the frame. The DLL hook reads them from the raw render targets before they're discarded.
+
+**Resolution mismatch:** depth and motion vectors are at LR (native render resolution). color(t) after Pico is at HR. Motion vectors must be scaled before use: `motion_vec_HR = motion_vec_LR × scale_factor`. Depth is upsampled to HR (nearest-neighbor, preserving sharp discontinuities).
 
 1. **Flow extrapolation** — motion_vec(t-1→t) linearly extrapolated: F_{t→t+α} = α × motion_vec. No separate flow estimator needed when motion vectors are present (saves ~3ms vs RAFT-Small).
 2. **Geometry-aware warp** — uses actual depth(t) to detect depth discontinuities and prevent color bleeding across edges. Replaces GFFE's luminance Laplacian heuristic with ground-truth depth.
@@ -213,14 +215,17 @@ Residual formulation keeps the warp as a strong prior; SCN only corrects shading
 FX sits downstream of Pico in the rendering pipeline:
 
 ```
-Raw LR frame + G-buffers → ORU-Pico (denoising + SR) → HR clean frame → ORU-FX → display
+Game renders LR frame
+  ├─ color_LR  ──►  ORU-Pico (denoise + SR)  ──►  color_HR  ──►  ORU-FX  ──►  display
+  ├─ depth_LR  ──►  (scale to HR)  ──────────────────────────────►  ORU-FX
+  └─ motion_vec_LR  ──►  (× scale_factor → HR)  ────────────────►  ORU-FX
 ```
 
-FX operates on HR output. Pico runs at render fps (e.g., 60fps native on Steam Deck). FX runs at display fps (e.g., 90fps). For every rendered frame, FX may need to generate 0 or 1 extrapolated frame depending on the α schedule.
+ORU-Pico replaces TAA — the game does not run its own TAA pass. Depth and motion vectors are captured from LR render targets by the DLL hook before the game discards them, then upscaled to match Pico's HR output before being passed to FX.
 
-This means FX must run in ~11ms budget at 90fps display (1000ms/90 = 11.1ms), leaving the remainder for Pico. At 720p, GFFE target is ~3.66ms — comfortably fits.
+Pico runs at render fps (e.g., 60fps). FX runs at display fps (e.g., 90fps), generating one extrapolated frame per render interval depending on the α schedule.
 
-FX is optional and independently deployable: users on higher-end hardware can use Pico without FX; users wanting higher display fps enable FX.
+FX budget at 90fps display: ~11ms (1000/90). At 720p this is comfortable. FX is independently deployable — Pico without FX is valid for users who don't need framerate upscaling.
 
 ---
 
