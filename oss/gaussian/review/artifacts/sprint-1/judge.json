@@ -1,0 +1,23 @@
+{
+  "verdict": "APPROVE",
+  "rationale": "Heuristic dry-run: no medium/high findings -> APPROVE.",
+  "blocking_issues": [],
+  "non_blocking_issues": [
+    {
+      "severity": "low",
+      "category": "dry_run",
+      "file": "<n/a>",
+      "lines": "L0",
+      "issue": "No dispatch function configured",
+      "suggested_fix": "Pass a DispatchFn into run_pipeline()"
+    },
+    {
+      "severity": "low",
+      "category": "dry_run",
+      "file": "<n/a>",
+      "lines": "L0",
+      "issue": "No dispatch function configured",
+      "suggested_fix": "Pass a DispatchFn into run_pipeline()"
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "reviewer_id": "A",
+  "sprint": 1,
+  "summary": "DRY-RUN stub for reviewer A (no LLM dispatch wired)",
+  "findings": [
+    {
+      "severity": "low",
+      "category": "dry_run",
+      "file": "<n/a>",
+      "lines": "L0",
+      "issue": "No dispatch function configured",
+      "suggested_fix": "Pass a DispatchFn into run_pipeline()"
+    }
+  ]
+}

@@ -381,4 +381,61 @@ markers = [
 
 ---
 
+## 8. Sprint 3 — Tile Classifier Integration (added 2026-05-01)
+
+**Module:** `oss/gaussian/classifier/` — `TileClassifier`, `overlay_mask`.
+**Plan:** `docs/superpowers/plans/2026-05-01-gaussian-sprint-3-plan.md`
+
+### 8.1 Mask contract
+
+- Shape: `(B, H/T, W/T)`, dtype `bool`. `True` = complex tile.
+- `T = oss.gaussian.classifier.DEFAULT_TILE_SIZE = 16` — pinned to the renderer's `oss.gaussian.renderer.TILE_SIZE`. **Do not change one without the other.**
+- `H` and `W` (LR resolution) must be multiples of `T`. Caller pads or crops upstream if not — classifier raises `ValueError` rather than silently dropping a partial tile.
+- The classifier is stateless: no temporal smoothing, no learned weights, no per-frame state. Sprint 5's canvas may add temporal smoothing on top; the raw classifier output is the input to that smoothing.
+
+### 8.2 Sprint 4 (Gaussian Param Network) consumption
+
+The network runs only on complex tiles to skip ~70% of work:
+
+```python
+mask = classifier(lr_frame, depth, motion, normals)            # (B, h, w) bool
+complex_idx = mask.nonzero(as_tuple=False)                     # (K, 3) [b, ty, tx]
+patches = gather_tile_patches(lr_frame, depth, motion, complex_idx, T)  # (K, C, T, T)
+gauss_params = network(patches)                                # (K, P)
+
+# Scatter into a full per-tile param tensor with simple-tile sentinels.
+full_params = make_passthrough_params(B, h, w, P, dtype, device)
+full_params[mask] = gauss_params
+```
+
+Network input pipeline owns the gather; the classifier does not produce patches itself — keeps responsibilities clean.
+
+### 8.3 Sprint 5 (Persistent Canvas) consumption
+
+- **Spawn-from-LR is gated to complex tiles.** When the canvas error-detector flags a tile for replacement, the spawn step only runs if `mask[b, ty, tx]` is True. Simple tiles with high error are bilinearly resampled from the LR input instead of getting fresh Gaussians.
+- **Per-tile error threshold relaxes inside simple tiles.** Simple tiles are expected to be smooth, so the canvas tolerates higher reconstruction error there before spawning replacement Gaussians (avoids thrashing in flat regions).
+- **Motion warp is applied uniformly** — mask does not gate the warp pass.
+
+### 8.4 Visualization
+
+`overlay_mask(frame, mask) -> (B, 3, H, W)` produces a debug visualization for:
+
+- Documentation figures and DLSS-vs-OSS-Gaussian comparison videos
+- Sprint 7 cross-platform port verification (same mask shape on Metal + Vulkan)
+- Live debug overlay during Sprint 2 hooked Cyberpunk captures (toggleable HUD)
+
+### 8.5 Performance budget
+
+Pure-PyTorch implementation; runs on CPU + CUDA from one code path. Bench harness in `oss/gaussian/classifier/bench.py` (T3.7).
+
+Target on RTX 3080 Ti:
+
+- 540p ≤ 0.10 ms
+- 1080p ≤ 0.30 ms
+- 1440p ≤ 0.50 ms
+
+Custom CUDA kernel deferred — file a follow-up Sprint-3-perf task only if PyTorch misses budget by >2×.
+
+---
+
 **End of Integration Points Report**

@@ -1,0 +1,3201 @@
+diff --git a/.gitignore b/.gitignore
+index 145afb5..83a8f1d 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -81,3 +81,5 @@ secrets/
+ id_rsa*
+ id_ed25519*
+ 
++.superpowers/
++2407.01866v2.pdf
+diff --git a/.gitmodules b/.gitmodules
+new file mode 100644
+index 0000000..c45ff55
+--- /dev/null
++++ b/.gitmodules
+@@ -0,0 +1,3 @@
++[submodule "oss/gaussian/renderer/vendor/image_gs"]
++	path = oss/gaussian/renderer/vendor/image_gs
++	url = https://github.com/NYU-ICL/image-gs.git
+diff --git a/docs/superpowers/code-review-pipeline.md b/docs/superpowers/code-review-pipeline.md
+new file mode 100644
+index 0000000..28d9a8f
+--- /dev/null
++++ b/docs/superpowers/code-review-pipeline.md
+@@ -0,0 +1,200 @@
++# OSS-Gaussian Sprint Code Review Pipeline
++
++**Status:** scaffolding complete (v0). Subagent dispatch is the only piece left to wire.
++**Scope:** gates the close of each of the 7 OSS-Gaussian sprints.
++**Owner:** OSS-Gaussian sprint lead.
++**Code location:** [`oss/gaussian/review/`](../../oss/gaussian/review/).
++
++## 1. Why this exists
++
++OSS-Gaussian is a real-time game upscaler being built sprint by sprint, in a
++codebase that already ships four pixel-based pipelines (OSS-RG, OSS-SR,
++OSS-Pico, OSS-FX). A naive sprint cadence would let regressions and
++spec drift accumulate. This pipeline pins down a hard gate: **no sprint
++closes without two specialised reviewer agents and a judge agent
++agreeing the sprint is safe to merge.**
++
++## 2. Architecture
++
++```
++run.py (CLI)
++   |
++   |-- get_diff(commit_range)      -> diff.patch
++   |-- load_sprint_spec(N)
++   |
++   |-- Reviewer A  (correctness / security / perf / style)
++   |       \-> reviewer-a.json
++   |
++   |-- Reviewer B  (spec / tests / edge / integration / regression)
++   |       \-> reviewer-b.json
++   |
++   \-- Judge       (reads both reports + diff)
++           \-> judge.json   { APPROVE | REQUEST_CHANGES | BLOCK }
++```
++
++Reviewer A and Reviewer B run with **non-overlapping concerns** so the
++two reports can be merged without the judge having to deduplicate.
++Each reviewer receives the spec for context, but only one reviewer is
++*responsible* for any given dimension.
++
++| Dimension                     | Reviewer A | Reviewer B |
++|-------------------------------|:----------:|:----------:|
++| Logic correctness             |     X      |            |
++| Security (path / injection)   |     X      |            |
++| CUDA kernel / Python perf     |     X      |            |
++| Idiomatic Python/CUDA/C++     |     X      |            |
++| Spec acceptance criteria      |            |     X      |
++| Test coverage + meaningfulness|            |     X      |
++| Edge cases (NaN, empty, 1-frame) |        |     X      |
++| Integration with pixel-based OSS |        |     X      |
++| Public API / format regressions |          |     X      |
++
++The judge is **not** a third reviewer. It does no fresh code reading
++beyond using the diff to disambiguate reviewer disagreements. Its
++output is purely structured triage.
++
++## 3. Output schemas
++
++Reviewer JSON (per finding):
++
++```json
++{
++  "severity": "high | medium | low",
++  "category": "correctness | security | performance | ... ",
++  "file": "oss/gaussian/renderer/splat.cu",
++  "lines": "L120-L156",
++  "issue": "Shared-memory tile read is not coalesced for non-aligned widths.",
++  "suggested_fix": "Pad tile width to 32 or use vectorised float4 loads."
++}
++```
++
++Reviewer report wraps a list of these plus `reviewer_id`, `sprint`, and a
++short summary paragraph. Judge output:
++
++```json
++{
++  "verdict": "APPROVE | REQUEST_CHANGES | BLOCK",
++  "rationale": "...",
++  "blocking_issues":     [ <Finding>, ... ],
++  "non_blocking_issues": [ <Finding>, ... ]
++}
++```
++
++The judge re-classifies findings into blocking / non-blocking using
++its own rubric; severity from the reviewer is advisory.
++
++## 4. Reviewer prompt (A) -- ready to use
++
++```
++You are Reviewer A in the OSS-Gaussian sprint review pipeline.
++
++## Your concern: Implementation correctness
++Review ONLY: correctness, security (path validation, no injection),
++performance (CUDA occupancy, divergence, bandwidth, hot loops),
++idiomatic Python / CUDA / C++ style. Do NOT comment on spec
++adherence, test coverage, or integration risks -- those belong to
++Reviewer B.
++
++## Output
++Single JSON object, no prose:
++{
++  "reviewer_id": "A",
++  "sprint": <N>,
++  "summary": "<one paragraph>",
++  "findings": [
++    { "severity": "high|medium|low",
++      "category": "correctness|security|performance|style|memory|concurrency",
++      "file": "...", "lines": "L<a>-L<b>",
++      "issue": "...", "suggested_fix": "..." }
++  ]
++}
++
++Severity rubric: high = ships a bug / sec hole / >10% perf regression.
++medium = correctness smell, missing bounds check, suboptimal kernel.
++low = style / naming / minor idiom.
++```
++
++## 5. Reviewer prompt (B) -- ready to use
++
++```
++You are Reviewer B in the OSS-Gaussian sprint review pipeline.
++
++## Your concern: Spec adherence + integration
++Review ONLY: spec acceptance criteria, test coverage and
++meaningfulness, edge cases (empty, NaN/Inf, zero-tile, 1-frame,
++mixed precision), integration risk against existing pixel-based
++OSS-RG / OSS-SR / OSS-Pico / OSS-FX, regression risk on public APIs,
++on-disk formats, tensor shapes, CLI flags.
++
++Do NOT comment on low-level correctness, performance, or style.
++
++## Output
++Same JSON envelope as Reviewer A but with "reviewer_id": "B" and
++category drawn from: spec_adherence | test_coverage | edge_case |
++integration_risk | regression_risk.
++
++Severity rubric: high = spec criterion missing OR breaks existing
++pipeline. medium = weak coverage on a new path or plausible edge case
++unaddressed. low = naming consistency / doc gap.
++```
++
++## 6. Judge prompt -- ready to use
++
++```
++You are the Judge. Two reviewers (A: correctness; B: spec+integration)
++have submitted JSON findings. You do NOT re-review the code; you weigh
++the findings against the diff and decide whether sprint <N> closes.
++
++Decision rubric:
++- APPROVE         -- no highs, mediums all non-blocking style/test gaps.
++- REQUEST_CHANGES -- some medium/high findings fixable in <= 1 day.
++- BLOCK           -- a high requiring redesign, OR reviewers disagree
++                     materially and you cannot resolve from the diff.
++
++Conflict rule: integration concerns beat performance optimism;
++correctness bugs beat "spec satisfied".
++
++Output single JSON object:
++{ "verdict": "...", "rationale": "...",
++  "blocking_issues": [...], "non_blocking_issues": [...] }
++```
++
++## 7. Sample workflow
++
++```bash
++# End of sprint 3
++git fetch origin
++python -m oss.gaussian.review.run \
++    --sprint 3 \
++    --commit-range origin/main..HEAD
++
++# Exit 0 -> sprint 3 closes, sprint 4 begins.
++# Exit 1 -> author addresses blocking_issues from judge.json, re-pushes,
++#          re-runs the same command.
++# Exit 3 -> escalation: human reviews judge.json + both reports.
++```
++
++Artifacts land in `oss/gaussian/review/artifacts/sprint-3/`. They are
++checked in (small JSON files) so the audit trail survives across
++machines.
++
++## 8. What is NOT in v0
++
++- No actual subagent dispatch -- `run.py` has a `dispatch_fn = None`
++  placeholder. The next agent wires it to Claude Agent SDK or the
++  `claude` CLI. The interface is tiny: `Callable[[str, str], str]`
++  taking `(system_prompt, user_prompt)` and returning raw text.
++- No automatic re-run loop on `REQUEST_CHANGES` -- the author drives
++  the loop manually for now. A wrapper script can be added later.
++- No cross-sprint trend analysis. Each sprint is judged in isolation.
++
++## 9. File map
++
++| File                                                | Purpose                                    |
++|-----------------------------------------------------|--------------------------------------------|
++| `oss/gaussian/review/run.py`                        | CLI entrypoint, git plumbing, orchestration |
++| `oss/gaussian/review/reviewers.py`                  | A + B prompts and dispatch                 |
++| `oss/gaussian/review/judge.py`                      | Judge prompt and dispatch                  |
++| `oss/gaussian/review/schema.py`                     | Dataclass schemas + JSON I/O               |
++| `oss/gaussian/review/README.md`                     | Operator-facing quick start                |
++| `oss/gaussian/review/artifacts/sprint-N/*.json`     | Per-sprint review artifacts (generated)    |
+diff --git a/docs/superpowers/d3d12-hook-design.md b/docs/superpowers/d3d12-hook-design.md
+new file mode 100644
+index 0000000..568dda0
+--- /dev/null
++++ b/docs/superpowers/d3d12-hook-design.md
+@@ -0,0 +1,137 @@
++# OSS-Gaussian: D3D12 Hook Design (Cyberpunk 2077, RED Engine 4)
++
++**Sprint 2 target:** Windows / RTX 3080 Ti, Cyberpunk 2077 (DX12). Replace DLSS, harvest G-buffer for our neural upscaler, run side-by-side comparison vs native DLSS.
++
++---
++
++## 1. Recommended hook architecture
++
++**One-line decision: ship a renamed `nvngx.dll` proxy that does (a) NGX API spoofing for DLSS replacement and (b) a Detours/MinHook DXGI+D3D12 inline hook for G-buffer capture, in a single in-process module.**
++
++Rejected alternatives: pure `nvngx_dlss.dll` swap exposes only `EvaluateFeature` (no back-buffer access for compare overlay, no Frame-Gen path); pure DXGI proxy ends up needing NGX spoofing too. The combined approach is OptiScaler's production-proven pattern; for Cyberpunk it recommends `dxgi.dll` or `wininet.dll` ([OptiScaler wiki](https://github.com/optiscaler/OptiScaler/wiki/Cyberpunk-2077)).
++
++**Concrete plan:** ship `oss_gaussian.dll` renamed to `dxgi.dll` in `Cyberpunk 2077\bin\x64\`. On `DllMain`: (1) load real system `dxgi.dll`, forward unrelated exports; (2) Detours-hook `D3D12CreateDevice`, `IDXGIFactory*::CreateSwapChain*`, `IDXGISwapChain::Present`, `ID3D12CommandQueue::ExecuteCommandLists`; (3) intercept the game's `LoadLibrary("nvngx_dlss.dll")` and return our module so our `NVSDK_NGX_D3D12_*` exports get the calls. Mirrors OptiScaler's "hooks factory creation, DXGI, D3D11, and D3D12 API calls" stack ([DeepWiki](https://deepwiki.com/optiscaler/OptiScaler/3.2-vulkan-hooking)).
++
++## 2. DLL filenames + on-disk locations (Cyberpunk 2077)
++
++Game install root example: `C:\Program Files (x86)\Steam\steamapps\common\Cyberpunk 2077\`
++
++| File | Path (relative to game root) | Role |
++| --- | --- | --- |
++| `Cyberpunk2077.exe` | `bin\x64\` | Main executable, loads NGX |
++| `nvngx_dlss.dll` | `bin\x64\` | DLSS Super Resolution (the one we replace/spoof) |
++| `nvngx_dlssg.dll` | `bin\x64\` | DLSS Frame Generation (out of scope Sprint 2) |
++| `nvngx_dlssd.dll` | `bin\x64\` (when RR enabled) | DLSS Ray Reconstruction (out of scope Sprint 2) |
++| `dxgi.dll` (ours) | `bin\x64\` | Our proxy. Game-local DLL search wins over system32 |
++
++DLSS file install path is confirmed: `Cyberpunk 2077\bin\x64\nvngx_dlss.dll` ([TechPowerUp DLSS DLL](https://www.techpowerup.com/download/nvidia-dlss-dll/), [PotatoOfDoom/CyberFSR2](https://github.com/PotatoOfDoom/CyberFSR2)). Always rename original to `nvngx_dlss.dll.bak` before deploy.
++
++## 3. NGX function signatures we must implement
++
++These are the D3D12 entry points exported by `nvngx_dlss.dll` that any DLSS-integrated game (Cyberpunk included) calls. Reproducing them is what makes DLSS substitution invisible to the game ([NVIDIA/DLSS headers](https://github.com/NVIDIA/DLSS/blob/main/include/nvsdk_ngx.h), [NGX Programming Guide](https://docs.nvidia.com/ngx/ngx-archived/ngx-100/programming-guide/index.html)).
++
++```cpp
++NVSDK_NGX_Result NVSDK_NGX_D3D12_Init(
++    unsigned long long InApplicationId, const wchar_t* InApplicationDataPath,
++    ID3D12Device* InDevice, NVSDK_NGX_Version InSDKVersion);
++
++NVSDK_NGX_Result NVSDK_NGX_D3D12_Init_Ext(/* + InFeatureInfo, InParameters */);
++
++NVSDK_NGX_Result NVSDK_NGX_D3D12_Shutdown1(ID3D12Device* InDevice);
++
++NVSDK_NGX_Result NVSDK_NGX_D3D12_GetCapabilityParameters(NVSDK_NGX_Parameter** OutParameters);
++NVSDK_NGX_Result NVSDK_NGX_D3D12_AllocateParameters(NVSDK_NGX_Parameter** OutParameters);
++NVSDK_NGX_Result NVSDK_NGX_D3D12_DestroyParameters(NVSDK_NGX_Parameter* InParameters);
++
++NVSDK_NGX_Result NVSDK_NGX_D3D12_CreateFeature(
++    ID3D12GraphicsCommandList* InCmdList, NVSDK_NGX_Feature InFeatureID,
++    NVSDK_NGX_Parameter* InParameters, NVSDK_NGX_Handle** OutHandle);
++
++NVSDK_NGX_Result NVSDK_NGX_D3D12_EvaluateFeature(
++    ID3D12GraphicsCommandList* InCmdList, const NVSDK_NGX_Handle* InFeatureHandle,
++    const NVSDK_NGX_Parameter* InParameters,
++    PFN_NVSDK_NGX_ProgressCallback InCallback);
++
++NVSDK_NGX_Result NVSDK_NGX_D3D12_ReleaseFeature(NVSDK_NGX_Handle* InHandle);
++```
++
++The interesting one is `EvaluateFeature` — that is where Cyberpunk hands us, via the `NVSDK_NGX_Parameter` key/value bag, **everything we need**: `Color`, `Output`, `Depth`, `MotionVectors`, `Jitter.Offset.{X,Y}`, `MV.Scale.{X,Y}`, `Exposure`, `Reset`, `Subrect.*`, plus the flag `NVSDK_NGX_DLSS_Feature_Flags_MVJittered` ([NVIDIA forum reference](https://forums.developer.nvidia.com/t/motion-vector-flag-nvsdk-ngx-dlss-feature-flags-mvjittered-seems-to-work-abnormally/294576)). Parameter keys are string-named in `nvsdk_ngx_defs.h`. **All G-buffer extraction for the upscaler runs through this single function** — we don't even need to scrape DXGI for it.
++
++## 4. G-buffer extraction approach
++
++Two-layer strategy:
++
++**Layer A — NGX param scrape (primary, free):** Inside our spoofed `NVSDK_NGX_D3D12_EvaluateFeature` we read these `NVSDK_NGX_Parameter` keys and copy the resources we need:
++
++- `NVSDK_NGX_Parameter_Color` → input low-res HDR color (`ID3D12Resource*`)
++- `NVSDK_NGX_Parameter_Depth` → linear/non-linear depth (game tells us which via flags)
++- `NVSDK_NGX_Parameter_MotionVectors` → 2-channel float MV, scaled by `MV.Scale.{X,Y}`
++- `NVSDK_NGX_Parameter_Jitter_Offset_{X,Y}` → sub-pixel jitter for TAA
++- `NVSDK_NGX_Parameter_Exposure_Texture` → optional autoexposure
++- `NVSDK_NGX_Parameter_Output` → target we must write upscaled result to
++- `NVSDK_NGX_Parameter_Reset` → camera-cut signal
++
++This is the production path. OptiScaler does exactly this for FSR/XeSS substitution: "Input is the upscaler used in game settings, and Output the one selected in Opti Overlay" — pass-through from the same param dict ([OptiScaler README](https://github.com/optiscaler/OptiScaler)). Implement an internal copy queue + readback heaps for offline dumps; for live upscale we route the resources straight to our compute pipeline.
++
++**Layer B — DXGI/D3D12 swapchain scrape (secondary, for back-buffer + final-frame compare):** Hook `IDXGISwapChain::Present` via vtable patch on the swapchain returned from `CreateSwapChainForHwnd`. This is the standard ReShade pattern ([reshade/source/dxgi/dxgi_swapchain.cpp](https://github.com/crosire/reshade/blob/main/source/dxgi/dxgi_swapchain.cpp), [UniversalHookX D3D12 backend](https://github.com/bruhmoment21/UniversalHookX/blob/main/UniversalHookX/src/hooks/backend/dx12/hook_directx12.cpp)). For D3D12 we additionally hook `ID3D12CommandQueue::ExecuteCommandLists` so we can fence and snapshot the post-Present back-buffer to a CPU readback heap for the side-by-side comparison overlay.
++
++We do **not** try to identify motion-vector RTs by scraping `OMSetRenderTargets` / `Resource::SetName` — that path is fragile across RED Engine patches. Layer A makes it unnecessary.
++
++## 5. Reference implementations to study
++
++Read in this order:
++
++1. **OptiScaler** — `OptiScaler/Hooks/HooksDx.cpp`, `OptiScaler/NVNGX_DLSS.cpp`, `OptiScaler/Inputs/DLSSFeatureDx12.cpp`, `OptiScaler/Inputs/FSR2FeatureDx12.cpp`. This is the closest analog to what we are building. Repo: <https://github.com/optiscaler/OptiScaler>. Cyberpunk-specific notes: <https://github.com/optiscaler/OptiScaler/wiki/Cyberpunk-2077>.
++2. **PotatoOfDoom/CyberFSR2** — original Cyberpunk-targeted DLSS→FSR2 spoof; smaller, easier to read first. <https://github.com/PotatoOfDoom/CyberFSR2>.
++3. **NVIDIA/DLSS public SDK** — `include/nvsdk_ngx.h`, `nvsdk_ngx_defs.h`, `nvsdk_ngx_helpers.h`, `nvsdk_ngx_params.h`. <https://github.com/NVIDIA/DLSS>.
++4. **ReShade** — `source/dxgi/dxgi_swapchain.cpp`, `source/d3d12/d3d12_command_queue.cpp`. Reference for swapchain proxying done right. <https://github.com/crosire/reshade>.
++5. **Nukem9/dlssg-to-fsr3** — production example of replacing `nvngx_dlssg.dll` (Frame Gen). Useful when we move past Sprint 2. <https://github.com/Nukem9/dlssg-to-fsr3>.
++6. **NVIDIA-RTX/Streamline** — official DLSS integration reference, shows expected param layouts. <https://github.com/NVIDIA-RTX/Streamline>.
++
++## 6. Risks
++
++- **Anti-cheat: low risk for this title.** Cyberpunk 2077 is single-player and ships **without** EasyAntiCheat / BattlEye / Denuvo Anti-Cheat. The game has had Denuvo DRM stripped (DRM-free distribution). OptiScaler, CyberFSR2, and DLSS Enabler have all been used widely without bans. Standard mod-warning still applies for any future multiplayer addition. ([OptiScaler README warning](https://github.com/optiscaler/OptiScaler), [Steam guide](https://steamcommunity.com/sharedfiles/filedetails/?id=3363435021)).
++- **Version drift.** RED Engine 4 + DLSS DLL upgrades happen on every patch (currently the DLSS family is in the **3.7+ / 310.x** range as of recent patches — [TechPowerUp DLSS 310.6.0](https://www.techpowerup.com/download/nvidia-dlss-dll/), [DSOGaming DLSS 3.7](https://www.dsogaming.com/videotrailer-news/nvidia-dlss-3-7-brings-visual-improvements-to-cyberpunk-2077/)). NGX param keys are stable; DLL exports are stable; but new flags (Ray Reconstruction, MVJittered behavior) appear. Pin the DLSS SDK header version we target (4.x SDK headers) and assert on unknown flags rather than silently ignoring.
++- **Path Tracing path forces DLSS-RR (`nvngx_dlssd.dll`).** OptiScaler's wiki flags "the game tries to force DLSS RR, leading to a noisy image" on AMD/Intel ([Cyberpunk wiki page](https://github.com/optiscaler/OptiScaler/wiki/Cyberpunk-2077)). Sprint 2 should default to **PT off, RT Reflections OK, DLSS SR mode** to keep the input set clean. Disable DLSS-RR via param spoofing if we detect it.
++- **D3D12 ownership/state transitions.** Resources arriving in `EvaluateFeature` are in NGX's expected state (`UNORDERED_ACCESS` for output, `NON_PIXEL_SHADER_RESOURCE` for inputs). We must transition back to whatever the game expects on exit, or the next frame's barriers assert ([MS docs on cross-queue resource ownership](https://learn.microsoft.com/en-us/windows/win32/direct3d12/executing-and-synchronizing-command-lists)).
++- **Jitter sign convention.** RED Engine reports jitter in pixels with one specific sign convention; FSR/XeSS use opposite signs in some versions. CyberFSR2 has the empirically correct flip — copy from there rather than re-deriving.
++- **Allocator / readback budget.** Each captured frame at 1080p input = ~30 MB across color+depth+MV. At 60 fps that's 1.8 GB/s into a ring of readback heaps. Cap retained frames or stream to NVMe.
++
++## 7. Sprint 2 task list
++
++1. Stand up `oss_gaussian.dll` Visual Studio 2022 project (C++20, /MT, x64). Add Microsoft Detours and `nvsdk_ngx.h` headers.
++2. Implement `dxgi.dll` proxy: forward all real exports to the system DLL, detoured `CreateDXGIFactory{,1,2}`.
++3. Implement the 10 `NVSDK_NGX_D3D12_*` exports listed in §3 as pass-throughs that log+forward to the real `nvngx_dlss.dll` first; verify Cyberpunk runs unchanged with our DLL in `bin\x64\`.
++4. Hook `IDXGISwapChain::Present` and `ID3D12CommandQueue::ExecuteCommandLists` via vtable patch on swapchain creation. Add fence-based back-buffer snapshot path.
++5. In `EvaluateFeature`, read all NGX params (Color/Depth/MV/Jitter/Exposure/Output/Reset/MV.Scale/Subrect) and dump first 100 frames to disk as DDS for offline inspection. Verify motion vectors visually match camera motion.
++6. Wire G-buffer scrape into our neural upscaler's input pipeline (compute queue, no host roundtrip).
++7. Replace DLSS path: bypass real `nvngx_dlss.dll`, run our network on Color+Depth+MV, write to `Output` resource with correct state transitions. A/B toggle via in-game overlay key.
++8. Build comparison overlay (split-screen DLSS vs ours) using ImGui DX12 backend hooked through the swapchain.
++9. Capture session recorder: time-aligned RGB + depth + MV + ground-truth-DLSS-output dumps for training/eval.
++10. Per-frame perf telemetry (CPU + GPU timestamps via `ID3D12QueryHeap`), CSV export.
++11. Robustness: handle device removal, swapchain resize, alt-tab, resolution changes, DLSS preset changes mid-session.
++12. Packaging: signed `.dll`, install/uninstall script, `nvngx_dlss.dll.bak` rollback, README with the OptiScaler-style proxy-name fallback list (`dxgi.dll` → `winmm.dll` → `version.dll` → `dbghelp.dll`) per [OptiScaler manual install](https://github.com/optiscaler/OptiScaler/wiki/Manual-Installation).
++
++---
++
++## Sources
++
++- [OptiScaler repo](https://github.com/optiscaler/OptiScaler) — substitution architecture, supported APIs, anti-cheat warning.
++- [OptiScaler Cyberpunk 2077 wiki](https://github.com/optiscaler/OptiScaler/wiki/Cyberpunk-2077) — `dxgi.dll` / `wininet.dll` proxy names, RR forcing on path tracing.
++- [OptiScaler Manual Installation](https://github.com/optiscaler/OptiScaler/wiki/Manual-Installation) — full proxy-DLL fallback list.
++- [OptiScaler DirectX/Vulkan hooking — DeepWiki](https://deepwiki.com/optiscaler/OptiScaler/3.2-vulkan-hooking) — Detours-based DXGI/D3D12 hook list.
++- [PotatoOfDoom/CyberFSR2](https://github.com/PotatoOfDoom/CyberFSR2) — predecessor; Cyberpunk-specific NGX param handling.
++- [NVIDIA/DLSS SDK headers](https://github.com/NVIDIA/DLSS/blob/main/include/nvsdk_ngx.h) — public NGX surface.
++- [NVIDIA NGX Programming Guide](https://docs.nvidia.com/ngx/ngx-archived/ngx-100/programming-guide/index.html) — Init/CreateFeature/EvaluateFeature contract.
++- [NGX SDK Integration on DeepWiki](https://deepwiki.com/NVIDIA/DLSS/4-ngx-sdk-integration) — function-signature reference.
++- [NVIDIA forum — MVJittered flag](https://forums.developer.nvidia.com/t/motion-vector-flag-nvsdk-ngx-dlss-feature-flags-mvjittered-seems-to-work-abnormally/294576) — jitter convention notes.
++- [TechPowerUp DLSS DLL 310.6.0](https://www.techpowerup.com/download/nvidia-dlss-dll/) — current DLSS DLL version, install path.
++- [DSOGaming DLSS 3.7 Cyberpunk](https://www.dsogaming.com/videotrailer-news/nvidia-dlss-3-7-brings-visual-improvements-to-cyberpunk-2077/) — version baseline.
++- [ReShade DXGI swapchain](https://github.com/crosire/reshade/blob/main/source/dxgi/dxgi_swapchain.cpp) — production swapchain proxy.
++- [UniversalHookX D3D12](https://github.com/bruhmoment21/UniversalHookX/blob/main/UniversalHookX/src/hooks/backend/dx12/hook_directx12.cpp) — minimal D3D12 Present-hook reference.
++- [eugen15/directx-present-hook](https://github.com/eugen15/directx-present-hook) — small Present-hook example.
++- [Microsoft — ID3D12CommandQueue::ExecuteCommandLists](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12commandqueue-executecommandlists) — execution semantics.
++- [Microsoft — D3D12 command list synchronization](https://learn.microsoft.com/en-us/windows/win32/direct3d12/executing-and-synchronizing-command-lists) — resource state ownership.
++- [Nukem9/dlssg-to-fsr3](https://github.com/Nukem9/dlssg-to-fsr3) — DLSSG DLL replacement reference.
++- [NVIDIA-RTX/Streamline](https://github.com/NVIDIA-RTX/Streamline) — DLSS integration reference.
++- [Steam guide — DLSS/FSR upgrades for Cyberpunk](https://steamcommunity.com/sharedfiles/filedetails/?id=3363435021) — community-confirmed safe DLL swap workflow.
+diff --git a/docs/superpowers/integration-points.md b/docs/superpowers/integration-points.md
+new file mode 100644
+index 0000000..76a1baa
+--- /dev/null
++++ b/docs/superpowers/integration-points.md
+@@ -0,0 +1,384 @@
++# OSS + Gaussian Temporal Canvas: Integration Points
++
++**Date:** 2026-05-01  
++**Scope:** Mapping parallel Gaussian-based track (`oss/gaussian/`) integration with existing pixel-based OSS modules.  
++**Status:** Pre-alpha (OSS v0.2.0.dev0, Gaussian track scaffolding ready)
++
++---
++
++## Executive Summary
++
++The existing OSS codebase (OSS, OSSRG, OSSPico, OSSFx) follows a strict tiered-model pattern with unified training, inference, and export pipelines. The Gaussian temporal canvas should remain functionally independent while reusing infrastructure where tight ABI contracts exist: dataset loaders, training harness dispatch, inference backend dispatcher, and test scaffolding.
++
++**Key decision:** Keep `oss/gaussian/` as a **parallel track** that mirrors OSS patterns (train, inference, export, bench) rather than merging into shared modules. This avoids breaking the frozen handoff contracts (e.g., `HANDOFF_FEATURE_CHANNELS=32`) and allows Gaussian components to evolve independently.
++
++---
++
++## 1. Reusable Pieces (Import/Wrap)
++
++### 1.1 **Dataset Loaders** (oss/data/)
++
++**Can reuse:**
++- `oss.data.noisebase.NoiseBaseDataset` — Gaussian temporal models may want LR multi-frame sequences with GT + aux buffers. The current NoiseBase loader emits `{color_lr, gt_hr, motion_lr, depth_lr, normals_lr, albedo_lr}` per frame, which Gaussian can consume directly.
++- `oss.data.sintel_fx.SintelFxDataset` — Real optical flow for temporal consistency training. Gaussian extrapolation benefits from the same Sintel sequences.
++- `oss.data.vimeo90k_fx.Vimeo90kDataset` — Diverse real-world motion. Can feed both OSS-FX and Gaussian temporal modules.
++
++**Recommendation:**
++- `oss/gaussian/` should **import and reuse** `oss.data` loaders, not fork them.
++- If Gaussian-specific preprocessing (e.g., frame stacking, multi-scale splat) is needed, wrap loaders in a new `oss/gaussian/data/` module that inherits from `oss.data` base classes.
++
++### 1.2 **Loss Functions** (oss/train/losses.py)
++
++**Can reuse:**
++- `CompositeLoss` — relative_l2, SSIM, LPIPS, wavelet components are generic.
++- `temporal_consistency_loss` — Enforces frame-to-frame coherence; directly applicable to Gaussian canvas prediction.
++- `wavelet_loss` — For high-frequency detail preservation in splat/rendering outputs.
++
++**Recommendation:**
++- Import `oss.train.losses` directly in `oss/gaussian/train/`.
++- If Gaussian-specific losses emerge (e.g., splat-coherence penalty, Gaussian-specific KL divergence), add them to `oss/gaussian/train/losses_gaussian.py` and keep `oss.train.losses` unchanged.
++
++### 1.3 **Inference Backend Dispatcher** (oss/infer.py)
++
++**Can reuse:**
++- `InferenceSession` class — Auto-selects TensorRT, ORT variants, NCNN, CoreML, OpenVINO based on available hardware.
++- Backend selection logic (`_select_backend`, `_BACKEND_BUILDERS` dict).
++- TensorRT caching per GPU arch (`.cache/oss/engines/`).
++
++**Recommendation:**
++- **Share** `InferenceSession` verbatim. It accepts any ONNX or CoreML model; Gaussian exports are indistinguishable at the dispatcher level.
++- Both OSS and Gaussian checkpoints should export to the same ONNX opset (17) and CoreML MLPackage format.
++- Keep Gaussian export logic (`oss/gaussian/export/`) separate, but call the same backend builders.
++
++### 1.4 **Model Building Blocks** (oss/model/blocks.py)
++
++**Can reuse:**
++- `ConvBlock` (Conv→GroupNorm→SiLU)
++- `DownBlock`, `UpBlock` (stride-2 down, bilinear up)
++- Channel assertions (multiples of 8 for cooperative-matrix tiling)
++
++**Recommendation:**
++- Gaussian network architectures should use the same blocks; avoids divergent optimization patterns across the codebase.
++- If Gaussian needs Attention or MLP blocks, add them to `oss.model.blocks` with a Gaussian-specific prefix (e.g., `GaussianAttentionBlock`).
++
++### 1.5 **Evaluation Harness** (oss/bench/)
++
++**Can reuse:**
++- `QualityRunner` — Loads a checkpoint, runs inference on LR/GT pairs, scores with PSNR/SSIM/LPIPS/timing.
++- `fsr1_reference.py` — FSR1 upscaler baseline for quality comparison.
++
++**Recommendation:**
++- Extend `QualityRunner` to support both OSS and Gaussian models via a `model_type` parameter.
++- Keep `oss/bench/` as the shared evaluation entry point; let Gaussian-specific harnesses live in `oss/gaussian/bench/` if needed.
++
++---
++
++## 2. Conflict Points
++
++### 2.1 **Module Naming & `__init__.py` Exports**
++
++**Current state:**
++```python
++# oss/model/__init__.py
++from .oss_rg import OSSRG, HANDOFF_FEATURE_CHANNELS
++from .oss import OSS
++__all__ = ["OSSRG", "OSS", "HANDOFF_FEATURE_CHANNELS"]
++```
++
++**Conflict:** If Gaussian defines its own `GaussianCanvas` model, importing both `from oss.model import OSS` and `from oss.gaussian.model import GaussianCanvas` is unambiguous — but having separate `oss/model/` and `oss/gaussian/model/` trees can confuse users about which is the canonical location.
++
++**Solution:**
++- Keep `oss/model/` for pixel-based (OSS, OSSRG, OSSPico, OSSFx).
++- Create `oss/gaussian/model/` for Gaussian-based components (GaussianCanvas, GaussianClassifier, etc.).
++- In `oss/gaussian/__init__.py`, explicitly export Gaussian models:
++  ```python
++  from .model import GaussianCanvas
++  __all__ = ["GaussianCanvas"]
++  ```
++
++### 2.2 **Training Script Naming**
++
++**Current state:**
++- `oss/train/train_sr.py` — ORU standalone
++- `oss/train/train_rg.py` — ORD (OSSRG) standalone
++- `oss/train/train_paired.py` — ORD + ORU two-stage
++- `oss/train/train_pico.py` — OSSPico
++- `oss/train/train_fx.py` — OSSFx
++
++**Conflict:** If Gaussian has its own trainer, avoid naming collisions. Do not create `oss/train/train_canvas.py` at the OSS level.
++
++**Solution:**
++- Put Gaussian trainers in `oss/gaussian/train/` with clear names:
++  - `oss/gaussian/train/train_canvas.py`
++  - `oss/gaussian/train/train_temporal.py`
++  - etc.
++- Cloud launchers in `scripts/` can dispatch to either tree: `scripts/lambda_train_gaussian_canvas.py` vs. `scripts/lambda_train_pico.py`.
++
++### 2.3 **Handoff Feature Contract**
++
++**Current state:**
++```python
++# oss/model/oss_rg.py
++HANDOFF_FEATURE_CHANNELS = 32
++```
++This is a frozen contract consumed by OSS (in "features" mode) and exported/cached globally.
++
++**Conflict:** Gaussian temporal canvas might benefit from a different feature width (e.g., 64 channels for richer temporal information).
++
++**Solution:**
++- **Do not** override `HANDOFF_FEATURE_CHANNELS` in Gaussian code.
++- If Gaussian needs a different feature contract, define it locally:
++  ```python
++  # oss/gaussian/model/canvas.py
++  GAUSSIAN_TEMPORAL_FEATURE_CHANNELS = 64
++  ```
++- Keep OSS and Gaussian feature paths separate; do not try to pair them at export time.
++
++### 2.4 **Tier/Scale Naming**
++
++**Current state:**
++- Tiers: `lite`, `standard`, `heavy`
++- Scale factors: `1.3, 1.5, 1.7, 2.0`
++
++**Conflict:** Gaussian canvas may not need tiering (e.g., one fixed size) or use different tier semantics (e.g., temporal window depth instead of parameter count).
++
++**Solution:**
++- Gaussian tier system is independent. Define in `oss/gaussian/model/config.py`:
++  ```python
++  GAUSSIAN_TIER_CONFIGS = {
++      "light": {"splat_features": 128, "temporal_depth": 3, ...},
++      "standard": {"splat_features": 256, "temporal_depth": 5, ...},
++  }
++  ```
++- Do not force Gaussian to inherit OSS tier naming; let it evolve independently.
++
++---
++
++## 3. Recommended Integration Pattern
++
++### 3.1 **Directory Layout**
++
++```
++oss/
++├── model/                  # Pixel-based (OSS, OSSRG, OSSPico, OSSFx)
++├── train/                  # Shared training primitives (data.py, losses.py, ...)
++├── inference/              # Shared backend dispatcher
++├── export/                 # ONNX/CoreML export (extend for Gaussian)
++├── bench/                  # Shared eval harness
++├── gaussian/               # Parallel Gaussian-based track
++│   ├── __init__.py
++│   ├── model/              # GaussianCanvas, GaussianClassifier, ...
++│   ├── train/              # Gaussian-specific trainers (inherit from oss.train)
++│   ├── inference/          # Gaussian-specific runners (optional, mostly uses oss.infer)
++│   ├── export/             # Gaussian model export (can wrap oss.export)
++│   └── bench/              # Gaussian-specific eval
++```
++
++### 3.2 **Training Pattern**
++
++Example: Gaussian temporal canvas trainer inherits from OSS patterns.
++
++```python
++# oss/gaussian/train/train_canvas.py
++from oss.data import NoiseBaseDataset
++from oss.train import CompositeLoss, temporal_consistency_loss
++from oss.gaussian.model import GaussianCanvas
++
++def main():
++    ds = NoiseBaseDataset(root=args.data, augment=True)
++    dl = DataLoader(ds, batch_size=args.batch_size, shuffle=True)
++    
++    model = GaussianCanvas(...).to(device)
++    loss_fn = CompositeLoss(w_temporal=0.1)  # Use shared loss
++    opt = torch.optim.Adam(model.parameters(), lr=args.lr)
++    
++    for epoch in range(args.epochs):
++        for batch in dl:
++            # oss.data loaders emit {color_lr, gt_hr, motion_lr, ...}
++            pred_canvas = model(
++                color_lr=batch["color_lr"],
++                motion_lr=batch["motion_lr"],
++                ...
++            )
++            loss = loss_fn(pred_canvas, batch["gt_hr"])
++            opt.zero_grad()
++            loss.backward()
++            opt.step()
++```
++
++### 3.3 **Inference Pattern**
++
++Gaussian exports ONNX (same as OSS). Inference dispatcher is shared:
++
++```python
++# User code
++from oss.infer import InferenceSession
++
++sess = InferenceSession("gaussian_canvas.onnx")  # Auto-selects backend
++output = sess.run({"color_lr": arr, "motion_lr": arr2})
++```
++
++No Gaussian-specific dispatcher needed unless Gaussian models have radically different input/output contracts (e.g., multi-head or sequence inputs). Keep it simple initially.
++
++### 3.4 **Export Pattern**
++
++```python
++# oss/gaussian/export/export_gaussian.py
++from oss.gaussian.model import GaussianCanvas
++
++def export_gaussian_canvas(model, out_path, ...):
++    # Similar to oss/export/export_oss.py
++    torch.onnx.export(
++        model,
++        dummy_inputs,
++        str(out_path),
++        opset_version=17,
++        input_names=[...],
++        output_names=[...],
++        dynamic_axes={...},  # Batch + spatial dynamic
++    )
++    # Optionally validate parity with oss.export utilities
++```
++
++---
++
++## 4. Test Harness Reuse
++
++### 4.1 **Existing Test Infrastructure**
++
++**Location:** `tests/`
++
++**Existing markers:**
++```python
++@pytest.mark.gpu  # Requires CUDA GPU
++@pytest.mark.mitsuba  # Requires Mitsuba 3
++```
++
++**Can reuse:**
++- PyTest fixture setup (device selection, checkpoint staging)
++- Smoke-test patterns (synthetic batches, quick forward passes)
++- ONNX parity validation (via `test_onnx_parity.py`)
++- Benchmark timing harness (via `test_safety_harness.py`)
++
++### 4.2 **Gaussian Test Strategy**
++
++- **Smoke tests:** `tests/test_gaussian_smoke.py` — forward pass on synthetic data, no GPU.
++- **Parity tests:** `tests/test_gaussian_onnx_parity.py` — PyTorch vs ONNX outputs.
++- **Temporal tests:** `tests/test_gaussian_temporal_consistency.py` — verify frame-to-frame coherence.
++- **Dataset tests:** `tests/test_gaussian_data.py` — Gaussian-specific data loading (reuses base loaders).
++
++**Recommendation:**
++- Integrate Gaussian tests into the same `tests/` directory, not a separate `oss/gaussian/tests/`.
++- Use the same `conftest.py` fixtures and markers.
++- Add a `--gaussian` command-line filter to pytest for selective runs:
++  ```
++  pytest tests/ -k "not gaussian"  # Run pixel-based tests only
++  pytest tests/ -k "gaussian"      # Run Gaussian tests only
++  ```
++
++---
++
++## 5. Scripts to Share / Fork
++
++### 5.1 **Cloud Training Launchers**
++
++**Current:**
++- `scripts/lambda_train_pico.py` — Lambda Labs launcher for OSSPico
++- `scripts/runpod_train_pico.py` — RunPod launcher for OSSPico
++- `scripts/lambda_stage_noisebase.py` — Staging NoiseBase to cloud storage
++- `scripts/runpod_setup_check.py` — Sanity check for RunPod env
++
++**Decision:**
++- **Share:** `scripts/lambda_stage_noisebase.py` and `scripts/runpod_setup_check.py` are dataset-agnostic and can be reused verbatim.
++- **Fork:** Create Gaussian-specific launchers:
++  - `scripts/lambda_train_gaussian_canvas.py`
++  - `scripts/runpod_train_gaussian_canvas.py`
++  These inherit the structure and config patterns from OSS launchers but invoke `oss.gaussian.train.train_canvas` instead of `oss.train.train_pico`.
++
++### 5.2 **Dataset Download Scripts**
++
++**Current:**
++- `scripts/download_sintel.sh`
++- `scripts/download_vimeo90k.sh`
++
++**Decision:**
++- **Share:** Both Gaussian and OSS-FX use Sintel and Vimeo-90K. Keep these in `scripts/`.
++- The NoiseBase download (not yet in `scripts/`) should support both when added.
++
++### 5.3 **Benchmark / Evaluation Scripts**
++
++**Current:**
++- `scripts/bench_quality.py` — Generic quality runner
++
++**Decision:**
++- **Extend** `scripts/bench_quality.py` with a `--model` parameter to support both OSS and Gaussian checkpoints:
++  ```bash
++  python scripts/bench_quality.py --model oss_pico --ckpt results/oss_pico.pth --data data/test.exr
++  python scripts/bench_quality.py --model gaussian_canvas --ckpt results/gaussian_canvas.pth --data data/test.exr
++  ```
++
++---
++
++## 6. CI/CD and Build Integration
++
++### 6.1 **PyProject.toml Updates**
++
++**Current entry points:**
++```toml
++[project.optional-dependencies]
++cuda = ["tensorrt>=10.0", "onnxruntime-gpu>=1.18"]
++coreml = ["coremltools>=8.0"]
++vulkan = ["ncnn>=1.0.20240102", "pnnx>=20240410"]
++```
++
++**Decision:**
++- No new optional dependencies for Gaussian (initially). Gaussian models should train/infer with the same backends as OSS.
++- If Gaussian gains specialized requirements (e.g., `pytorch3d` for splat rendering), add them:
++  ```toml
++  gaussian = ["pytorch3d>=0.7"]
++  ```
++
++### 6.2 **Test Markers**
++
++Add to `pyproject.toml`:
++```toml
++[tool.pytest.ini_options]
++markers = [
++    "gpu: requires CUDA GPU",
++    "mitsuba: requires Mitsuba 3",
++    "gaussian: Gaussian temporal canvas tests",
++]
++```
++
++---
++
++## 7. Summary: Do's and Don'ts
++
++### Do:
++- ✓ Reuse `oss.data`, `oss.train.losses`, `oss.infer.InferenceSession`, `oss.model.blocks`.
++- ✓ Keep Gaussian models in `oss/gaussian/model/` separate from pixel-based `oss/model/`.
++- ✓ Export Gaussian to ONNX (opset 17) and CoreML for dispatch to `InferenceSession`.
++- ✓ Use shared test infrastructure (`tests/`) with `@pytest.mark.gaussian`.
++- ✓ Extend cloud launchers (Lambda/RunPod) with Gaussian-specific variants in `scripts/`.
++
++### Don't:
++- ✗ Modify `HANDOFF_FEATURE_CHANNELS` — keep it frozen at 32 for OSS.
++- ✗ Fork dataset loaders; import `oss.data` and wrap if Gaussian-specific preprocessing is needed.
++- ✗ Add Gaussian code to `oss/train/` or `oss/model/` — keep those directories pixel-centric.
++- ✗ Create separate test directories (`oss/gaussian/tests/`) — consolidate in `tests/`.
++- ✗ Redefine tier semantics; let Gaussian evolve independently if tier structure differs.
++
++---
++
++## Deliverables Checklist
++
++- [x] Reusable pieces documented (dataset loaders, losses, backend dispatcher, blocks, eval harness)
++- [x] Conflict points identified and resolved (naming, feature contracts, tier systems)
++- [x] Recommended integration pattern provided (directory layout, training/inference/export examples)
++- [x] Test harness reuse strategy clarified (pytest markers, fixture sharing)
++- [x] Cloud scripts sharing/forking strategy outlined (shared utility scripts, Gaussian-specific launchers)
++- [x] CI/CD integration guidance provided (pyproject.toml, pytest markers)
++
++---
++
++**End of Integration Points Report**
+diff --git a/docs/superpowers/plans/2026-05-01-gaussian-master-plan.md b/docs/superpowers/plans/2026-05-01-gaussian-master-plan.md
+new file mode 100644
+index 0000000..8d7c2d5
+--- /dev/null
++++ b/docs/superpowers/plans/2026-05-01-gaussian-master-plan.md
+@@ -0,0 +1,282 @@
++# OSS-Gaussian — Master Implementation Plan
++
++**Spec:** `docs/superpowers/specs/2026-05-01-gaussian-temporal-canvas-design.md`
++**Branch:** `v0.2-dev` (existing branch, Gaussian track is additive)
++**Total estimate:** 13–14 weeks, 7 sprints + cross-cutting code review pipeline
++
++This plan details Sprint 1 in full. Sprints 2–7 are outlined; each is detailed at sprint kickoff with current information from the prior sprint.
++
++---
++
++## Cross-cutting: Code Review Pipeline
++
++End-of-sprint gate. Two reviewer agents (correctness, spec-adherence) + one judge agent. Verdict gates next sprint start.
++
++- Implementation: `oss/gaussian/review/` (Agent 4 dispatch in progress)
++- Invocation: `python -m oss.gaussian.review.run --sprint N --commit-range <from>..<to>`
++- Verdicts: APPROVE / REQUEST_CHANGES / BLOCK
++- BLOCK escalates to user
++
++---
++
++## Sprint 1 — CUDA Gaussian Renderer Integration
++
++**Goal:** Integrate Image-GS tile-based CUDA renderer into the OSS-Gaussian Python harness. Forward + backward differentiable. Benchmarked on RTX 3080 Ti.
++
++**Estimate:** ~3 days (Image-GS already CUDA, no port).
++
++**Why this first:** Every other sprint depends on the renderer. Validating it works on the 3080 Ti is also a system-readiness check.
++
++### Files
++
++```
++oss/gaussian/renderer/
++  __init__.py                 (existing)
++  vendor/                     T1.1 — Image-GS source vendored
++    image_gs/                 (submodule or copy)
++    LICENSE.image_gs
++  ext/
++    setup.py                  T1.3 — CUDA extension build
++    bindings.cpp              T1.3 — pybind11 wrapper
++    rasterizer.cu             (from vendored Image-GS)
++  rasterizer.py               T1.2 — Python wrapper class
++  differentiable.py           T1.5 — torch.autograd.Function wrapper
++  bench.py                    T1.6 — performance benchmark
++tests/gaussian/
++  test_renderer_forward.py    T1.4
++  test_renderer_backward.py   T1.5
++  test_renderer_bench.py      T1.6 (smoke only; full bench out-of-pytest)
++```
++
++### Tasks
++
++#### T1.1 — Vendor Image-GS source
++
++**Goal:** Image-GS code lives in repo at `oss/gaussian/renderer/vendor/image_gs/` with LICENSE preserved.
++
++**Steps:**
++1. `cd <home>/open-reconstruction-suite/oss/gaussian/renderer && mkdir -p vendor`
++2. `cd vendor && git clone https://github.com/NYU-ICL/image-gs.git image_gs`
++3. Copy `image_gs/LICENSE` → `oss/gaussian/renderer/vendor/LICENSE.image_gs`
++4. Add a top-level `oss/gaussian/renderer/vendor/README.md` documenting attribution + commit hash pinned.
++5. Inspect `image_gs/`'s CUDA rasterizer source — note exact filenames and entry points for T1.3.
++
++**Verify:** `ls oss/gaussian/renderer/vendor/image_gs/` shows source. License is preserved. `git log -1 --format=%H vendor/image_gs/` (or saved to README) gives upstream commit pin.
++
++**Acceptance:** Image-GS rasterizer source compiles standalone with their own setup.py on the 3080 Ti.
++
++#### T1.2 — Python wrapper class
++
++**Goal:** `oss.gaussian.renderer.Rasterizer` — clean Python class wrapping the CUDA rasterizer with typed args (Gaussian tensor, output resolution, top-K, tile size).
++
++**API:**
++```python
++from oss.gaussian.renderer import Rasterizer
++
++renderer = Rasterizer(tile_size=16, top_k=10, device="cuda")
++output = renderer(
++    gaussians,        # (N, 5+n) — μx, μy, θ, sx, sy, color...
++    output_hw=(2160, 3840),
++)
++# output: (3, H, W) tensor
++```
++
++**Steps:**
++1. Write `rasterizer.py` with the class above.
++2. Type annotations + docstrings.
++3. Defer actual CUDA call to T1.3 binding — for now, raise `NotImplementedError` with clear "needs T1.3" message OR fall back to a slow PyTorch reference renderer for validation.
++
++**Verify:** `python -c "from oss.gaussian.renderer import Rasterizer; r = Rasterizer(); print(r)"` succeeds.
++
++#### T1.3 — CUDA extension build
++
++**Goal:** PyTorch CUDA extension that wraps Image-GS's rasterizer kernel and exposes it to `Rasterizer`.
++
++**Steps:**
++1. `setup.py` using `torch.utils.cpp_extension.CUDAExtension`. Include Image-GS rasterizer.cu + a thin `bindings.cpp` (pybind11) that defines `forward(gaussians, output_hw, tile_size, top_k)` and `backward(...)`.
++2. Build: `cd oss/gaussian/renderer/ext && python setup.py build_ext --inplace` on 3080 Ti.
++3. Verify import: `python -c "from oss.gaussian.renderer.ext import _C; print(_C)"`.
++4. Wire `Rasterizer.__call__` in `rasterizer.py` to invoke `_C.forward(...)`.
++
++**Verify:** Forward call from Python returns a non-zero tensor of shape `(3, H, W)`.
++
++**3080 Ti dependency:** Requires CUDA toolkit + matching PyTorch CUDA build + Visual Studio Build Tools. Agent 1's report determines whether install steps are needed before T1.3.
++
++#### T1.4 — Forward render test
++
++**Goal:** Render a known set of Gaussians and pixel-diff against Image-GS reference output. Confirms the binding doesn't corrupt data layout.
++
++**Steps:**
++1. Vendor's `image_gs/` repo includes example/demo scripts. Render one example image at fixed seed using their script directly → save reference.
++2. Render the same Gaussians via `Rasterizer` → save ours.
++3. Pixel-diff: assert `mean_abs_diff < 1e-4` (FP32) or `1e-2` (FP16).
++4. Pytest test in `tests/gaussian/test_renderer_forward.py`.
++
++**Verify:** `pytest tests/gaussian/test_renderer_forward.py -v` passes.
++
++#### T1.5 — Differentiable backward test
++
++**Goal:** Gradients flow correctly through `Rasterizer` for training.
++
++**Steps:**
++1. `differentiable.py` — `torch.autograd.Function` subclass calling forward + backward kernels.
++2. Test: small Gaussian set, loss against target image, take a gradient step, verify Gaussians move toward target.
++3. `gradcheck` on a tiny example (4 Gaussians, 32×32 output) — finite-difference vs analytical gradient. Tolerance per Image-GS's own test.
++
++**Verify:** `pytest tests/gaussian/test_renderer_backward.py -v` passes including `gradcheck`.
++
++#### T1.6 — Performance benchmark
++
++**Goal:** Measure render time on 3080 Ti at the configurations OSS-Gaussian will actually use.
++
++**Configs to bench:**
++- 1K, 5K, 8K, 15K Gaussians
++- 1080p, 1440p, 4K output
++- Tile size 16×16, top-K = 10
++
++**Steps:**
++1. `bench.py` — runs each config 100 times after 10 warm-up runs, reports mean/p50/p95/p99 in ms.
++2. Output a CSV `bench_results_3080ti.csv` checked into `oss/gaussian/renderer/bench/`.
++3. Reality-check: 8K Gaussians @ 1440p should be in the 1–3 ms range. If wildly different (>10ms), flag for investigation.
++
++**Verify:** `python -m oss.gaussian.renderer.bench` produces CSV. Numbers in expected range.
++
++#### T1.7 — Integration smoke test
++
++**Goal:** Renderer importable + callable from existing OSS test infra. No collisions with pixel-based OSS modules.
++
++**Steps:**
++1. Add `tests/gaussian/test_renderer_integration.py`:
++   - `from oss.gaussian.renderer import Rasterizer; from oss.model import OSSPico` — both work
++   - Existing OSSPico tests still pass
++2. CI matrix: add `gaussian` marker. Skip Gaussian tests when CUDA unavailable.
++
++**Verify:** Full `pytest tests/ -v` passes. Existing tests untouched.
++
++#### T1.8 — Sprint 1 code review checkpoint
++
++**Goal:** Run code review pipeline on Sprint 1 commits before Sprint 2 starts.
++
++**Steps:**
++1. `python -m oss.gaussian.review.run --sprint 1 --commit-range main..HEAD` (or v0.2-dev base..HEAD).
++2. Review artifacts saved to `oss/gaussian/review/artifacts/sprint-1/`.
++3. Judge verdict APPROVE → mark sprint complete, proceed to Sprint 2.
++4. REQUEST_CHANGES → iterate.
++5. BLOCK → escalate to user.
++
++**Verify:** Judge verdict file exists and is APPROVE.
++
++---
++
++## Sprint 2 — D3D12 Frame Interception + G-buffer Extraction
++
++**Goal:** Hook into Cyberpunk 2077, extract color/depth/motion vectors per frame, dump for offline inspection.
++
++**Detail:** Determined by Agent 3's research output (`docs/superpowers/d3d12-hook-design.md`). High-level tasks:
++
++- T2.1 — Build harness: Visual Studio C++ project under `oss/gaussian/interception/`
++- T2.2 — Minimal DXGI Present hook → log "hooked" to file from inside Cyberpunk
++- T2.3 — DLSS DLL replacement scaffolding (NGX function stubs)
++- T2.4 — G-buffer identification: which RTs are depth + motion vectors in Cyberpunk RED Engine
++- T2.5 — Buffer extraction → save EXR + dump format compatible with Sprint 4 training
++- T2.6 — Live capture mode: stream frames to disk during gameplay
++- T2.7 — Code review checkpoint
++
++**Estimate:** ~1.5 weeks. Risk: anti-cheat, RED Engine version drift.
++
++---
++
++## Sprint 3 — Tile Classifier
++
++**Goal:** Per-frame 16×16 tile mask classifying complex (need Gaussian processing) vs simple (bilinear passthrough). Sprint 3 can run parallel with Sprint 2.
++
++- T3.1 — CUDA kernel: gradient magnitude over LR frame
++- T3.2 — Threshold selection — adaptive based on frame statistics
++- T3.3 — Combine with G-buffer edge detection (depth discontinuity, motion edge)
++- T3.4 — Output: bit-packed mask per tile
++- T3.5 — Visualization: heatmap overlay for debugging
++- T3.6 — Test: ~30% complex tiles on Cyberpunk frames; sanity check on Sintel
++- T3.7 — Code review checkpoint
++
++**Estimate:** ~1 week.
++
++---
++
++## Sprint 4 — Gaussian Param Network + Training
++
++**Goal:** Lightweight CNN predicting (Δposition, Covariance Prior Bank weights, color) per complex tile. Trained on Sintel + TartanAir + Cyberpunk RenderDoc captures.
++
++- T4.1 — Covariance Prior Bank: define 16-entry bank, freezable parameters
++- T4.2 — Network architecture: small CNN, channel widths matching Image-GS style
++- T4.3 — Differentiable end-to-end: network output → Rasterizer → loss
++- T4.4 — Loss: composite (HDR L1 + 0.1 × (1-SSIM) + 0.05 × LPIPS) + temporal consistency
++- T4.5 — Training script (Lambda H100 or local 3080 Ti)
++- T4.6 — TensorRT INT8 export for inference
++- T4.7 — PSNR baseline vs OSSPico on Sintel
++- T4.8 — Ablation: Bank size 8 / 16 / 32
++- T4.9 — Code review checkpoint
++
++**Estimate:** ~4 weeks (training time dominates).
++
++---
++
++## Sprint 5 — Persistent Canvas + Motion Warp + Error Detection
++
++**Goal:** GPU buffer holding N Gaussians across frames. Warp by motion vectors. Detect per-Gaussian reconstruction error and replace from LR.
++
++- T5.1 — Canvas data structure: SoA Gaussian buffer in GPU mem
++- T5.2 — Motion warp kernel: shift μ by motion[μ] each frame
++- T5.3 — Error detection: per-tile MSE between rendered Gaussians and LR input
++- T5.4 — Pruning: remove Gaussians from high-error tiles
++- T5.5 — Spawning: add new Gaussians via network on prune events
++- T5.6 — Cyberpunk live integration: drive canvas from Sprint 2 hook
++- T5.7 — Temporal stability metric: frame-to-frame pixel delta in flat regions
++- T5.8 — Comparison vs OSSPico on same Cyberpunk capture set
++- T5.9 — Code review checkpoint
++
++**Estimate:** ~3 weeks.
++
++---
++
++## Sprint 6 — Frame Extrapolation
++
++**Goal:** Render canvas at t+α to produce predicted frame. Display predicted frame while GPU renders t+1. 60→120 FPS.
++
++- T6.1 — α-conditioned warp: shift Gaussians by motion × α
++- T6.2 — Latency test: render predicted frame before t+1 swapchain present
++- T6.3 — Quality test: PSNR of predicted vs actual t+1 frame
++- T6.4 — Comparison vs DLSS Frame Generation
++- T6.5 — Code review checkpoint
++
++**Estimate:** ~1 week.
++
++---
++
++## Sprint 7 — Cross-platform Ports
++
++**Goal:** Port renderer to Metal (M3 Max) and ncnn/Vulkan (Steam Deck). Validate Gaussian-count knob covers all hardware tiers from one trained model.
++
++- T7.1 — Metal MSL renderer (port CUDA → MSL)
++- T7.2 — CoreML network export from PyTorch
++- T7.3 — M3 Max integration test on Sintel
++- T7.4 — ncnn network export
++- T7.5 — Steam Deck Vulkan compute renderer
++- T7.6 — Steam Deck integration test on Sintel at 1280×800 with 1K Gaussians
++- T7.7 — Final cross-tier comparison report
++- T7.8 — Code review checkpoint
++
++**Estimate:** ~2 weeks.
++
++---
++
++## Graduation Decision Point
++
++After Sprint 7, run the graduation criteria check:
++
++1. PSNR + SSIM Gaussian vs OSSPico on Cyberpunk test set (>= 500 frames)
++2. Temporal stability metric Gaussian vs OSSPico
++3. User subjective approval (side-by-side video)
++4. Latency: Gaussian total frame time <= 110% of OSSPico
++
++**APPROVE all four** → archive `oss/` pixel-based to `oss/legacy/`, promote `oss/gaussian/` to `oss/`.
++**Any criterion fails** → keep both tracks. Document failure mode + lessons. Iterate.
+diff --git a/docs/superpowers/specs/2026-05-01-gaussian-temporal-canvas-design.md b/docs/superpowers/specs/2026-05-01-gaussian-temporal-canvas-design.md
+new file mode 100644
+index 0000000..ff9be66
+--- /dev/null
++++ b/docs/superpowers/specs/2026-05-01-gaussian-temporal-canvas-design.md
+@@ -0,0 +1,188 @@
++# OSS Gaussian Temporal Canvas — Design Spec
++
++**Date:** 2026-05-01
++**Status:** Approved for implementation
++**Track:** Sits alongside existing pixel-based OSS/OSSPico/OSSFx until verified better.
++**Predecessor:** `2026-04-30-v0.2-deck-first-design.md` (pixel-based track, untouched)
++
++---
++
++## 1. Goal
++
++Build a real-time game super-sampler + frame extrapolator using a **persistent 2D Gaussian temporal canvas** as the intermediate representation, instead of pixel accumulation buffers. The canvas warps with motion vectors, freezes covariance frame-to-frame, and predicts only position deltas + color via a small neural network — yielding structural ghosting elimination, unified SR + frame extrapolation, and a single Gaussian-count knob that scales from Steam Deck to RTX 4090.
++
++First validation target: **Cyberpunk 2077 / Windows / RTX 3080 Ti** for direct DLSS 4 comparison.
++
++## 2. Why Gaussian Canvas
++
++- **Ghosting is structural, not mitigated.** Warping geometric primitives (Gaussians) with motion vectors is fundamentally more correct than warping pixel colors. A misplaced Gaussian shows as one local error and gets pruned/replaced — not smeared history across the buffer.
++- **Frame extrapolation is free.** Warp the same canvas to t+α and render — no separate frame-gen network. DLSS Frame Generation is an additive heavy pass; OSS-Gaussian's frame gen is a parameter on the warp step.
++- **Single model, all hardware tiers.** Gaussian count is the quality budget knob. 1K Gaussians on Steam Deck → 15K Gaussians on RTX 4090. No separate Pico model.
++- **Resolution-independent.** Renderer outputs at any target resolution from the same Gaussian set. Train at 2× upscale, deploy at 4×.
++- **Covariance is temporally stable.** From GS-STVSR (2025): correlation 0.99 between adjacent frames. Network only predicts position deltas + color corrections each frame — covariance reuses prior values via Covariance Prior Bank weights.
++- **0.3K MACs per pixel decode** (Image-GS, SIGGRAPH 2025) — hardware-friendly memory-bandwidth-bound pipeline.
++
++## 3. Architecture
++
++### 3.1 Component map
++
++```
++LR frame + G-buffers (depth, motion, normals)
++    │
++    ├─→ Tile Classifier (gradient magnitude → complex/simple mask)
++    │
++    ├─→ Persistent Gaussian Canvas (GPU buffer, N Gaussians)
++    │       │
++    │       ├─→ Motion Warp (positions only; covariance frozen)
++    │       │
++    │       └─→ Error Detection (per-Gaussian reconstruction error)
++    │                   ↓
++    │           Prune + Replace from LR input on disocclusion
++    │
++    ├─→ Gaussian Param Network (complex tiles only)
++    │       Input: LR + G-buffers + canvas state
++    │       Output: (Δposition, Cov Prior Bank weights, color) per tile
++    │
++    └─→ Tile-based Top-K Renderer (Image-GS CUDA renderer reused)
++            ↓
++        Native-res output (or t+α extrapolated frame)
++```
++
++### 3.2 Components
++
++| # | Component | Description |
++|---|---|---|
++| 1 | CUDA Gaussian Renderer | Reuse Image-GS tile-based top-K renderer. No port — native CUDA. |
++| 2 | D3D12 Frame Interception | DXGI `Present()` hook in Cyberpunk 2077. Extract color, depth, motion vectors. DLL-swap pattern. |
++| 3 | Tile Classifier | CUDA compute pass. Gradient magnitude on LR frame → 16×16 tile mask. Simple tiles bypass network. |
++| 4 | Gaussian Param Network | Lightweight CNN. Input LR+G-buffers+canvas. Output per-tile Gaussian params. Train PyTorch, infer TensorRT INT8. |
++| 5 | Persistent Canvas + Warp | GPU buffer of N Gaussian structs across frames. Motion-vector warp. Error detection + Gaussian replacement. |
++| 6 | Frame Extrapolation | Warp canvas by motion × α; render at t+α. No separate model. |
++| 7 | Cross-platform Ports | Sprint 7: M3 Max (Metal MSL renderer + CoreML net), Steam Deck (ncnn/Vulkan + 1K Gaussians). |
++| 8 | Code Review Pipeline | 2 reviewer agents + 1 judge agent at each sprint checkpoint. Judge verdict gates next sprint. |
++
++### 3.3 Covariance Prior Bank
++
++To prevent degenerate Gaussians and reduce network output dimensionality, the network predicts weights over a fixed bank of ~16 pre-defined covariance shapes (circular, elongated horizontal/vertical/diagonal at varying scales) rather than raw 2×2 matrices. Final covariance = softmax-weighted sum of bank entries.
++
++Bank size and shape vocabulary: tune during Sprint 4. Initial bank: 16 entries.
++
++### 3.4 Hardware tiers (Gaussian count budget)
++
++| Tier | GPU | Gaussian count | Resolution target |
++|---|---|---|---|
++| Ultra | RTX 4090 | 15K | 4K |
++| Standard | RTX 3080 Ti | 8K | 1440p / 4K |
++| Lite | M3 Max / RTX 4070 | 5K | 1440p |
++| Pico | Steam Deck | 1K | 1280×800 |
++
++Single trained model. Gaussian count is a runtime parameter.
++
++## 4. Targets
++
++### 4.1 Primary target (Sprints 1–6)
++- **Hardware:** RTX 3080 Ti (Windows, in apartment via Tailscale LAN)
++- **Game:** Cyberpunk 2077 (DX12, native DLSS for direct comparison)
++- **Integration:** DLL swap (DLSS DLL replacement), DXGI hook for G-buffer extraction
++- **Output target:** 1440p with frame extrapolation 60→120 FPS
++
++### 4.2 Cross-platform ports (Sprint 7)
++- **M3 Max MacBook Pro:** Metal compute renderer + CoreML network. Test under CrossOver with same Cyberpunk 2077 install or other CrossOver-compatible game.
++- **Steam Deck:** ncnn/Vulkan inference, 1K Gaussian budget, 1280×800 output. Sintel baseline (no game integration in Sprint 7 — that's a future sprint).
++
++## 5. Graduation criterion (Gaussian → primary)
++
++Gaussian track replaces existing pixel-based modules when ALL of:
++
++1. **Automated metric:** Gaussian PSNR + SSIM beats OSSPico baseline on a fixed Cyberpunk 2077 test frame set (≥500 frames sampled across multiple in-game environments).
++2. **Temporal stability:** Quantified ghosting metric (frame-to-frame pixel delta in flat regions) ≤ OSSPico baseline.
++3. **Subjective:** User confirms visual quality is better in side-by-side video.
++4. **Latency parity:** Total frame time < 110% of OSSPico at equivalent quality mode (i.e., ≤10% latency regression maximum, "not meaningfully worse").
++
++Until graduation, both tracks coexist in the repo. After graduation, pixel-based modules archived under `oss/legacy/`.
++
++## 6. Code Review Pipeline
++
++At end of each sprint:
++
++1. **Reviewer Agent A** — examines code for correctness, security, performance, idiomatic style.
++2. **Reviewer Agent B** — examines code for spec adherence, test coverage, edge cases, integration risks.
++3. **Judge Agent** — reads both reviews + the diff. Issues verdict: **APPROVE** / **REQUEST CHANGES** / **BLOCK**.
++4. **APPROVE** → sprint closes, next sprint starts.
++5. **REQUEST CHANGES** → addressed and re-reviewed.
++6. **BLOCK** → escalates to user for decision.
++
++Pipeline implemented as Python script invoking subagents with structured prompts. Reviewer outputs are JSON, judge consumes both.
++
++## 7. Build Order (with dependencies)
++
++```
++Sprint 1: CUDA Gaussian Renderer       (no deps, ~3 days)
++Sprint 2: D3D12 Hook + G-buffers       (deps: 1, ~1.5 weeks)
++Sprint 3: Tile Classifier              (deps: 1, ~1 week, can parallel with 2)
++Sprint 4: Gaussian Param Network       (deps: 1, 3, ~4 weeks training)
++Sprint 5: Canvas + Warp + Error Detect (deps: 1-4, ~3 weeks)
++Sprint 6: Frame Extrapolation          (deps: 5, ~1 week)
++Sprint 7: Cross-platform Ports         (deps: 1-6, ~2 weeks)
++```
++
++**Total estimate:** ~13–14 weeks to fully operational Gaussian track on Cyberpunk 2077 with DLSS comparison data + cross-platform ports.
++
++## 8. Repo Layout
++
++```
++open-reconstruction-suite/
++├── oss/                       # existing pixel-based code, untouched
++├── oss/gaussian/              # new — Gaussian temporal canvas track
++│   ├── renderer/              # Sprint 1: CUDA renderer (Image-GS integration)
++│   ├── interception/          # Sprint 2: D3D12 hook, DLL swap
++│   ├── classifier/            # Sprint 3: tile classifier
++│   ├── network/               # Sprint 4: Gaussian param net
++│   ├── canvas/                # Sprint 5: persistent canvas + warp
++│   ├── extrapolation/         # Sprint 6: frame extrap
++│   ├── ports/                 # Sprint 7: metal/, vulkan_ncnn/
++│   └── review/                # code review pipeline
++└── docs/superpowers/specs/2026-05-01-gaussian-temporal-canvas-design.md
++```
++
++## 9. Datasets
++
++Reuse the in-progress download set:
++- **Sintel** — synthetic motion + depth ground truth (validation)
++- **TartanAir** — synthetic depth + flow at scale (training)
++- **HyperSim** — photorealistic depth (validation)
++- **SRGD** — synthetic SR ground truth pairs
++- **Cyberpunk 2077 RenderDoc captures** — domain-specific training data, captured locally on 3080 Ti
++
++License: only CC-BY / CC0 / Apache assets used directly. Cyberpunk captures used for input distribution only, not as training labels.
++
++## 10. Out of scope
++
++- Denoising — OSSRG remains the denoiser path. Gaussian canvas is upscaling + frame gen only in v1.
++- Steam Deck DLL swap — Sprint 7 ports the engine but full game integration on Deck is post-v1.
++- Console partnerships, UE5 plugin, Vulkan layer for non-DLL games — all post-v1.
++
++## 11. Risks + mitigations
++
++1. **Image-GS CUDA renderer not real-time enough.** Mitigation: render path is memory-bandwidth-bound (3.7ms for 10K Gaussians on A6000). 3080 Ti has comparable bandwidth. Tile classification skips 70% of tiles — should land at ~1.7ms. If too slow: reduce Gaussian count, increase tile size, or fuse rendering with classification.
++2. **D3D12 hook breaks Cyberpunk anti-cheat or Red Engine version drift.** Mitigation: OptiScaler reference implementation works today on Cyberpunk. Pin to known-good Cyberpunk version during MVP.
++3. **Network can't predict good Gaussian params from G-buffers in real time.** Mitigation: train against differentiable Image-GS renderer. If quality insufficient, fall back to higher Gaussian count with simpler network output (no covariance prediction, just position + color).
++4. **Covariance Prior Bank vocabulary too narrow.** Mitigation: ablate bank size during Sprint 4. Increase from 16 → 32 if needed.
++5. **DLSS comparison shows OSS-Gaussian worse.** Mitigation: that's the point of the graduation criterion — pixel-based track remains primary if Gaussian doesn't beat it. Lessons folded back into existing OSSPico training.
++
++## 12. Success criteria for v1
++
++OSS-Gaussian v1 ships when:
++
++- Cyberpunk 2077 runs with OSS-Gaussian replacing DLSS via DLL swap on RTX 3080 Ti
++- Direct DLSS 4 vs OSS-Gaussian comparison video produced
++- Frame extrapolation 60→120 FPS works in-game
++- M3 Max + Steam Deck ports compile and run a Sintel benchmark
++- Graduation criterion met OR explicitly determined not met (with data showing why)
++
++## 13. Open questions (non-blocking)
++
++1. Cyberpunk 2077 specific DLSS DLL filename + version pinning — resolved during Sprint 2.
++2. Optimal Covariance Prior Bank vocabulary — resolved during Sprint 4 ablations.
++3. Tile size: 16×16 (Image-GS default) vs 32×32 (potentially better cache behavior on RTX 30-series) — resolved during Sprint 3.
++4. Whether to train on RenderDoc Cyberpunk captures directly or only as input distribution — resolved during Sprint 4 license review.
+diff --git a/oss/gaussian/__init__.py b/oss/gaussian/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/oss/gaussian/bench/__init__.py b/oss/gaussian/bench/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/oss/gaussian/canvas/__init__.py b/oss/gaussian/canvas/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/oss/gaussian/classifier/__init__.py b/oss/gaussian/classifier/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/oss/gaussian/export/__init__.py b/oss/gaussian/export/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/oss/gaussian/extrapolation/__init__.py b/oss/gaussian/extrapolation/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/oss/gaussian/interception/__init__.py b/oss/gaussian/interception/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/oss/gaussian/model/__init__.py b/oss/gaussian/model/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/oss/gaussian/network/__init__.py b/oss/gaussian/network/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/oss/gaussian/ports/metal/__init__.py b/oss/gaussian/ports/metal/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/oss/gaussian/ports/vulkan_ncnn/__init__.py b/oss/gaussian/ports/vulkan_ncnn/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/oss/gaussian/renderer/__init__.py b/oss/gaussian/renderer/__init__.py
+new file mode 100644
+index 0000000..4ac2148
+--- /dev/null
++++ b/oss/gaussian/renderer/__init__.py
+@@ -0,0 +1,17 @@
++"""OSS-Gaussian renderer module.
++
++Public API:
++- GaussianBatch — typed container for a batch of 2D Gaussians.
++- Rasterizer    — tile-based top-K renderer (CUDA via vendored gsplat,
++                  with a slow PyTorch reference fallback).
++- TILE_SIZE     — the renderer's tile edge length in pixels (16, hardcoded
++                  in the upstream Image-GS CUDA kernel).
++"""
++
++from oss.gaussian.renderer.rasterizer import (
++    GaussianBatch,
++    Rasterizer,
++    TILE_SIZE,
++)
++
++__all__ = ["GaussianBatch", "Rasterizer", "TILE_SIZE"]
+diff --git a/oss/gaussian/renderer/bench.py b/oss/gaussian/renderer/bench.py
+new file mode 100644
+index 0000000..27cd48b
+--- /dev/null
++++ b/oss/gaussian/renderer/bench.py
+@@ -0,0 +1,158 @@
++"""Sprint 1 / T1.6 — Rasterizer performance benchmark.
++
++Measures the renderer's wall-clock time on the configurations OSS-Gaussian
++will actually use in production:
++- Gaussian counts: 1K, 5K, 8K, 15K
++- Output resolutions: 1080p, 1440p, 4K
++- Tile size 16, top-K = 10
++
++Outputs a CSV with mean / p50 / p95 / p99 ms over 100 runs (after 10 warm-ups)
++to oss/gaussian/renderer/bench/bench_results_<gpu_name>.csv.
++
++Usage:
++    python -m oss.gaussian.renderer.bench
++
++Skips quietly with a clear message if CUDA / gsplat is not available — the
++reference backend is too slow to bench meaningfully (O(N×H×W) Python loop).
++"""
++
++from __future__ import annotations
++
++import csv
++import os
++import sys
++from dataclasses import dataclass
++from pathlib import Path
++
++import torch
++
++from oss.gaussian.renderer import GaussianBatch, Rasterizer
++
++
++@dataclass
++class BenchConfig:
++    num_gaussians: int
++    height: int
++    width: int
++
++    @property
++    def label(self) -> str:
++        return f"N{self.num_gaussians}_{self.width}x{self.height}"
++
++
++CONFIGS: list[BenchConfig] = [
++    BenchConfig(1_000, 1080, 1920),
++    BenchConfig(1_000, 1440, 2560),
++    BenchConfig(1_000, 2160, 3840),
++    BenchConfig(5_000, 1080, 1920),
++    BenchConfig(5_000, 1440, 2560),
++    BenchConfig(5_000, 2160, 3840),
++    BenchConfig(8_000, 1080, 1920),
++    BenchConfig(8_000, 1440, 2560),
++    BenchConfig(8_000, 2160, 3840),
++    BenchConfig(15_000, 1080, 1920),
++    BenchConfig(15_000, 1440, 2560),
++    BenchConfig(15_000, 2160, 3840),
++]
++
++NUM_WARMUP = 10
++NUM_RUNS = 100
++
++
++def _make_random_batch(n: int, h: int, w: int, device: torch.device) -> GaussianBatch:
++    """Random valid Gaussians spread across the output canvas."""
++    g = torch.Generator(device=device).manual_seed(0)
++    return GaussianBatch(
++        xy=torch.stack([
++            torch.rand(n, generator=g, device=device) * w,
++            torch.rand(n, generator=g, device=device) * h,
++        ], dim=-1),
++        scale=torch.rand((n, 2), generator=g, device=device) * 4.0 + 1.0,
++        rot=torch.rand(n, generator=g, device=device) * torch.pi,
++        feat=torch.rand((n, 3), generator=g, device=device),
++    )
++
++
++def _bench_one(config: BenchConfig, renderer: Rasterizer, device: torch.device) -> dict:
++    """Run a single config: warmup → 100 timed runs → return statistics."""
++    batch = _make_random_batch(config.num_gaussians, config.height, config.width, device)
++    output_hw = (config.height, config.width)
++
++    for _ in range(NUM_WARMUP):
++        _ = renderer(batch, output_hw=output_hw)
++    torch.cuda.synchronize()
++
++    timings_ms = torch.zeros(NUM_RUNS, dtype=torch.float64)
++    start = torch.cuda.Event(enable_timing=True)
++    end = torch.cuda.Event(enable_timing=True)
++    for i in range(NUM_RUNS):
++        start.record()
++        _ = renderer(batch, output_hw=output_hw)
++        end.record()
++        torch.cuda.synchronize()
++        timings_ms[i] = start.elapsed_time(end)
++
++    sorted_ms = timings_ms.sort().values
++    return {
++        "label": config.label,
++        "num_gaussians": config.num_gaussians,
++        "height": config.height,
++        "width": config.width,
++        "mean_ms": float(timings_ms.mean()),
++        "p50_ms": float(sorted_ms[int(NUM_RUNS * 0.50)]),
++        "p95_ms": float(sorted_ms[int(NUM_RUNS * 0.95)]),
++        "p99_ms": float(sorted_ms[int(NUM_RUNS * 0.99)]),
++        "min_ms": float(timings_ms.min()),
++        "max_ms": float(timings_ms.max()),
++    }
++
++
++def _gpu_name() -> str:
++    if torch.cuda.is_available():
++        raw = torch.cuda.get_device_name(0)
++        return raw.replace(" ", "_").replace("/", "_")
++    return "cpu"
++
++
++def main() -> int:
++    if not torch.cuda.is_available():
++        print("CUDA not available — Rasterizer reference backend is too slow to bench. "
++              "Skipping.", file=sys.stderr)
++        return 0
++    try:
++        from gsplat import rasterize_gaussians_sum  # noqa: F401
++    except Exception as e:  # noqa: BLE001
++        print(f"gsplat not importable — bench requires the CUDA renderer. {e!r}",
++              file=sys.stderr)
++        return 0
++
++    device = torch.device("cuda")
++    renderer = Rasterizer(force_backend="cuda")
++
++    out_dir = Path(__file__).parent / "bench"
++    out_dir.mkdir(exist_ok=True)
++    out_csv = out_dir / f"bench_results_{_gpu_name()}.csv"
++
++    print(f"Bench: {len(CONFIGS)} configs × {NUM_RUNS} runs (after {NUM_WARMUP} warmups) "
++          f"on {torch.cuda.get_device_name(0)}", file=sys.stderr)
++
++    rows: list[dict] = []
++    for cfg in CONFIGS:
++        row = _bench_one(cfg, renderer, device)
++        rows.append(row)
++        print(f"  {row['label']:<22}  "
++              f"mean={row['mean_ms']:6.2f}ms  p95={row['p95_ms']:6.2f}ms  "
++              f"p99={row['p99_ms']:6.2f}ms",
++              file=sys.stderr)
++
++    fieldnames = list(rows[0].keys())
++    with out_csv.open("w", newline="") as f:
++        writer = csv.DictWriter(f, fieldnames=fieldnames)
++        writer.writeheader()
++        writer.writerows(rows)
++    print(f"Wrote {out_csv}", file=sys.stderr)
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/oss/gaussian/renderer/rasterizer.py b/oss/gaussian/renderer/rasterizer.py
+new file mode 100644
+index 0000000..0b8b4cd
+--- /dev/null
++++ b/oss/gaussian/renderer/rasterizer.py
+@@ -0,0 +1,228 @@
++"""OSS-Gaussian renderer: thin Python wrapper over the vendored Image-GS / gsplat
++2D Gaussian rasterizer.
++
++The wrapper provides:
++- Stable typed API independent of upstream changes in Image-GS.
++- A reference PyTorch fallback for environments without the CUDA extension
++  (development on Mac M-series before the M3 Max Metal port lands).
++- Inputs validated at the boundary so the CUDA path receives well-formed tensors.
++
++Sprint 1 deliverable. Wired into:
++- T1.4 forward render test (tests/gaussian/test_renderer_forward.py)
++- T1.5 differentiable backward test (tests/gaussian/test_renderer_backward.py)
++- T1.6 performance benchmark (oss/gaussian/renderer/bench.py)
++- T1.7 integration smoke test (tests/gaussian/test_renderer_integration.py)
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++from typing import Tuple
++
++import torch
++
++# gsplat is provided by the vendored Image-GS submodule. It builds CUDA kernels
++# at install time. We import lazily so that machines without CUDA can still
++# import this module and use the reference fallback.
++_GSPLAT_AVAILABLE: bool = False
++_GSPLAT_IMPORT_ERROR: str | None = None
++try:
++    from gsplat import (  # type: ignore[import-not-found]
++        project_gaussians_2d_scale_rot,
++        rasterize_gaussians_sum,
++    )
++
++    _GSPLAT_AVAILABLE = True
++except Exception as _e:  # noqa: BLE001 — import failure is captured for diagnostics
++    _GSPLAT_IMPORT_ERROR = repr(_e)
++
++
++# Hardcoded in upstream Image-GS CUDA kernel — must not change without modifying
++# the kernel source. See `vendor/image_gs/model.py:198` (`self.block_h, self.block_w = 16, 16`).
++TILE_SIZE: int = 16
++
++
++@dataclass(frozen=True)
++class GaussianBatch:
++    """A batch of 2D Gaussians.
++
++    Shapes use N for the number of Gaussians. The feature channel dimension F
++    is variable (1 for grayscale, 3 for RGB, more for stacked feature maps).
++    All tensors live on the same device and dtype.
++
++    Attributes:
++        xy:    (N, 2)   pixel-space positions in [0, img_w] × [0, img_h]
++        scale: (N, 2)   per-axis scale factors, positive
++        rot:   (N,)     rotation angle in radians [0, π]
++        feat:  (N, F)   per-Gaussian feature/color values
++    """
++
++    xy: torch.Tensor
++    scale: torch.Tensor
++    rot: torch.Tensor
++    feat: torch.Tensor
++
++    def __post_init__(self) -> None:
++        n = self.xy.shape[0]
++        if self.xy.shape != (n, 2):
++            raise ValueError(f"xy must be (N, 2), got {tuple(self.xy.shape)}")
++        if self.scale.shape != (n, 2):
++            raise ValueError(f"scale must be (N, 2), got {tuple(self.scale.shape)}")
++        if self.rot.shape != (n,):
++            raise ValueError(f"rot must be (N,), got {tuple(self.rot.shape)}")
++        if self.feat.ndim != 2 or self.feat.shape[0] != n:
++            raise ValueError(f"feat must be (N, F), got {tuple(self.feat.shape)}")
++        for name, t in (("xy", self.xy), ("scale", self.scale), ("rot", self.rot), ("feat", self.feat)):
++            if t.device != self.xy.device:
++                raise ValueError(f"all tensors must share a device; {name} on {t.device}, xy on {self.xy.device}")
++
++    @property
++    def num_gaussians(self) -> int:
++        return self.xy.shape[0]
++
++    @property
++    def feat_dim(self) -> int:
++        return self.feat.shape[1]
++
++    @property
++    def device(self) -> torch.device:
++        return self.xy.device
++
++
++class Rasterizer:
++    """Tile-based top-K 2D Gaussian rasterizer.
++
++    Two implementations:
++    - CUDA (preferred): calls the vendored gsplat extension.
++    - PyTorch reference (fallback): naive O(N×H×W) implementation in pure PyTorch
++      for correctness validation on machines without CUDA. Slow — not for production.
++
++    Selection is automatic based on tensor device and gsplat availability,
++    overridable with `force_backend`.
++
++    Args:
++        tile_size: tile edge length in pixels. Must equal `TILE_SIZE` (16) for the
++            CUDA backend. The reference backend tolerates any value.
++        topk_norm: whether to apply top-K weight normalization in the tile
++            accumulator. Matches Image-GS default (True).
++        force_backend: "cuda" / "reference" / None (auto).
++    """
++
++    def __init__(
++        self,
++        tile_size: int = TILE_SIZE,
++        topk_norm: bool = True,
++        force_backend: str | None = None,
++    ) -> None:
++        if force_backend not in (None, "cuda", "reference"):
++            raise ValueError(f"force_backend must be 'cuda', 'reference', or None; got {force_backend!r}")
++        if tile_size != TILE_SIZE and force_backend == "cuda":
++            raise ValueError(
++                f"CUDA backend requires tile_size={TILE_SIZE} (hardcoded in kernel); got {tile_size}"
++            )
++        self.tile_size = tile_size
++        self.topk_norm = topk_norm
++        self.force_backend = force_backend
++
++    def __call__(
++        self,
++        gaussians: GaussianBatch,
++        output_hw: Tuple[int, int],
++    ) -> torch.Tensor:
++        """Render the Gaussians at the requested output resolution.
++
++        Args:
++            gaussians: GaussianBatch on cuda or cpu.
++            output_hw: (H, W) target resolution in pixels.
++
++        Returns:
++            (F, H, W) image tensor on the same device as `gaussians`.
++            F is `gaussians.feat_dim`.
++        """
++        h, w = output_hw
++        if h <= 0 or w <= 0:
++            raise ValueError(f"output_hw must be positive; got {output_hw}")
++        backend = self._select_backend(gaussians)
++        if backend == "cuda":
++            return self._render_cuda(gaussians, h, w)
++        return self._render_reference(gaussians, h, w)
++
++    def _select_backend(self, gaussians: GaussianBatch) -> str:
++        if self.force_backend is not None:
++            return self.force_backend
++        if gaussians.device.type == "cuda" and _GSPLAT_AVAILABLE:
++            return "cuda"
++        return "reference"
++
++    def _render_cuda(self, gaussians: GaussianBatch, h: int, w: int) -> torch.Tensor:
++        if not _GSPLAT_AVAILABLE:
++            raise RuntimeError(
++                "CUDA backend requested but gsplat is not importable. "
++                f"Original import error: {_GSPLAT_IMPORT_ERROR}. "
++                "Build the extension: cd oss/gaussian/renderer/vendor/image_gs && pip install -e ."
++            )
++        # gsplat tile_bounds is (num_tiles_h, num_tiles_w, 1) per upstream convention.
++        tile_bounds = ((h + self.tile_size - 1) // self.tile_size,
++                       (w + self.tile_size - 1) // self.tile_size,
++                       1)
++        xy_proj, radii, conics, num_tiles_hit = project_gaussians_2d_scale_rot(
++            gaussians.xy, gaussians.scale, gaussians.rot, h, w, tile_bounds,
++        )
++        out_flat = rasterize_gaussians_sum(
++            xy_proj, radii, conics, num_tiles_hit,
++            gaussians.feat,
++            h, w,
++            self.tile_size, self.tile_size,
++            self.topk_norm,
++        )
++        # gsplat returns (H*W, F); reshape to (F, H, W).
++        return out_flat.view(h, w, gaussians.feat_dim).permute(2, 0, 1).contiguous()
++
++    def _render_reference(self, gaussians: GaussianBatch, h: int, w: int) -> torch.Tensor:
++        """Naive PyTorch reference rasterizer.
++
++        For each pixel, accumulate weighted contributions from every Gaussian.
++        O(N * H * W) — only suitable for tests on small inputs.
++        """
++        n = gaussians.num_gaussians
++        if n == 0:
++            return torch.zeros((gaussians.feat_dim, h, w), device=gaussians.device, dtype=gaussians.feat.dtype)
++
++        device = gaussians.device
++        ys = torch.arange(h, device=device, dtype=gaussians.xy.dtype)
++        xs = torch.arange(w, device=device, dtype=gaussians.xy.dtype)
++        grid_y, grid_x = torch.meshgrid(ys, xs, indexing="ij")  # (H, W) each
++        # (H, W, 2)
++        grid = torch.stack([grid_x, grid_y], dim=-1)
++        # Per-Gaussian covariance from scale + rot.
++        cos_t = torch.cos(gaussians.rot)  # (N,)
++        sin_t = torch.sin(gaussians.rot)
++        # R = [[cos, -sin], [sin, cos]]; S = diag(scale)
++        # Σ = R S Sᵀ Rᵀ. Compute Σ⁻¹ for evaluation.
++        sx = gaussians.scale[:, 0].clamp(min=1e-6)
++        sy = gaussians.scale[:, 1].clamp(min=1e-6)
++        # Σ⁻¹ = R diag(1/sx², 1/sy²) Rᵀ.
++        inv_sx2 = 1.0 / (sx * sx)
++        inv_sy2 = 1.0 / (sy * sy)
++        # 2x2 inverse cov per Gaussian
++        a = cos_t * cos_t * inv_sx2 + sin_t * sin_t * inv_sy2  # (N,)
++        b = cos_t * sin_t * (inv_sx2 - inv_sy2)
++        d = sin_t * sin_t * inv_sx2 + cos_t * cos_t * inv_sy2
++
++        out = torch.zeros((h, w, gaussians.feat_dim), device=device, dtype=gaussians.feat.dtype)
++        # Loop Gaussian-major to keep memory bounded for arbitrary N.
++        for i in range(n):
++            dx = grid_x - gaussians.xy[i, 0]  # (H, W)
++            dy = grid_y - gaussians.xy[i, 1]
++            # Quadratic form: dx² a + 2 dx dy b + dy² d
++            quad = dx * dx * a[i] + 2.0 * dx * dy * b[i] + dy * dy * d[i]
++            weight = torch.exp(-0.5 * quad).unsqueeze(-1)  # (H, W, 1)
++            out = out + weight * gaussians.feat[i]
++        return out.permute(2, 0, 1).contiguous()
++
++
++__all__ = [
++    "GaussianBatch",
++    "Rasterizer",
++    "TILE_SIZE",
++]
+diff --git a/oss/gaussian/renderer/vendor/LICENSE.image_gs b/oss/gaussian/renderer/vendor/LICENSE.image_gs
+new file mode 100644
+index 0000000..134e0c8
+--- /dev/null
++++ b/oss/gaussian/renderer/vendor/LICENSE.image_gs
+@@ -0,0 +1,21 @@
++MIT License
++
++Copyright (c) 2025 NYU Immersive Computing Lab
++
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in all
++copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++SOFTWARE.
+\ No newline at end of file
+diff --git a/oss/gaussian/renderer/vendor/README.md b/oss/gaussian/renderer/vendor/README.md
+new file mode 100644
+index 0000000..a376b0c
+--- /dev/null
++++ b/oss/gaussian/renderer/vendor/README.md
+@@ -0,0 +1,25 @@
++# Vendored Image-GS
++
++Source: https://github.com/NYU-ICL/image-gs
++Paper: https://arxiv.org/abs/2407.01866 (SIGGRAPH 2025)
++Pinned commit: `03088368d42684fb54225c981cfd94b58cc0393a` (heads/main as of 2026-05-01)
++License: see `LICENSE.image_gs` (preserved from upstream)
++
++## Contents
++- `image_gs/` — full upstream repo as git submodule
++- `image_gs/gsplat/` — Image-GS's bundled gsplat CUDA backend
++- `image_gs/main.py`, `model.py` — their reference training/rendering scripts
++
++## Usage
++OSS-Gaussian's renderer wrapper at `oss/gaussian/renderer/rasterizer.py` calls into the vendored Image-GS rasterizer through `oss/gaussian/renderer/ext/` (CUDA extension).
++
++## Updating
++```bash
++cd oss/gaussian/renderer/vendor/image_gs
++git pull origin main
++cd -
++git add oss/gaussian/renderer/vendor/image_gs
++git commit -m "vendor(image_gs): bump to <new-commit>"
++```
++
++After update, run Sprint 1 forward + backward tests to confirm no regression.
+diff --git a/oss/gaussian/renderer/vendor/image_gs b/oss/gaussian/renderer/vendor/image_gs
+new file mode 160000
+index 0000000..0308836
+--- /dev/null
++++ b/oss/gaussian/renderer/vendor/image_gs
+@@ -0,0 +1 @@
++Subproject commit 03088368d42684fb54225c981cfd94b58cc0393a
+diff --git a/oss/gaussian/review/README.md b/oss/gaussian/review/README.md
+new file mode 100644
+index 0000000..fcde196
+--- /dev/null
++++ b/oss/gaussian/review/README.md
+@@ -0,0 +1,119 @@
++# OSS-Gaussian Sprint Review Pipeline
++
++Two-reviewer + one-judge gate that runs at the end of every OSS-Gaussian
++sprint (7 sprints total). A sprint cannot close until the judge returns
++`APPROVE`.
++
++## Quick start
++
++```bash
++# Dry run -- DEFAULT (stub reviewers, heuristic judge, no LLM calls)
++python -m oss.gaussian.review.run \
++    --sprint 1 \
++    --commit-range origin/main..HEAD \
++    --dry-run
++
++# Live run with real Claude API calls (opt-in)
++pip install -e .[review]                       # one-time: install anthropic SDK
++export ANTHROPIC_API_KEY="sk-ant-..."           # required for --use-api
++
++python -m oss.gaussian.review.run \
++    --sprint 1 \
++    --commit-range origin/main..HEAD \
++    --use-api
++```
++
++`--use-api` is **opt-in**. Without it the pipeline runs in dry-run mode
++(no network, no cost) so you can smoke-test wiring safely. With it,
++`oss/gaussian/review/dispatch.py` calls Claude `claude-sonnet-4-6` with
++prompt caching on the system prompt and exponential backoff on
++rate-limit / overload errors. Per-call token usage is logged to stderr.
++
++Exit codes:
++
++| Code | Verdict           | Meaning                                  |
++|------|-------------------|------------------------------------------|
++| 0    | `APPROVE`         | Sprint closes                            |
++| 1    | `REQUEST_CHANGES` | Author fixes findings, pipeline re-runs  |
++| 3    | `BLOCK`           | Escalates to human user                  |
++| 2    | (error)           | Pipeline itself failed (bad range, etc.) |
++
++## Artifacts
++
++Each run writes four files under
++`oss/gaussian/review/artifacts/sprint-N/`:
++
++- `diff.patch` -- the exact unified diff that was reviewed
++- `reviewer-a.json` -- correctness / security / performance findings
++- `reviewer-b.json` -- spec / tests / integration findings
++- `judge.json` -- structured verdict + classified blocking issues
++
++## Architecture
++
++```
++        +-------------------+
++        |  run.py (CLI)     |
++        +---------+---------+
++                  |
++     +------------+-------------+
++     |                          |
++     v                          v
+++-----------+              +-----------+
++| Reviewer A|              | Reviewer B|     (parallel-safe)
++| correctness|             | spec+intg |
+++-----+-----+              +-----+-----+
++      |                          |
++      |   reviewer-a.json        |   reviewer-b.json
++      +--------------+-----------+
++                     |
++                     v
++                +---------+
++                |  Judge  |  reads both reports + diff
++                +----+----+
++                     |
++                     v
++                judge.json (APPROVE / REQUEST_CHANGES / BLOCK)
++```
++
++## Real subagent dispatch
++
++Real dispatch is implemented in
++[`dispatch.py`](dispatch.py) and selected via the `--use-api` CLI flag.
++
++`claude_dispatch(system, user) -> str` matches the
++`DispatchFn = Callable[[str, str], str]` interface that
++`dispatch_reviewer()` and `dispatch_judge()` both accept. Behaviour:
++
++- **Model**: `claude-sonnet-4-6`.
++- **Prompt caching**: the system prompt is marked `cache_control: ephemeral`,
++  so within a single pipeline run the second + third calls (reviewer B,
++  judge) hit the prompt cache and cost ~10x less on the cached portion.
++- **Retries**: 3 attempts with exponential backoff (10s, 20s, 40s) on
++  HTTP 429 (rate limit) and 529 (overload). Other errors propagate.
++- **Token logging**: every call writes input / output / cache-hit token
++  counts to stderr.
++
++### Requirements for `--use-api`
++
++| Requirement            | How to satisfy                              |
++|------------------------|---------------------------------------------|
++| Anthropic SDK          | `pip install -e .[review]`                  |
++| API key                | `export ANTHROPIC_API_KEY="sk-ant-..."`     |
++
++If the SDK is missing or the key is unset, `--use-api` raises a clear
++error pointing at the fix. Drop `--use-api` to fall back to dry-run.
++
++## Spec loading
++
++The pipeline expects sprint specs at::
++
++    docs/superpowers/specs/oss-gaussian-sprint-{N}.md
++
++If a spec is missing the pipeline still runs but reviewers receive a
++placeholder; expect a lower-signal review.
++
++## Re-running after `REQUEST_CHANGES`
++
++Just re-invoke with the same arguments after pushing fixes. Artifacts
++overwrite in place; if you want history, snapshot
++`artifacts/sprint-N/` between runs.
+diff --git a/oss/gaussian/review/__init__.py b/oss/gaussian/review/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/oss/gaussian/review/dispatch.py b/oss/gaussian/review/dispatch.py
+new file mode 100644
+index 0000000..e17ef22
+--- /dev/null
++++ b/oss/gaussian/review/dispatch.py
+@@ -0,0 +1,125 @@
++"""Real Anthropic SDK dispatch for the OSS-Gaussian review pipeline.
++
++Implements the :data:`DispatchFn` interface
++``Callable[[str, str], str]`` — ``(system_prompt, user_prompt) -> response_text``
++— used by :mod:`oss.gaussian.review.reviewers` and
++:mod:`oss.gaussian.review.judge`.
++
++Design notes:
++
++* **Model**: ``claude-sonnet-4-6`` — current Sonnet generation.
++* **Prompt caching**: the system prompt is static across all sprints
++  (only the sprint number is templated in), and within a sprint it is
++  identical for both reviewer-A and reviewer-B re-runs. We mark it with
++  ``cache_control: {"type": "ephemeral"}`` so the second + third call in
++  a single pipeline run hit the prompt cache (~5 min TTL, ~10x cheaper
++  on hits).
++* **Retries**: 3 attempts with exponential backoff (10s base) on
++  rate-limit (429) and overload (529) errors. Other errors propagate.
++* **Token logging**: input / output / cache-hit token counts are written
++  to stderr after every call so the operator can see cost as they go.
++
++Opt-in: ``run.py --use-api``. Default remains dry-run.
++"""
++
++from __future__ import annotations
++
++import os
++import sys
++import time
++from typing import TYPE_CHECKING
++
++if TYPE_CHECKING:  # pragma: no cover - import only for type checkers
++    from anthropic import Anthropic
++
++MODEL = "claude-sonnet-4-6"
++MAX_TOKENS = 4096
++MAX_RETRIES = 3
++BACKOFF_BASE_SEC = 10.0
++
++_CLIENT: "Anthropic | None" = None
++
++
++def _client() -> "Anthropic":
++    """Lazy-init a single Anthropic client per process."""
++    global _CLIENT
++    if _CLIENT is not None:
++        return _CLIENT
++    try:
++        from anthropic import Anthropic
++    except ImportError as exc:
++        raise RuntimeError(
++            "anthropic SDK not installed. Run `pip install -e .[review]` "
++            "(or `pip install anthropic`) to enable --use-api."
++        ) from exc
++    if not os.environ.get("ANTHROPIC_API_KEY"):
++        raise RuntimeError(
++            "ANTHROPIC_API_KEY is not set. Export it in your shell, e.g.:\n"
++            '  export ANTHROPIC_API_KEY="sk-ant-..."\n'
++            "Or omit --use-api to run in dry-run (heuristic) mode."
++        )
++    _CLIENT = Anthropic()
++    return _CLIENT
++
++
++def _log_usage(usage: object) -> None:
++    """Print token-usage line to stderr (best-effort)."""
++    inp = getattr(usage, "input_tokens", None)
++    out = getattr(usage, "output_tokens", None)
++    cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
++    cache_write = getattr(usage, "cache_creation_input_tokens", 0) or 0
++    print(
++        f"[claude_dispatch] tokens: in={inp} out={out} "
++        f"cache_read={cache_read} cache_write={cache_write}",
++        file=sys.stderr,
++    )
++
++
++def claude_dispatch(system: str, user: str) -> str:
++    """Send (system, user) to Claude and return assistant text.
++
++    Matches :data:`oss.gaussian.review.reviewers.DispatchFn`.
++    Caches the system prompt; retries on 429/529 with exponential backoff.
++    """
++    from anthropic import APIStatusError, RateLimitError
++
++    client = _client()
++    # System block as a list so we can attach cache_control.
++    system_blocks = [
++        {"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}
++    ]
++    messages = [{"role": "user", "content": user}]
++
++    last_exc: Exception | None = None
++    for attempt in range(MAX_RETRIES):
++        try:
++            resp = client.messages.create(
++                model=MODEL,
++                max_tokens=MAX_TOKENS,
++                system=system_blocks,
++                messages=messages,
++            )
++            _log_usage(resp.usage)
++            # First text block is the assistant's reply.
++            for block in resp.content:
++                if getattr(block, "type", None) == "text":
++                    return block.text
++            raise RuntimeError("Claude returned no text block")
++        except (RateLimitError, APIStatusError) as exc:
++            status = getattr(exc, "status_code", None)
++            # Retry on 429 (rate limit) and 529 (overloaded); else re-raise.
++            if status not in (429, 529):
++                raise
++            last_exc = exc
++            if attempt == MAX_RETRIES - 1:
++                break
++            sleep_for = BACKOFF_BASE_SEC * (2**attempt)
++            print(
++                f"[claude_dispatch] {status} on attempt {attempt + 1}/"
++                f"{MAX_RETRIES}; sleeping {sleep_for:.0f}s",
++                file=sys.stderr,
++            )
++            time.sleep(sleep_for)
++    raise RuntimeError(
++        f"claude_dispatch: exhausted {MAX_RETRIES} retries"
++    ) from last_exc
+diff --git a/oss/gaussian/review/judge.py b/oss/gaussian/review/judge.py
+new file mode 100644
+index 0000000..80fef77
+--- /dev/null
++++ b/oss/gaussian/review/judge.py
+@@ -0,0 +1,155 @@
++"""Judge agent: consumes both reviewer reports + the diff, emits verdict.
++
++The judge is a third subagent. Its job is NOT to re-review the code; it is
++to weigh the two reviewer reports against the diff and decide whether the
++sprint can close.
++"""
++
++from __future__ import annotations
++
++import json
++import logging
++from typing import Callable
++
++from .schema import Finding, JudgeVerdict, ReviewerReport, Verdict
++
++log = logging.getLogger(__name__)
++
++
++JUDGE_PROMPT = """\
++You are the **Judge** in the OSS-Gaussian sprint review pipeline.
++
++You are NOT a reviewer. Two reviewers (A: implementation correctness,
++B: spec adherence + integration) have already submitted JSON findings.
++Your job is to weigh their findings against the diff and decide whether
++sprint {sprint} can close.
++
++## Decision rubric
++
++- **APPROVE** -- no high-severity findings from either reviewer, and at
++  most a small number of mediums that are non-blocking style/test gaps.
++  Sprint closes; non-blocking issues are filed for the next sprint.
++- **REQUEST_CHANGES** -- one or more medium/high findings that are
++  fixable in <= 1 day of work. Sprint loops back to author; pipeline
++  re-runs after fixes.
++- **BLOCK** -- a high-severity correctness, security, or spec-adherence
++  finding that requires a design change, OR the two reviewers disagree
++  about something material that you cannot resolve from the diff.
++  Escalates to the human user.
++
++## Conflict handling
++If reviewer A says "performance is fine" and reviewer B says "this
++breaks the existing pipeline", the integration concern wins -- never
++let perf optimism override a regression risk. Conversely, if reviewer
++B says "spec satisfied" but reviewer A flags a high-severity
++correctness bug, the bug wins.
++
++## Output
++Respond with a SINGLE JSON object, no prose:
++
++```json
++{{
++  "verdict": "APPROVE|REQUEST_CHANGES|BLOCK",
++  "rationale": "<2-4 sentences: why this verdict>",
++  "blocking_issues":     [ <Finding>, ... ],
++  "non_blocking_issues": [ <Finding>, ... ]
++}}
++```
++
++Each ``Finding`` is copied verbatim from one of the reviewer reports
++(same fields: severity, category, file, lines, issue, suggested_fix).
++Re-classify into blocking vs non-blocking per your rubric -- you do
++NOT have to honour the reviewer's severity if you disagree, but say
++so in ``rationale``.
++"""
++
++
++DispatchFn = Callable[[str, str], str]
++
++
++def build_judge_prompt(
++    sprint: int,
++    diff: str,
++    report_a: ReviewerReport,
++    report_b: ReviewerReport,
++) -> tuple[str, str]:
++    """Return (system_prompt, user_prompt) for the judge."""
++    system = JUDGE_PROMPT.format(sprint=sprint)
++    user = (
++        f"## Reviewer A report\n\n```json\n"
++        f"{json.dumps(report_a.to_dict(), indent=2)}\n```\n\n"
++        f"## Reviewer B report\n\n```json\n"
++        f"{json.dumps(report_b.to_dict(), indent=2)}\n```\n\n"
++        f"## Diff (for context only -- do not re-review)\n\n"
++        f"```diff\n{diff}\n```\n"
++    )
++    return system, user
++
++
++def parse_judge_response(raw: str) -> JudgeVerdict:
++    """Parse the judge's raw output JSON into a :class:`JudgeVerdict`."""
++    text = raw.strip()
++    if text.startswith("```"):
++        first_nl = text.find("\n")
++        text = text[first_nl + 1 :] if first_nl != -1 else text
++        if text.rstrip().endswith("```"):
++            text = text.rstrip()[:-3]
++    try:
++        payload = json.loads(text)
++    except json.JSONDecodeError as exc:
++        raise ValueError(
++            f"Judge did not return valid JSON: {exc}\n"
++            f"--- raw output ---\n{raw[:500]}"
++        ) from exc
++    return JudgeVerdict.from_dict(payload)
++
++
++def _heuristic_verdict(
++    report_a: ReviewerReport, report_b: ReviewerReport
++) -> JudgeVerdict:
++    """Stub verdict used when no LLM dispatch is wired (dry runs).
++
++    Conservative rule: any high -> BLOCK; any medium -> REQUEST_CHANGES;
++    else APPROVE.
++    """
++    all_findings: list[Finding] = list(report_a.findings) + list(report_b.findings)
++    highs = [f for f in all_findings if f.severity.value == "high"]
++    meds = [f for f in all_findings if f.severity.value == "medium"]
++    lows = [f for f in all_findings if f.severity.value == "low"]
++
++    if highs:
++        verdict = Verdict.BLOCK
++        rationale = f"Heuristic dry-run: {len(highs)} high-severity finding(s) -> BLOCK."
++        blocking, non_blocking = highs + meds, lows
++    elif meds:
++        verdict = Verdict.REQUEST_CHANGES
++        rationale = f"Heuristic dry-run: {len(meds)} medium finding(s) -> REQUEST_CHANGES."
++        blocking, non_blocking = meds, lows
++    else:
++        verdict = Verdict.APPROVE
++        rationale = "Heuristic dry-run: no medium/high findings -> APPROVE."
++        blocking, non_blocking = [], lows
++
++    return JudgeVerdict(
++        verdict=verdict,
++        rationale=rationale,
++        blocking_issues=blocking,
++        non_blocking_issues=non_blocking,
++    )
++
++
++def dispatch_judge(
++    sprint: int,
++    diff: str,
++    report_a: ReviewerReport,
++    report_b: ReviewerReport,
++    dispatch: DispatchFn | None = None,
++) -> JudgeVerdict:
++    """Run the judge. Falls back to a heuristic verdict on dry-run."""
++    if dispatch is None:
++        log.warning("dispatch_judge: no dispatch fn -> heuristic verdict")
++        return _heuristic_verdict(report_a, report_b)
++
++    system, user = build_judge_prompt(sprint, diff, report_a, report_b)
++    raw = dispatch(system, user)
++    return parse_judge_response(raw)
+diff --git a/oss/gaussian/review/reviewers.py b/oss/gaussian/review/reviewers.py
+new file mode 100644
+index 0000000..fbb9b5b
+--- /dev/null
++++ b/oss/gaussian/review/reviewers.py
+@@ -0,0 +1,241 @@
++"""Reviewer A and Reviewer B prompt templates + dispatch.
++
++Two non-overlapping reviewer agents:
++
++* **Reviewer A** -- implementation correctness: code correctness, security
++  (path validation, no injection), performance (CUDA kernel efficiency,
++  memory bandwidth, hot loops), idiomatic Python/CUDA/C++ style.
++* **Reviewer B** -- spec adherence + integration: does the code do what the
++  spec says, test coverage, edge cases, integration risks with existing OSS
++  pixel-based code, regression risks.
++
++Each reviewer is dispatched as a Claude subagent. This module owns the
++prompt construction; the actual transport (Claude Agent SDK, raw API, or
++``claude`` CLI) is intentionally pluggable -- see
++:func:`dispatch_reviewer`.
++"""
++
++from __future__ import annotations
++
++import json
++import logging
++from dataclasses import dataclass
++from typing import Callable
++
++from .schema import (
++    REVIEWER_A_CATEGORIES,
++    REVIEWER_B_CATEGORIES,
++    Finding,
++    ReviewerReport,
++    Severity,
++)
++
++log = logging.getLogger(__name__)
++
++
++REVIEWER_A_PROMPT = """\
++You are **Reviewer A** in the OSS-Gaussian sprint review pipeline.
++
++## Your concern: Implementation correctness
++Review ONLY the following dimensions. Do NOT comment on spec adherence,
++test coverage, or integration risks -- those belong to Reviewer B.
++
++1. **Correctness** -- logic bugs, off-by-one, wrong math, undefined behaviour.
++2. **Security** -- path validation (no traversal, no null bytes), no shell
++   injection, no unchecked deserialization, no untrusted-input -> ``eval``.
++3. **Performance** -- CUDA kernel efficiency (occupancy, divergence,
++   shared-memory bank conflicts), memory bandwidth (coalescing, redundant
++   copies), hot loops in Python (avoid per-pixel Python).
++4. **Idiomatic style** -- Python (PEP 8, type hints, no mutable defaults),
++   CUDA (``__restrict__``, ``constexpr``, launch bounds), C++ (RAII, no
++   raw ``new``/``delete`` in new code).
++
++## Input
++You will receive:
++- A unified diff for sprint {sprint}.
++- The sprint spec (so you know what the code is *supposed* to do, but
++  spec-adherence judgements are NOT yours -- only correctness within the
++  stated intent).
++
++## Output
++Respond with a SINGLE JSON object, no prose, matching this schema:
++
++```json
++{{
++  "reviewer_id": "A",
++  "sprint": {sprint},
++  "summary": "<one paragraph: overall correctness / perf / security posture>",
++  "findings": [
++    {{
++      "severity": "high|medium|low",
++      "category": "{categories}",
++      "file": "<repo-relative path>",
++      "lines": "L<start>-L<end> or L<n>",
++      "issue": "<what is wrong>",
++      "suggested_fix": "<concrete fix, code snippet ok>"
++    }}
++  ]
++}}
++```
++
++Severity rubric:
++- **high** -- ships a bug, security hole, or >10% perf regression.
++- **medium** -- correctness smell, missing bounds check, suboptimal kernel.
++- **low** -- style, naming, minor idiom.
++
++If there are zero findings, return an empty ``findings`` list.
++"""
++
++
++REVIEWER_B_PROMPT = """\
++You are **Reviewer B** in the OSS-Gaussian sprint review pipeline.
++
++## Your concern: Spec adherence + integration
++Review ONLY the following dimensions. Do NOT comment on low-level
++correctness, performance, or style -- those belong to Reviewer A.
++
++1. **Spec adherence** -- does the code implement what the sprint spec
++   asks for? Missing acceptance criteria? Extra scope creep?
++2. **Test coverage** -- are new code paths tested? Are the tests
++   meaningful (assert behaviour, not just ``assert True``)?
++3. **Edge cases** -- empty inputs, NaN/Inf in float tensors, zero-sized
++   tiles, single-frame sequences, mixed precision.
++4. **Integration risk** -- does this break existing OSS pixel-based
++   code paths (OSS-RG, OSS-SR, OSS-Pico, OSS-FX)? Shared utility
++   changes? Module boundary violations into ``oss/gaussian/``.
++5. **Regression risk** -- changes to public APIs, on-disk formats,
++   tensor shapes, or CLI flags that would break callers.
++
++## Input
++You will receive:
++- A unified diff for sprint {sprint}.
++- The sprint spec.
++- A short summary of touched modules outside ``oss/gaussian/``.
++
++## Output
++Same JSON schema as Reviewer A but with ``"reviewer_id": "B"`` and
++``category`` drawn from: {categories}.
++
++Severity rubric:
++- **high** -- spec acceptance criterion missing OR breaks existing
++  pixel-based pipeline.
++- **medium** -- weak test coverage on a new code path, plausible edge
++  case unaddressed.
++- **low** -- nit on naming consistency with existing OSS modules,
++  doc gaps.
++"""
++
++
++@dataclass
++class ReviewContext:
++    """Inputs every reviewer agent needs."""
++
++    sprint: int
++    diff: str
++    spec_text: str
++    touched_modules_outside_gaussian: list[str]
++
++
++# Type alias for the dispatch hook the next agent will wire up.
++DispatchFn = Callable[[str, str], str]
++"""(system_prompt, user_prompt) -> raw_model_output_string."""
++
++
++def build_reviewer_a_prompt(ctx: ReviewContext) -> tuple[str, str]:
++    """Return (system_prompt, user_prompt) for Reviewer A."""
++    system = REVIEWER_A_PROMPT.format(
++        sprint=ctx.sprint,
++        categories="|".join(REVIEWER_A_CATEGORIES),
++    )
++    user = (
++        f"## Sprint {ctx.sprint} spec\n\n{ctx.spec_text}\n\n"
++        f"## Diff\n\n```diff\n{ctx.diff}\n```\n"
++    )
++    return system, user
++
++
++def build_reviewer_b_prompt(ctx: ReviewContext) -> tuple[str, str]:
++    """Return (system_prompt, user_prompt) for Reviewer B."""
++    system = REVIEWER_B_PROMPT.format(
++        sprint=ctx.sprint,
++        categories="|".join(REVIEWER_B_CATEGORIES),
++    )
++    touched = "\n".join(f"- {m}" for m in ctx.touched_modules_outside_gaussian) or "- (none)"
++    user = (
++        f"## Sprint {ctx.sprint} spec\n\n{ctx.spec_text}\n\n"
++        f"## Touched modules outside oss/gaussian/\n\n{touched}\n\n"
++        f"## Diff\n\n```diff\n{ctx.diff}\n```\n"
++    )
++    return system, user
++
++
++def parse_reviewer_response(raw: str, expected_id: str, sprint: int) -> ReviewerReport:
++    """Parse a model's raw JSON output into a :class:`ReviewerReport`.
++
++    Tolerates a Markdown ```json ... ``` fence around the payload.
++    """
++    text = raw.strip()
++    if text.startswith("```"):
++        # strip first fence line and trailing fence
++        first_nl = text.find("\n")
++        text = text[first_nl + 1 :] if first_nl != -1 else text
++        if text.rstrip().endswith("```"):
++            text = text.rstrip()[: -3]
++    try:
++        payload = json.loads(text)
++    except json.JSONDecodeError as exc:
++        raise ValueError(
++            f"Reviewer {expected_id} did not return valid JSON: {exc}\n"
++            f"--- raw output ---\n{raw[:500]}"
++        ) from exc
++
++    if payload.get("reviewer_id") != expected_id:
++        raise ValueError(
++            f"Reviewer ID mismatch: got {payload.get('reviewer_id')!r}, "
++            f"expected {expected_id!r}"
++        )
++    if int(payload.get("sprint", -1)) != sprint:
++        raise ValueError(
++            f"Sprint mismatch: got {payload.get('sprint')}, expected {sprint}"
++        )
++    return ReviewerReport.from_dict(payload)
++
++
++def dispatch_reviewer(
++    reviewer_id: str,
++    ctx: ReviewContext,
++    dispatch: DispatchFn | None = None,
++) -> ReviewerReport:
++    """Run a reviewer agent.
++
++    If ``dispatch`` is ``None`` we return a stub report so dry-runs work
++    without an LLM. The next agent should pass a real :class:`DispatchFn`
++    that calls Claude Agent SDK / CLI.
++    """
++    if reviewer_id == "A":
++        system, user = build_reviewer_a_prompt(ctx)
++    elif reviewer_id == "B":
++        system, user = build_reviewer_b_prompt(ctx)
++    else:
++        raise ValueError(f"Unknown reviewer_id {reviewer_id!r}; expected 'A' or 'B'")
++
++    if dispatch is None:
++        log.warning("dispatch_reviewer: no dispatch fn -> returning DRY-RUN stub")
++        return ReviewerReport(
++            reviewer_id=reviewer_id,
++            sprint=ctx.sprint,
++            summary=f"DRY-RUN stub for reviewer {reviewer_id} (no LLM dispatch wired)",
++            findings=[
++                Finding(
++                    severity=Severity.LOW,
++                    category="dry_run",
++                    file="<n/a>",
++                    lines="L0",
++                    issue="No dispatch function configured",
++                    suggested_fix="Pass a DispatchFn into run_pipeline()",
++                )
++            ],
++        )
++
++    raw = dispatch(system, user)
++    return parse_reviewer_response(raw, expected_id=reviewer_id, sprint=ctx.sprint)
+diff --git a/oss/gaussian/review/run.py b/oss/gaussian/review/run.py
+new file mode 100644
+index 0000000..7a48fde
+--- /dev/null
++++ b/oss/gaussian/review/run.py
+@@ -0,0 +1,226 @@
++"""CLI entrypoint for the OSS-Gaussian sprint review pipeline.
++
++Usage::
++
++    python -m oss.gaussian.review.run --sprint 3 --commit-range origin/main..HEAD
++    python -m oss.gaussian.review.run --sprint 3 --commit-range A..B --dry-run
++
++The ``--dry-run`` flag runs the full pipeline with stub reviewers + a
++heuristic judge, so the wiring can be smoke-tested before any real
++subagent dispatch is plumbed in.
++
++Artifacts are written to::
++
++    oss/gaussian/review/artifacts/sprint-N/
++        diff.patch
++        reviewer-a.json
++        reviewer-b.json
++        judge.json
++"""
++
++from __future__ import annotations
++
++import argparse
++import logging
++import os
++import subprocess
++import sys
++from pathlib import Path
++
++from .judge import dispatch_judge
++from .reviewers import DispatchFn, ReviewContext, dispatch_reviewer
++from .schema import JudgeVerdict, Verdict, dump_json
++
++log = logging.getLogger("oss.gaussian.review")
++
++REPO_ROOT = Path(__file__).resolve().parents[3]
++"""Path to the open-reconstruction-suite checkout (parent of ``oss/``)."""
++
++ARTIFACTS_ROOT = REPO_ROOT / "oss" / "gaussian" / "review" / "artifacts"
++SPECS_ROOT = REPO_ROOT / "docs" / "superpowers" / "specs"
++
++
++# ---------------------------------------------------------------------------
++# git helpers
++# ---------------------------------------------------------------------------
++
++def _run_git(args: list[str]) -> str:
++    """Run a git command in the repo and return stdout (raises on failure)."""
++    result = subprocess.run(
++        ["git", *args],
++        cwd=REPO_ROOT,
++        check=True,
++        capture_output=True,
++        text=True,
++    )
++    return result.stdout
++
++
++def get_diff(commit_range: str) -> str:
++    """Return the unified diff for ``commit_range`` (e.g. ``A..B``)."""
++    return _run_git(["diff", commit_range])
++
++
++def get_touched_files(commit_range: str) -> list[str]:
++    """Return repo-relative paths of files changed in ``commit_range``."""
++    out = _run_git(["diff", "--name-only", commit_range])
++    return [line for line in out.splitlines() if line.strip()]
++
++
++def files_outside_gaussian(touched: list[str]) -> list[str]:
++    """Subset of touched files that live outside ``oss/gaussian/``."""
++    return [f for f in touched if not f.startswith("oss/gaussian/")]
++
++
++# ---------------------------------------------------------------------------
++# spec loading
++# ---------------------------------------------------------------------------
++
++def load_sprint_spec(sprint: int) -> str:
++    """Load the sprint spec text.
++
++    Convention: ``docs/superpowers/specs/oss-gaussian-sprint-N.md``. If the
++    file is missing we return a placeholder so the pipeline can still run
++    (the reviewers will say "no spec provided").
++    """
++    candidate = SPECS_ROOT / f"oss-gaussian-sprint-{sprint}.md"
++    if candidate.is_file():
++        return candidate.read_text(encoding="utf-8")
++    log.warning("Sprint spec not found at %s -- using placeholder", candidate)
++    return f"(No spec file found for sprint {sprint} at {candidate})"
++
++
++# ---------------------------------------------------------------------------
++# pipeline
++# ---------------------------------------------------------------------------
++
++def run_pipeline(
++    sprint: int,
++    commit_range: str,
++    dry_run: bool = False,
++    use_api: bool = False,
++) -> JudgeVerdict:
++    """Run the full A -> B -> judge pipeline. Returns the judge's verdict.
++
++    Side effect: writes all four artifacts under
++    ``oss/gaussian/review/artifacts/sprint-{sprint}/``.
++
++    If ``use_api`` is True (and ``dry_run`` is False), the pipeline calls
++    the real Anthropic API via :func:`oss.gaussian.review.dispatch.claude_dispatch`.
++    Otherwise reviewers + judge fall back to their stub / heuristic
++    implementations.
++    """
++    if not 1 <= sprint <= 7:
++        raise ValueError(f"Sprint {sprint} out of range 1..7")
++
++    artifact_dir = ARTIFACTS_ROOT / f"sprint-{sprint}"
++    artifact_dir.mkdir(parents=True, exist_ok=True)
++
++    diff = get_diff(commit_range)
++    if not diff.strip():
++        raise RuntimeError(
++            f"No diff for commit range {commit_range!r}; nothing to review."
++        )
++    (artifact_dir / "diff.patch").write_text(diff, encoding="utf-8")
++
++    touched = get_touched_files(commit_range)
++    outside = files_outside_gaussian(touched)
++    spec_text = load_sprint_spec(sprint)
++
++    ctx = ReviewContext(
++        sprint=sprint,
++        diff=diff,
++        spec_text=spec_text,
++        touched_modules_outside_gaussian=outside,
++    )
++
++    # Pick dispatch: real API (--use-api) or None (dry-run stubs).
++    dispatch_fn: DispatchFn | None = None
++    if use_api and not dry_run:
++        from .dispatch import claude_dispatch  # local import: optional dep
++        dispatch_fn = claude_dispatch
++        log.info("Using real Anthropic API dispatch (claude-sonnet-4-6)")
++    else:
++        log.info("Dry-run mode: stub reviewers + heuristic judge")
++
++    log.info("Dispatching Reviewer A (sprint %d)...", sprint)
++    report_a = dispatch_reviewer("A", ctx, dispatch=dispatch_fn)
++    dump_json(report_a, str(artifact_dir / "reviewer-a.json"))
++
++    log.info("Dispatching Reviewer B (sprint %d)...", sprint)
++    report_b = dispatch_reviewer("B", ctx, dispatch=dispatch_fn)
++    dump_json(report_b, str(artifact_dir / "reviewer-b.json"))
++
++    log.info("Dispatching Judge (sprint %d)...", sprint)
++    verdict = dispatch_judge(sprint, diff, report_a, report_b, dispatch=dispatch_fn)
++    dump_json(verdict, str(artifact_dir / "judge.json"))
++
++    return verdict
++
++
++# ---------------------------------------------------------------------------
++# CLI
++# ---------------------------------------------------------------------------
++
++def _build_argparser() -> argparse.ArgumentParser:
++    p = argparse.ArgumentParser(
++        prog="python -m oss.gaussian.review.run",
++        description="Run the OSS-Gaussian sprint code review pipeline.",
++    )
++    p.add_argument("--sprint", type=int, required=True, help="Sprint number, 1..7")
++    p.add_argument(
++        "--commit-range",
++        required=True,
++        help="Git commit range to review, e.g. origin/main..HEAD",
++    )
++    p.add_argument(
++        "--dry-run",
++        action="store_true",
++        help="Run with stub reviewers + heuristic judge (no LLM calls). "
++             "This is the default when --use-api is not set.",
++    )
++    p.add_argument(
++        "--use-api",
++        action="store_true",
++        help="Make real Anthropic API calls (requires ANTHROPIC_API_KEY "
++             "and `pip install -e .[review]`). Off by default for safety.",
++    )
++    p.add_argument(
++        "-v", "--verbose", action="store_true", help="Verbose logging"
++    )
++    return p
++
++
++def main(argv: list[str] | None = None) -> int:
++    args = _build_argparser().parse_args(argv)
++    logging.basicConfig(
++        level=logging.DEBUG if args.verbose else logging.INFO,
++        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
++    )
++
++    try:
++        verdict = run_pipeline(
++            sprint=args.sprint,
++            commit_range=args.commit_range,
++            dry_run=args.dry_run,
++            use_api=args.use_api,
++        )
++    except (ValueError, RuntimeError, subprocess.CalledProcessError) as exc:
++        log.error("Pipeline failed: %s", exc)
++        return 2
++
++    print(f"\n=== Sprint {args.sprint} verdict: {verdict.verdict.value} ===")
++    print(f"Rationale: {verdict.rationale}")
++    print(f"Blocking issues:     {len(verdict.blocking_issues)}")
++    print(f"Non-blocking issues: {len(verdict.non_blocking_issues)}")
++
++    # Exit codes: 0 APPROVE, 1 REQUEST_CHANGES, 3 BLOCK -- so CI can gate.
++    return {
++        Verdict.APPROVE: 0,
++        Verdict.REQUEST_CHANGES: 1,
++        Verdict.BLOCK: 3,
++    }[verdict.verdict]
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/oss/gaussian/review/schema.py b/oss/gaussian/review/schema.py
+new file mode 100644
+index 0000000..b3baf58
+--- /dev/null
++++ b/oss/gaussian/review/schema.py
+@@ -0,0 +1,142 @@
++"""JSON schemas for OSS-Gaussian sprint code review pipeline.
++
++Schemas are stdlib-only (dataclasses + json) so this module imports cleanly
++in any environment. Pydantic is intentionally avoided to keep the review
++tool dependency-free.
++"""
++
++from __future__ import annotations
++
++import json
++from dataclasses import asdict, dataclass, field
++from enum import Enum
++from typing import Any
++
++
++class Severity(str, Enum):
++    HIGH = "high"
++    MEDIUM = "medium"
++    LOW = "low"
++
++
++class Verdict(str, Enum):
++    APPROVE = "APPROVE"
++    REQUEST_CHANGES = "REQUEST_CHANGES"
++    BLOCK = "BLOCK"
++
++
++# Reviewer category vocabularies. Free-form strings are tolerated (judge will
++# group them) but reviewers should prefer these so artifacts stay queryable.
++REVIEWER_A_CATEGORIES = (
++    "correctness",
++    "security",
++    "performance",
++    "style",
++    "memory",
++    "concurrency",
++)
++REVIEWER_B_CATEGORIES = (
++    "spec_adherence",
++    "test_coverage",
++    "edge_case",
++    "integration_risk",
++    "regression_risk",
++)
++
++
++@dataclass
++class Finding:
++    """A single review finding from reviewer A or B."""
++
++    severity: Severity
++    category: str
++    file: str
++    lines: str  # e.g. "L42-58" or "L7"
++    issue: str
++    suggested_fix: str
++
++    def to_dict(self) -> dict[str, Any]:
++        d = asdict(self)
++        d["severity"] = self.severity.value
++        return d
++
++    @classmethod
++    def from_dict(cls, raw: dict[str, Any]) -> "Finding":
++        return cls(
++            severity=Severity(raw["severity"]),
++            category=str(raw["category"]),
++            file=str(raw["file"]),
++            lines=str(raw["lines"]),
++            issue=str(raw["issue"]),
++            suggested_fix=str(raw["suggested_fix"]),
++        )
++
++
++@dataclass
++class ReviewerReport:
++    """A reviewer agent's full output: ordered list of findings + a summary."""
++
++    reviewer_id: str  # "A" or "B"
++    sprint: int
++    summary: str
++    findings: list[Finding] = field(default_factory=list)
++
++    def to_dict(self) -> dict[str, Any]:
++        return {
++            "reviewer_id": self.reviewer_id,
++            "sprint": self.sprint,
++            "summary": self.summary,
++            "findings": [f.to_dict() for f in self.findings],
++        }
++
++    @classmethod
++    def from_dict(cls, raw: dict[str, Any]) -> "ReviewerReport":
++        return cls(
++            reviewer_id=str(raw["reviewer_id"]),
++            sprint=int(raw["sprint"]),
++            summary=str(raw.get("summary", "")),
++            findings=[Finding.from_dict(f) for f in raw.get("findings", [])],
++        )
++
++
++@dataclass
++class JudgeVerdict:
++    """Judge agent's structured verdict over both reviewer reports."""
++
++    verdict: Verdict
++    rationale: str
++    blocking_issues: list[Finding] = field(default_factory=list)
++    non_blocking_issues: list[Finding] = field(default_factory=list)
++
++    def to_dict(self) -> dict[str, Any]:
++        return {
++            "verdict": self.verdict.value,
++            "rationale": self.rationale,
++            "blocking_issues": [f.to_dict() for f in self.blocking_issues],
++            "non_blocking_issues": [f.to_dict() for f in self.non_blocking_issues],
++        }
++
++    @classmethod
++    def from_dict(cls, raw: dict[str, Any]) -> "JudgeVerdict":
++        return cls(
++            verdict=Verdict(raw["verdict"]),
++            rationale=str(raw.get("rationale", "")),
++            blocking_issues=[Finding.from_dict(f) for f in raw.get("blocking_issues", [])],
++            non_blocking_issues=[
++                Finding.from_dict(f) for f in raw.get("non_blocking_issues", [])
++            ],
++        )
++
++
++def dump_json(obj: Any, path: str) -> None:
++    """Write any schema dataclass (or dict) to ``path`` as pretty JSON."""
++    if hasattr(obj, "to_dict"):
++        obj = obj.to_dict()
++    with open(path, "w", encoding="utf-8") as fh:
++        json.dump(obj, fh, indent=2, sort_keys=False)
++        fh.write("\n")
++
++
++def load_json(path: str) -> dict[str, Any]:
++    with open(path, "r", encoding="utf-8") as fh:
++        return json.load(fh)
+diff --git a/oss/gaussian/train/__init__.py b/oss/gaussian/train/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/pyproject.toml b/pyproject.toml
+index 008ea9c..4df0328 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -31,6 +31,9 @@ dependencies = [
+ 
+ [project.optional-dependencies]
+ dev = ["pytest>=8.0", "pytest-cov>=5.0", "ruff>=0.6"]
++# Anthropic SDK for the OSS-Gaussian sprint review pipeline (--use-api).
++# Optional because the pipeline runs a heuristic dry-run by default.
++review   = ["anthropic>=0.40"]
+ cuda     = ["tensorrt>=10.0,<11.0", "onnxruntime-gpu>=1.18,<2.0"]
+ directml = ["onnxruntime-directml>=1.18,<2.0"]
+ rocm     = ["onnxruntime-rocm>=1.18,<2.0"]
+diff --git a/tests/gaussian/__init__.py b/tests/gaussian/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/tests/gaussian/test_renderer_backward.py b/tests/gaussian/test_renderer_backward.py
+new file mode 100644
+index 0000000..dfd423e
+--- /dev/null
++++ b/tests/gaussian/test_renderer_backward.py
+@@ -0,0 +1,138 @@
++"""Sprint 1 / T1.5 — differentiable backward test.
++
++Validates that the Rasterizer is end-to-end differentiable so it can be used
++inside a training loop where the network predicts Gaussian parameters and we
++backprop image-space loss through the renderer to the network.
++
++Reference-backend tests run anywhere. CUDA tests are gated on gsplat being
++importable AND a CUDA device being present.
++"""
++
++from __future__ import annotations
++
++import pytest
++import torch
++
++from oss.gaussian.renderer import GaussianBatch, Rasterizer
++
++
++def _make_batch(device: torch.device, requires_grad: bool = True) -> GaussianBatch:
++    """Tiny batch with all parameters trainable. Gaussians use asymmetric
++    scales so rotation gradients are non-zero (a circular Gaussian is
++    rotation-invariant — its rendered output has zero derivative w.r.t. θ)."""
++    xy = torch.tensor([[8.0, 8.0], [24.0, 8.0], [16.0, 24.0]],
++                      device=device, requires_grad=requires_grad)
++    scale = torch.tensor([[3.0, 1.0], [1.0, 3.0], [2.5, 1.5]],
++                         device=device, requires_grad=requires_grad)
++    rot = torch.tensor([0.3, 0.5, 1.0], device=device, requires_grad=requires_grad)
++    feat = torch.tensor([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
++                        device=device, requires_grad=requires_grad)
++    return GaussianBatch(xy=xy, scale=scale, rot=rot, feat=feat)
++
++
++def test_reference_backend_gradients_flow_to_all_params() -> None:
++    """A scalar loss on the rendered output should produce non-zero grads on
++    every Gaussian parameter tensor."""
++    g = _make_batch(torch.device("cpu"))
++    r = Rasterizer(force_backend="reference")
++    out = r(g, output_hw=(32, 32))
++    loss = out.sum()
++    loss.backward()
++    for name, t in (("xy", g.xy), ("scale", g.scale), ("rot", g.rot), ("feat", g.feat)):
++        assert t.grad is not None, f"{name}.grad is None"
++        # At least one element of the grad must be non-zero.
++        assert torch.any(t.grad != 0), f"{name}.grad is all zeros — backward not flowing"
++
++
++def test_reference_backend_optimization_moves_gaussian_toward_target() -> None:
++    """Single Gaussian, target located off-center. After a few SGD steps, the
++    Gaussian's position should move closer to the target."""
++    target_xy = torch.tensor([24.0, 24.0])
++    g = GaussianBatch(
++        xy=torch.tensor([[8.0, 8.0]], requires_grad=True),
++        scale=torch.tensor([[2.0, 2.0]], requires_grad=True),
++        rot=torch.tensor([0.0], requires_grad=True),
++        feat=torch.tensor([[1.0]], requires_grad=True),
++    )
++    # Build a target image with a Gaussian peaked at target_xy.
++    target_g = GaussianBatch(
++        xy=target_xy.unsqueeze(0),
++        scale=torch.tensor([[2.0, 2.0]]),
++        rot=torch.tensor([0.0]),
++        feat=torch.tensor([[1.0]]),
++    )
++    r = Rasterizer(force_backend="reference")
++    target_image = r(target_g, output_hw=(32, 32)).detach()
++
++    initial_dist = torch.norm(g.xy[0] - target_xy).item()
++    opt = torch.optim.Adam([g.xy, g.scale, g.rot, g.feat], lr=0.5)
++    for _step in range(20):
++        opt.zero_grad()
++        out = r(g, output_hw=(32, 32))
++        loss = torch.nn.functional.mse_loss(out, target_image)
++        loss.backward()
++        opt.step()
++
++    final_dist = torch.norm(g.xy[0].detach() - target_xy).item()
++    assert final_dist < initial_dist, (
++        f"Gaussian did not move toward target. initial_dist={initial_dist:.2f} "
++        f"final_dist={final_dist:.2f}"
++    )
++
++
++# --- CUDA backend backward test ---------------------------------------------
++
++cuda_available = torch.cuda.is_available()
++try:
++    from gsplat import rasterize_gaussians_sum  # noqa: F401
++
++    gsplat_available = True
++except Exception:
++    gsplat_available = False
++
++
++@pytest.mark.gpu
++@pytest.mark.skipif(not (cuda_available and gsplat_available),
++                    reason="CUDA / gsplat not available")
++def test_cuda_backend_gradients_flow() -> None:
++    """CUDA backend must also propagate gradients to Gaussian parameters."""
++    g = _make_batch(torch.device("cuda"))
++    r = Rasterizer(force_backend="cuda")
++    out = r(g, output_hw=(32, 32))
++    out.sum().backward()
++    for name, t in (("xy", g.xy), ("scale", g.scale), ("rot", g.rot), ("feat", g.feat)):
++        assert t.grad is not None, f"{name}.grad is None"
++        assert torch.any(t.grad != 0), f"{name}.grad is all zeros"
++
++
++@pytest.mark.gpu
++@pytest.mark.skipif(not (cuda_available and gsplat_available),
++                    reason="CUDA / gsplat not available")
++def test_cuda_backend_optimization_converges() -> None:
++    """Same as the reference convergence test but on CUDA."""
++    target_xy = torch.tensor([24.0, 24.0], device="cuda")
++    g = GaussianBatch(
++        xy=torch.tensor([[8.0, 8.0]], device="cuda", requires_grad=True),
++        scale=torch.tensor([[2.0, 2.0]], device="cuda", requires_grad=True),
++        rot=torch.tensor([0.0], device="cuda", requires_grad=True),
++        feat=torch.tensor([[1.0]], device="cuda", requires_grad=True),
++    )
++    target_g = GaussianBatch(
++        xy=target_xy.unsqueeze(0),
++        scale=torch.tensor([[2.0, 2.0]], device="cuda"),
++        rot=torch.tensor([0.0], device="cuda"),
++        feat=torch.tensor([[1.0]], device="cuda"),
++    )
++    r = Rasterizer(force_backend="cuda")
++    target_image = r(target_g, output_hw=(32, 32)).detach()
++
++    initial_dist = torch.norm(g.xy[0].detach() - target_xy).item()
++    opt = torch.optim.Adam([g.xy, g.scale, g.rot, g.feat], lr=0.5)
++    for _step in range(20):
++        opt.zero_grad()
++        out = r(g, output_hw=(32, 32))
++        loss = torch.nn.functional.mse_loss(out, target_image)
++        loss.backward()
++        opt.step()
++    final_dist = torch.norm(g.xy[0].detach() - target_xy).item()
++    assert final_dist < initial_dist
+diff --git a/tests/gaussian/test_renderer_forward.py b/tests/gaussian/test_renderer_forward.py
+new file mode 100644
+index 0000000..3b1ec29
+--- /dev/null
++++ b/tests/gaussian/test_renderer_forward.py
+@@ -0,0 +1,151 @@
++"""Sprint 1 / T1.4 — forward render test.
++
++Validates the Rasterizer's forward path:
++- The reference (PyTorch) backend produces correct output for known Gaussians.
++- The CUDA backend (when available) matches the reference within FP32 tolerance.
++
++The CUDA test is skipped on machines without a working gsplat extension —
++those run on the reference backend only as a correctness anchor.
++"""
++
++from __future__ import annotations
++
++import pytest
++import torch
++
++from oss.gaussian.renderer import GaussianBatch, Rasterizer
++
++
++@pytest.fixture
++def single_centered_gaussian() -> GaussianBatch:
++    """One bright Gaussian centered in the image."""
++    return GaussianBatch(
++        xy=torch.tensor([[16.0, 16.0]]),
++        scale=torch.tensor([[2.0, 2.0]]),
++        rot=torch.tensor([0.0]),
++        feat=torch.tensor([[1.0, 0.5, 0.25]]),  # RGB
++    )
++
++
++@pytest.fixture
++def two_distinct_gaussians() -> GaussianBatch:
++    """Two non-overlapping Gaussians, one red one blue."""
++    return GaussianBatch(
++        xy=torch.tensor([[8.0, 16.0], [24.0, 16.0]]),
++        scale=torch.tensor([[1.5, 1.5], [1.5, 1.5]]),
++        rot=torch.tensor([0.0, 0.0]),
++        feat=torch.tensor([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]),
++    )
++
++
++def test_reference_backend_centered_peak(single_centered_gaussian: GaussianBatch) -> None:
++    """Reference renderer's peak intensity should be at the Gaussian center."""
++    r = Rasterizer(force_backend="reference")
++    out = r(single_centered_gaussian, output_hw=(32, 32))
++    assert out.shape == (3, 32, 32)
++    # Peak intensity = at center (16, 16)
++    peak_y, peak_x = torch.argmax(out[0]).item() // 32, torch.argmax(out[0]).item() % 32
++    assert (peak_x, peak_y) == (16, 16)
++    # Center value must equal feat[0] (no normalization in reference at peak distance 0).
++    center_val = out[:, 16, 16]
++    assert torch.allclose(center_val, single_centered_gaussian.feat[0], atol=1e-5)
++
++
++def test_reference_backend_two_distinct_peaks(two_distinct_gaussians: GaussianBatch) -> None:
++    """Two non-overlapping Gaussians should each produce a peak at their position."""
++    r = Rasterizer(force_backend="reference")
++    out = r(two_distinct_gaussians, output_hw=(32, 32))
++    # Red peak at (8, 16): out[0] should be high there, out[2] low.
++    assert out[0, 16, 8] > 0.9
++    assert out[2, 16, 8] < 0.1
++    # Blue peak at (24, 16): out[2] high, out[0] low.
++    assert out[2, 16, 24] > 0.9
++    assert out[0, 16, 24] < 0.1
++
++
++def test_reference_backend_empty_batch_returns_zeros() -> None:
++    r = Rasterizer(force_backend="reference")
++    empty = GaussianBatch(
++        xy=torch.zeros((0, 2)),
++        scale=torch.zeros((0, 2)),
++        rot=torch.zeros((0,)),
++        feat=torch.zeros((0, 3)),
++    )
++    out = r(empty, output_hw=(8, 8))
++    assert out.shape == (3, 8, 8)
++    assert torch.all(out == 0)
++
++
++def test_invalid_output_hw_raises() -> None:
++    r = Rasterizer(force_backend="reference")
++    g = GaussianBatch(
++        xy=torch.tensor([[0.0, 0.0]]),
++        scale=torch.tensor([[1.0, 1.0]]),
++        rot=torch.tensor([0.0]),
++        feat=torch.tensor([[1.0]]),
++    )
++    with pytest.raises(ValueError, match="output_hw must be positive"):
++        r(g, output_hw=(0, 8))
++    with pytest.raises(ValueError, match="output_hw must be positive"):
++        r(g, output_hw=(8, -1))
++
++
++def test_gaussian_batch_validates_shapes() -> None:
++    with pytest.raises(ValueError, match="xy must be"):
++        GaussianBatch(
++            xy=torch.zeros((1, 3)),  # wrong: should be (N, 2)
++            scale=torch.zeros((1, 2)),
++            rot=torch.zeros((1,)),
++            feat=torch.zeros((1, 3)),
++        )
++    with pytest.raises(ValueError, match="scale must be"):
++        GaussianBatch(
++            xy=torch.zeros((1, 2)),
++            scale=torch.zeros((1, 3)),
++            rot=torch.zeros((1,)),
++            feat=torch.zeros((1, 3)),
++        )
++    with pytest.raises(ValueError, match="rot must be"):
++        GaussianBatch(
++            xy=torch.zeros((1, 2)),
++            scale=torch.zeros((1, 2)),
++            rot=torch.zeros((1, 1)),
++            feat=torch.zeros((1, 3)),
++        )
++    with pytest.raises(ValueError, match="feat must be"):
++        GaussianBatch(
++            xy=torch.zeros((1, 2)),
++            scale=torch.zeros((1, 2)),
++            rot=torch.zeros((1,)),
++            feat=torch.zeros((2, 3)),  # mismatched N
++        )
++
++
++# CUDA-specific tests below. Skipped when CUDA / gsplat unavailable.
++
++cuda_available = torch.cuda.is_available()
++try:
++    from gsplat import rasterize_gaussians_sum  # noqa: F401
++
++    gsplat_available = True
++except Exception:
++    gsplat_available = False
++
++
++@pytest.mark.gpu
++@pytest.mark.skipif(not (cuda_available and gsplat_available),
++                    reason="CUDA / gsplat not available")
++def test_cuda_matches_reference_within_tolerance(two_distinct_gaussians: GaussianBatch) -> None:
++    """CUDA backend output should approximate the reference output."""
++    g_cpu = two_distinct_gaussians
++    g_cuda = GaussianBatch(
++        xy=g_cpu.xy.cuda(),
++        scale=g_cpu.scale.cuda(),
++        rot=g_cpu.rot.cuda(),
++        feat=g_cpu.feat.cuda(),
++    )
++    ref = Rasterizer(force_backend="reference")(g_cpu, output_hw=(32, 32))
++    cuda = Rasterizer(force_backend="cuda")(g_cuda, output_hw=(32, 32)).cpu()
++    # Tile-based top-K introduces small differences vs the reference at tile
++    # boundaries — tolerance is permissive on purpose.
++    assert torch.mean(torch.abs(ref - cuda)).item() < 0.05
+diff --git a/tests/gaussian/test_renderer_integration.py b/tests/gaussian/test_renderer_integration.py
+new file mode 100644
+index 0000000..def339b
+--- /dev/null
++++ b/tests/gaussian/test_renderer_integration.py
+@@ -0,0 +1,67 @@
++"""Sprint 1 / T1.7 — integration smoke test.
++
++Verifies the new Gaussian renderer module coexists with the existing
++pixel-based OSS modules without import collisions or interference. Existing
++OSS pixel-based tests must remain green after the Gaussian module lands.
++"""
++
++from __future__ import annotations
++
++import pytest
++
++
++def test_gaussian_renderer_importable() -> None:
++    """The renderer module must import cleanly on any machine, regardless of
++    CUDA availability."""
++    from oss.gaussian.renderer import GaussianBatch, Rasterizer, TILE_SIZE
++    assert TILE_SIZE == 16
++    assert callable(Rasterizer)
++    assert callable(GaussianBatch)
++
++
++def test_pixel_based_oss_still_importable() -> None:
++    """Importing the new module must not break the existing pixel-based OSS
++    classes."""
++    # If any of these fails, the Gaussian track is leaking into the existing
++    # namespace.
++    from oss.model.oss import OSS  # noqa: F401
++    from oss.model.oss_pico import OSSPico  # noqa: F401
++    from oss.model.oss_rg import OSSRG  # noqa: F401
++    from oss.model.oss_fx import OSSFx  # noqa: F401
++
++
++def test_no_namespace_collision_between_tracks() -> None:
++    """`oss.gaussian` is a sibling of `oss.model`, not a parent. Confirm
++    namespace isolation."""
++    import oss
++    import oss.gaussian
++    import oss.model
++
++    assert oss.gaussian.__name__ == "oss.gaussian"
++    assert oss.model.__name__ == "oss.model"
++    # Submodules don't shadow each other.
++    assert oss.gaussian is not oss.model
++
++
++def test_review_pipeline_module_importable() -> None:
++    """The cross-cutting code review pipeline must be importable for sprint
++    checkpoints."""
++    from oss.gaussian.review import schema, reviewers, judge, run  # noqa: F401
++
++
++def test_renderer_default_construction_works() -> None:
++    """Default Rasterizer config must construct without errors on any
++    machine."""
++    from oss.gaussian.renderer import Rasterizer
++    r = Rasterizer()
++    assert r.tile_size == 16
++    assert r.topk_norm is True
++    assert r.force_backend is None
++
++
++@pytest.mark.gpu
++def test_gpu_marker_exists() -> None:
++    """The `gpu` marker must be registered so CUDA-only Gaussian tests can be
++    selected/deselected via -m."""
++    # Self-test: this test itself uses the marker.
++    pass
