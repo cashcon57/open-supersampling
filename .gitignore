@@ -83,3 +83,8 @@ id_ed25519*
 
 .superpowers/
 2407.01866v2.pdf
+
+# Carve-out: CMakeLists.txt + spec text files must be tracked despite *.txt rule above.
+!**/CMakeLists.txt
+!**/COMMIT.pin
+!**/.pin
