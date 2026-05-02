@@ -390,6 +390,40 @@ def _psnr(pred: torch.Tensor, target: torch.Tensor) -> float:
     return float(-10.0 * math.log10(mse))
 
 
+def _tile_align_batch(
+    lr: torch.Tensor,
+    depth: torch.Tensor,
+    motion: torch.Tensor,
+    normals: torch.Tensor,
+    canvas: torch.Tensor,
+    gt_hr: torch.Tensor,
+    tile: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Center-crop a batch so LR is a multiple of ``tile`` and HR aligns at the
+    same scale ratio. Used for datasets whose native frame size doesn't divide
+    cleanly (e.g. SRGD 540x960 → 270x480 LR).
+    """
+    scale_int = int(round(gt_hr.shape[-2] / lr.shape[-2]))
+    lr_h, lr_w = lr.shape[-2:]
+    lr_h_a = (lr_h // tile) * tile
+    lr_w_a = (lr_w // tile) * tile
+    if (lr_h_a, lr_w_a) == (lr_h, lr_w):
+        return lr, depth, motion, normals, canvas, gt_hr
+    top = (lr_h - lr_h_a) // 2
+    left = (lr_w - lr_w_a) // 2
+    lr = lr[..., top:top + lr_h_a, left:left + lr_w_a]
+    depth = depth[..., top:top + lr_h_a, left:left + lr_w_a]
+    motion = motion[..., top:top + lr_h_a, left:left + lr_w_a]
+    normals = normals[..., top:top + lr_h_a, left:left + lr_w_a]
+    canvas = canvas[..., top:top + lr_h_a, left:left + lr_w_a]
+    hr_top = top * scale_int
+    hr_left = left * scale_int
+    gt_hr = gt_hr[
+        ..., hr_top:hr_top + lr_h_a * scale_int, hr_left:hr_left + lr_w_a * scale_int
+    ]
+    return lr, depth, motion, normals, canvas, gt_hr
+
+
 def evaluate_against_bicubic(
     net: GaussianParamNetwork,
     head: OutputHead,
@@ -431,6 +465,10 @@ def evaluate_against_bicubic(
             normals = batch["normals"].to(device)
             canvas = batch["canvas_hint"].to(device)
             gt_hr = batch["gt_hr_frame"].to(device)
+
+            lr, depth, motion, normals, canvas, gt_hr = _tile_align_batch(
+                lr, depth, motion, normals, canvas, gt_hr, tile=net.tile_size
+            )
 
             x = torch.cat([lr, depth, motion, normals, canvas], dim=1)
             H_hr, W_hr = gt_hr.shape[-2:]
@@ -659,27 +697,9 @@ def main(argv: list[str] | None = None) -> int:
             canvas = batch["canvas_hint"].to(args.device)
             gt_hr = batch["gt_hr_frame"].to(args.device)
 
-            # Tile-align: the param net requires LR H/W to be exact multiples of
-            # tile_size. SRGD frames at 540x960 produce 270x480 LR (270 % 16 != 0).
-            # Center-crop the whole batch to the largest tile-aligned size.
-            tile = net.tile_size
-            scale_int = int(round(gt_hr.shape[-2] / lr.shape[-2]))
-            lr_h, lr_w = lr.shape[-2:]
-            lr_h_aligned = (lr_h // tile) * tile
-            lr_w_aligned = (lr_w // tile) * tile
-            if (lr_h_aligned, lr_w_aligned) != (lr_h, lr_w):
-                top = (lr_h - lr_h_aligned) // 2
-                left = (lr_w - lr_w_aligned) // 2
-                lr = lr[..., top:top + lr_h_aligned, left:left + lr_w_aligned]
-                depth = depth[..., top:top + lr_h_aligned, left:left + lr_w_aligned]
-                motion = motion[..., top:top + lr_h_aligned, left:left + lr_w_aligned]
-                normals = normals[..., top:top + lr_h_aligned, left:left + lr_w_aligned]
-                canvas = canvas[..., top:top + lr_h_aligned, left:left + lr_w_aligned]
-                hr_top = top * scale_int
-                hr_left = left * scale_int
-                hr_h_aligned = lr_h_aligned * scale_int
-                hr_w_aligned = lr_w_aligned * scale_int
-                gt_hr = gt_hr[..., hr_top:hr_top + hr_h_aligned, hr_left:hr_left + hr_w_aligned]
+            lr, depth, motion, normals, canvas, gt_hr = _tile_align_batch(
+                lr, depth, motion, normals, canvas, gt_hr, tile=net.tile_size
+            )
 
             # 12-channel input: LR(3)+depth(1)+motion(2)+normals(3)+canvas(3).
             x = torch.cat([lr, depth, motion, normals, canvas], dim=1)
