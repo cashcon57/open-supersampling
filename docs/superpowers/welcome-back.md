@@ -4,11 +4,14 @@ Status snapshot of OSS-Gaussian project, generated while you were away.
 
 ## TL;DR
 
-- **All 7 sprint scaffolds landed + Sprint 4 trainer wired + cross-sprint integration tests pass.**
-  ~7,000+ lines of Python + 1,500+ lines of C++ scaffolding + 7 detailed sprint plans + 6 design docs + code review pipeline.
-- **121 tests passing** on M3 Max + RTX 3080 Ti (parity).
-- **CUDA Toolkit 12.4** installing on 3080 Ti via SYSTEM scheduled task. Auto-watcher will trigger gsplat build + bench + Sprint 1 close-out the moment it lands.
+- **All 7 sprint scaffolds landed + Sprint 4 trainer wired + cross-sprint integration tests pass + research synthesis committed + baseline upscalers added.**
+  ~7,500+ lines of Python + 1,500+ lines of C++ scaffolding + 7 detailed sprint plans + 7 design docs + code review pipeline + research synthesis.
+- **128 tests passing** on M3 Max (121) + RTX 3080 Ti (128 incl. CUDA-aware paths).
+- **CUDA toolkit installed** on 3080 Ti via conda nvidia channel (system installer was broken; bypassed). gsplat CUDA extension built and importable.
+- **3 CUDA-specific tests fail** (`test_cuda_*`) due to gsplat 1.4.0 API drift from the Image-GS pin — to debug during Sprint 1 close-out. Reference backend works on CUDA so this isn't blocking.
 - **Cross-sprint integration validated**: classifier → network → renderer → canvas → extrapolation pipeline runs end-to-end with the right shapes.
+- **Research synthesis** at `docs/superpowers/research-synthesis-2026-05-01.md`: two external research batches confirm architecture + queue 4 plan updates.
+- **Baselines.py** with bicubic + lanczos + FSR/DLSS shim classes for iso-latency comparison (Sprint 4 close-out gate).
 - All progress committed + pushed to `origin/v0.2-dev`.
 
 ## What was done
