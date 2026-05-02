@@ -354,6 +354,64 @@ def build_model(args: TrainArgs) -> tuple[GaussianParamNetwork, OutputHead, Cova
     return net, head, bank
 
 
+@torch.no_grad()
+def _compute_diagnostics(
+    head: OutputHead,
+    raw: torch.Tensor,
+    depth: torch.Tensor | None,
+    normals: torch.Tensor | None,
+) -> dict[str, float]:
+    """Diagnostic metrics from one forward pass — exposes whether the model
+    has collapsed to a degenerate solution (constant-gray output).
+
+    Returns:
+        bank_entropy_norm: H(bank_weights) / log(bank_size) ∈ [0, 1].
+                          1.0 = uniform across all entries (no learning yet).
+                          ~0.0 = collapsed to a single entry.
+        mean_dxy_norm:    mean |xy − tile_center| / tile_size ∈ [0, 1].
+                          ~0.0 = positions stuck at tile centers.
+        mean_color:       per-channel mean of decoded color in [0, 1].
+                          ~0.5 across all channels = sigmoid trapped at zero
+                          (constant gray).
+        color_std:        std of color across all Gaussians. Low = output
+                          is uniform; high = some texture variety.
+    """
+    decoded = head.decode(raw, depth=depth, normals=normals)
+    bank_w = decoded.bank_weights  # (B, N, K_bank)
+    eps = 1e-12
+    H_per = -(bank_w * (bank_w.clamp(min=eps).log())).sum(dim=-1)  # (B, N)
+    bank_entropy_norm = float(H_per.mean().item() / math.log(bank_w.shape[-1]))
+
+    # Position deviation from tile center.
+    xy = decoded.xy  # (B, N, 2) in pixel space
+    B, N, _ = xy.shape
+    K = head.k_per_tile
+    tile_size = float(head.tile_size)
+    Ht = raw.shape[-2]
+    Wt = raw.shape[-1]
+    # Reconstruct tile centers in same order decode produced them.
+    ys = (torch.arange(Ht, device=xy.device, dtype=xy.dtype) + 0.5) * tile_size
+    xs = (torch.arange(Wt, device=xy.device, dtype=xy.dtype) + 0.5) * tile_size
+    cy, cx = torch.meshgrid(ys, xs, indexing="ij")  # (Ht, Wt)
+    centers = torch.stack([cx, cy], dim=-1)         # (Ht, Wt, 2)
+    centers = centers[None, :, :, None, :].expand(B, Ht, Wt, K, 2).reshape(B, N, 2)
+    dxy = (xy - centers).norm(dim=-1) / tile_size   # (B, N)
+    mean_dxy_norm = float(dxy.mean().item())
+
+    feat = decoded.feat  # (B, N, 3) in [0, 1] after sigmoid
+    mean_color = feat.mean(dim=(0, 1)).tolist()
+    color_std = float(feat.std().item())
+
+    return {
+        "bank_entropy_norm": bank_entropy_norm,
+        "mean_dxy_norm": mean_dxy_norm,
+        "mean_color_r": mean_color[0],
+        "mean_color_g": mean_color[1],
+        "mean_color_b": mean_color[2],
+        "color_std": color_std,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Synthetic batch (CI / sanity path)
 # ---------------------------------------------------------------------------
@@ -745,17 +803,14 @@ def main(argv: list[str] | None = None) -> int:
             optim.step()
 
             if step % args.log_every == 0:
-                row = {"step": step, "loss": float(loss.item()), **parts}
+                diag = _compute_diagnostics(head, raw, depth=None, normals=None)
+                row = {"step": step, "loss": float(loss.item()), **parts, **diag}
                 metrics_log.append(row)
-                # parts has either 'ssim' (real) or 'pooled_l1' (fallback). Pick whichever is present.
                 aux_key = "ssim" if "ssim" in row else "pooled_l1"
                 log.info(
-                    "step=%d loss=%.4f l1=%.4f %s=%.4f",
-                    step,
-                    row["loss"],
-                    row["l1"],
-                    aux_key,
-                    row[aux_key],
+                    "step=%d loss=%.4f l1=%.4f %s=%.4f bank_H=%.3f dxy=%.3f color_std=%.3f",
+                    step, row["loss"], row["l1"], aux_key, row[aux_key],
+                    row["bank_entropy_norm"], row["mean_dxy_norm"], row["color_std"],
                 )
 
             if step % args.ckpt_every == 0 or step == args.max_steps:
@@ -837,17 +892,14 @@ def main(argv: list[str] | None = None) -> int:
             optim.step()
 
             if step % args.log_every == 0:
-                row = {"step": step, "loss": float(loss.item()), **parts}
+                diag = _compute_diagnostics(head, raw, depth=depth, normals=normals)
+                row = {"step": step, "loss": float(loss.item()), **parts, **diag}
                 metrics_log.append(row)
-                # parts has either 'ssim' (real) or 'pooled_l1' (fallback). Pick whichever is present.
                 aux_key = "ssim" if "ssim" in row else "pooled_l1"
                 log.info(
-                    "step=%d loss=%.4f l1=%.4f %s=%.4f",
-                    step,
-                    row["loss"],
-                    row["l1"],
-                    aux_key,
-                    row[aux_key],
+                    "step=%d loss=%.4f l1=%.4f %s=%.4f bank_H=%.3f dxy=%.3f color_std=%.3f",
+                    step, row["loss"], row["l1"], aux_key, row[aux_key],
+                    row["bank_entropy_norm"], row["mean_dxy_norm"], row["color_std"],
                 )
 
             if step % args.ckpt_every == 0:
