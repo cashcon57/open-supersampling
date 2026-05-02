@@ -23,6 +23,7 @@ losses are introduced in T4.3 / T4.4.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import List, Tuple
 
@@ -160,31 +161,45 @@ class GaussianParamNetwork(nn.Module):
         self._init_head()
 
     def _init_head(self) -> None:
-        """Initialise the head so K parallel Gaussians per tile START DIFFERENT.
+        """Initialise the head so K parallel Gaussians per tile START DIFFERENT
+        AND BIG ENOUGH TO HIT TILES.
 
-        Pure zero-init (the prior implementation) was a dead-init symmetry
-        failure: the K Gaussians within each tile shared identical
-        (position, bank weights, color, scale, rotation), the loss gradient
-        was symmetric across them, AdamW updated them in lockstep, and the
-        symmetry never broke. Diagnostic output (`bank_entropy_norm=1.000`,
-        `mean_dxy_norm=0.000`, `color_std<0.03`) was pinned across 500
-        steps. See `docs/superpowers/experiments/2026-05-02-output-head-dead-init.md`.
+        Two bugs the previous zero-init had:
 
-        We now keep the WEIGHTS near zero (so the spatial features don't
-        dominate at init — small Gaussian, std=1e-3) but apply a small
-        Gaussian random BIAS (std=0.05) so each output channel — and
-        therefore each of the K parallel decoder slots — starts at a
-        different point. This is enough to break K-way symmetry without
-        destabilising early training:
-          - tanh(0.05) ≈ 0.05 → ±5% of a tile-size offset on positions.
-          - softmax over a vector with std 0.05 is still nearly uniform but
-            no longer perfectly so, giving the bank weights a gradient to
-            follow.
-          - sigmoid(0.05) ≈ 0.512, sigmoid(−0.05) ≈ 0.488 → tiny color
-            differential, again enough to break symmetry.
+        1. **K-way symmetry failure** — all K Gaussians within a tile shared
+           identical (position, bank weights, color, scale, rotation), so
+           the loss gradient was symmetric across them, AdamW updated them
+           in lockstep, the symmetry never broke, and the rendered output
+           collapsed to a constant-gray blob per tile. See
+           `docs/superpowers/experiments/2026-05-02-output-head-dead-init.md`.
+
+        2. **Silent-zero CUDA backward** — gsplat 1.4.0 returns zero
+           gradients when Gaussians are too small to hit any tile after
+           coordinate normalisation. With log_scale=0 → scale_factor=1, the
+           bank's entry-0 isotropic σ=1px is ~1/256 in normalised space and
+           often misses every tile. The 300-step param-probe showed
+           `head.bias.grad` was zero on ~13 of 14 logged steps. See
+           `docs/superpowers/experiments/2026-05-02-output-head-dead-init.md`
+           §"Smoking gun".
+
+        Init policy now:
+          - **weight:** N(0, 1e-3). Spatial features don't dominate at init.
+          - **bias:** N(0, 0.05) on every channel — breaks K-way symmetry.
+          - **bias on the log_scale channel (offset 2 within each K block):**
+            shifted by `log(8) ≈ 2.08` so initial scale_factor ≈ 8, giving
+            Gaussians an 8× radius at init and reliably hitting tiles. The
+            network can shrink them later via gradient.
         """
         nn.init.normal_(self.head.weight, mean=0.0, std=1e-3)
         nn.init.normal_(self.head.bias, mean=0.0, std=0.05)
+
+        # Per-K log_scale channel bias: index 2 within each per_g block.
+        per_g = per_gaussian_channels(self.bank_size)
+        log_scale_init = math.log(8.0)
+        with torch.no_grad():
+            for k in range(self.k_per_tile):
+                ch = k * per_g + 2  # log_scale channel for this Gaussian
+                self.head.bias[ch] += log_scale_init
 
     # ---- Forward -----------------------------------------------------------
     def forward(self, x: torch.Tensor) -> torch.Tensor:
