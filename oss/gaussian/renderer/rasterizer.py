@@ -165,8 +165,15 @@ class Rasterizer:
         tile_bounds = ((h + self.tile_size - 1) // self.tile_size,
                        (w + self.tile_size - 1) // self.tile_size,
                        1)
+        # gsplat's `scale` argument is the *inverse* scale (smaller = wider
+        # footprint). Our public `GaussianBatch.scale` API is the natural
+        # pixel-space scale (larger = wider footprint), matching how Image-GS
+        # *displays* it. Image-GS reconciles by `1.0/scale` internally
+        # (model.py:_get_scale). Mirror that here so callers use intuitive
+        # scales and we hand gsplat what it expects.
+        inv_scale = 1.0 / gaussians.scale.clamp(min=1e-6)
         xy_proj, radii, conics, num_tiles_hit = project_gaussians_2d_scale_rot(
-            gaussians.xy, gaussians.scale, gaussians.rot, h, w, tile_bounds,
+            gaussians.xy, inv_scale, gaussians.rot, h, w, tile_bounds,
         )
         out_flat = rasterize_gaussians_sum(
             xy_proj, radii, conics, num_tiles_hit,
