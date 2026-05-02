@@ -76,6 +76,7 @@ class TrainArgs:
     dataset: str             # "sintel" | "srgd"
     sintel_sequence: Optional[str]
     srgd_scene: Optional[str]
+    force_lr_synth: bool
     enable_gbuffer_bias: bool
     enable_engine_aliased_lr: bool
     score_every: int         # run bicubic-vs-model comparison every N steps
@@ -131,6 +132,16 @@ class TrainArgs:
             ),
         )
         p.add_argument(
+            "--force-lr-synth",
+            action="store_true",
+            default=False,
+            help=(
+                "Ignore any pre-baked LR files on disk and always synthesize "
+                "LR from HR via lr_synth. Avoids the bicubic-LR-trap from "
+                "datasets that ship bicubic-downsampled LR."
+            ),
+        )
+        p.add_argument(
             "--enable-gbuffer-bias",
             action="store_true",
             default=False,
@@ -177,6 +188,7 @@ class TrainArgs:
         use_synthetic_batch = a.use_synthetic_batch
         score_every = a.score_every
 
+        force_lr_synth = a.force_lr_synth
         if smoke_test:
             # Hard overrides: pico tier, small batch, 3-hour wall clock.
             tier = "pico"
@@ -185,6 +197,7 @@ class TrainArgs:
                 max_time_seconds = 10800  # 3 hours
             enable_gbuffer_bias = True
             enable_engine_aliased_lr = True
+            force_lr_synth = True  # avoid bicubic-LR-trap on SRGD's pre-baked LR
             use_synthetic_batch = False  # smoke test requires real data
 
         return cls(
@@ -204,6 +217,7 @@ class TrainArgs:
             dataset=a.dataset,
             sintel_sequence=a.sintel_sequence,
             srgd_scene=a.srgd_scene,
+            force_lr_synth=force_lr_synth,
             enable_gbuffer_bias=enable_gbuffer_bias,
             enable_engine_aliased_lr=enable_engine_aliased_lr,
             score_every=score_every,
@@ -350,6 +364,7 @@ def _build_srgd_dataset(args: TrainArgs):
         scale=2.0,
         lr_synth=_build_lr_synth(args),
         scene=args.srgd_scene,
+        force_synth_lr=args.force_lr_synth,
     )
 
 

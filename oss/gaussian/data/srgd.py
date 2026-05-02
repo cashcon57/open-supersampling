@@ -52,10 +52,17 @@ class SRGDGaussianDataset(GaussianDataset):
         synthetic: bool = False,
         lr_synth: "EngineAliasedLRSynth | None" = None,
         scene: str | None = None,
+        force_synth_lr: bool = False,
     ) -> None:
         super().__init__(root=root, scale=scale, lr_synth=lr_synth)
         self.synthetic = synthetic
         self.scene = scene
+        # When True, ignore any pre-baked LR file on disk and always synthesize
+        # the LR from HR via lr_synth (or fall back to box-downsample). This
+        # avoids the "bicubic-LR-trap": SRGD's DownscaleData appears to be
+        # bicubic-downsampled, making bicubic upsampling its near-inverse and
+        # rendering any SR comparison meaningless.
+        self.force_synth_lr = force_synth_lr
         if not self.root.is_dir():
             raise FileNotFoundError(
                 f"SRGD dataset not found at {self.root}.\n"
@@ -118,6 +125,8 @@ class SRGDGaussianDataset(GaussianDataset):
     def __getitem__(self, idx: int) -> GaussianTrainingExample:
         hr_path, lr_path = self._items[idx]
         hr = _load_png(hr_path)
+        if self.force_synth_lr:
+            lr_path = None  # always synthesize from HR
         if lr_path is not None:
             lr = _load_png(lr_path)
             # If shapes don't line up with scale, fall back to synthesis/box-downsample.
