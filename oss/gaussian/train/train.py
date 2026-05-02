@@ -659,6 +659,28 @@ def main(argv: list[str] | None = None) -> int:
             canvas = batch["canvas_hint"].to(args.device)
             gt_hr = batch["gt_hr_frame"].to(args.device)
 
+            # Tile-align: the param net requires LR H/W to be exact multiples of
+            # tile_size. SRGD frames at 540x960 produce 270x480 LR (270 % 16 != 0).
+            # Center-crop the whole batch to the largest tile-aligned size.
+            tile = net.tile_size
+            scale_int = int(round(gt_hr.shape[-2] / lr.shape[-2]))
+            lr_h, lr_w = lr.shape[-2:]
+            lr_h_aligned = (lr_h // tile) * tile
+            lr_w_aligned = (lr_w // tile) * tile
+            if (lr_h_aligned, lr_w_aligned) != (lr_h, lr_w):
+                top = (lr_h - lr_h_aligned) // 2
+                left = (lr_w - lr_w_aligned) // 2
+                lr = lr[..., top:top + lr_h_aligned, left:left + lr_w_aligned]
+                depth = depth[..., top:top + lr_h_aligned, left:left + lr_w_aligned]
+                motion = motion[..., top:top + lr_h_aligned, left:left + lr_w_aligned]
+                normals = normals[..., top:top + lr_h_aligned, left:left + lr_w_aligned]
+                canvas = canvas[..., top:top + lr_h_aligned, left:left + lr_w_aligned]
+                hr_top = top * scale_int
+                hr_left = left * scale_int
+                hr_h_aligned = lr_h_aligned * scale_int
+                hr_w_aligned = lr_w_aligned * scale_int
+                gt_hr = gt_hr[..., hr_top:hr_top + hr_h_aligned, hr_left:hr_left + hr_w_aligned]
+
             # 12-channel input: LR(3)+depth(1)+motion(2)+normals(3)+canvas(3).
             x = torch.cat([lr, depth, motion, normals, canvas], dim=1)
             H_hr, W_hr = gt_hr.shape[-2:]
