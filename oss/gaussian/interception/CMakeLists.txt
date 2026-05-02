@@ -76,12 +76,14 @@ endif()
 # -----------------------------------------------------------------------------
 set(INTERCEPTION_SOURCES
     src/dllmain.cpp
+    src/dxgi_proxy.cpp
     src/ngx_exports.cpp
     src/g_buffer_extractor.cpp
     src/log.cpp)
 
 set(INTERCEPTION_HEADERS
     include/oss_gaussian_interception.h
+    src/dxgi_proxy.h
     src/g_buffer_extractor.h
     src/log.h)
 
@@ -122,3 +124,19 @@ install(FILES include/oss_gaussian_interception.h
 
 install(FILES LICENSE README.md
     DESTINATION .)
+
+# -----------------------------------------------------------------------------
+#  Tests (T2.3). Builds a small executable that LoadLibrary's the produced
+#  dxgi.dll and calls each forwarded export with safe args. Run with:
+#      ctest --test-dir build -C Release --output-on-failure
+# -----------------------------------------------------------------------------
+enable_testing()
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_dxgi_proxy.cpp")
+    add_executable(test_dxgi_proxy tests/test_dxgi_proxy.cpp)
+    target_link_libraries(test_dxgi_proxy PRIVATE shlwapi)
+    add_dependencies(test_dxgi_proxy oss_gaussian_interception)
+    add_test(
+        NAME    test_dxgi_proxy
+        COMMAND test_dxgi_proxy "$<TARGET_FILE:oss_gaussian_interception>")
+endif()

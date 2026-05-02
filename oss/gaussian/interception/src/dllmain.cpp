@@ -22,6 +22,7 @@
 #define OSS_GAUSSIAN_BUILDING_DLL 1
 
 #include "../include/oss_gaussian_interception.h"
+#include "dxgi_proxy.h"
 #include "log.h"
 
 #include <Windows.h>
@@ -48,8 +49,17 @@ void OnAttach(HMODULE self) {
     OSSG_LOG_INFO("dll", "OSS-Gaussian interception DLL attached (build %s)",
                   oss_gaussian_version());
 
+    // T2.3: Forward DXGI exports to system32 dxgi.dll. The forwarders
+    // themselves live in dxgi_proxy.cpp; this just primes the cached HMODULE.
+    // Failure is non-fatal: forwarders log a miss and return E_NOTIMPL.
+    if (OssGaussianDxgiProxyAttach()) {
+        OSSG_LOG_INFO("dll", "DXGI proxy attached (system32 dxgi.dll cached)");
+    } else {
+        OSSG_LOG_ERROR("dll",
+                       "DXGI proxy attach failed; forwarded exports will return E_NOTIMPL");
+    }
+
     // TODO(T2.2): DetourTransactionBegin() / DetourUpdateThread(GetCurrentThread()).
-    // TODO(T2.3): Forward DXGI exports to system32 dxgi.dll (load HMODULE here).
     // TODO(T2.5): LoadLibrary detour for nvngx_dlss.dll → our HMODULE.
     // TODO(T2.8): Hook IDXGIFactory::CreateSwapChain* → vtable-patch Present.
     // TODO(T2.9): SetWindowsHookExW(WH_KEYBOARD_LL, ...) for F11 toggle.
@@ -63,6 +73,8 @@ void OnDetach() {
 
     // TODO(T2.x): Detach all Detours (DetourTransactionBegin/Commit with
     // DetourDetach for every fn-ptr installed in OnAttach).
+
+    OssGaussianDxgiProxyDetach();
 
     OSSG_LOG_INFO("dll", "OSS-Gaussian interception DLL detaching");
     LogShutdown();

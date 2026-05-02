@@ -1,11 +1,45 @@
 # oss-gaussian-interception
 
-C++ DLL that intercepts D3D12 and NVIDIA NGX (DLSS) calls inside Cyberpunk 2077,
-hands G-buffers (color, depth, motion vectors) to the OSS-Gaussian renderer,
-and replaces DLSS with our own upscaler.
+C++ DLL that intercepts D3D12 and NVIDIA NGX (DLSS) calls in DLSS-shipping
+games, hands G-buffers (color, depth, motion vectors) to the OSS-Gaussian
+renderer, and replaces DLSS with our own upscaler.
+
+This is a **generic open-source DLSS replacement**, not a Cyberpunk-specific
+mod. The DLL works wherever DLSS works.
 
 This is **Sprint 2 scaffolding only**. No hooks are active yet. See
 `docs/superpowers/plans/2026-05-01-gaussian-sprint-2-plan.md` for tasks.
+
+## Compatibility
+
+The DLL ships under the name `dxgi.dll` and relies on Windows' game-local DLL
+search resolving it before `C:\Windows\System32\dxgi.dll`. Every DXGI export
+the host process imports is forwarded to the real system dxgi.dll via a
+runtime LoadLibrary + GetProcAddress trampoline (see `src/dxgi_proxy.cpp`),
+so the game launches identically to vanilla until we explicitly intercept a
+call.
+
+| Game                | Status     | Notes                                  |
+|---------------------|------------|----------------------------------------|
+| Cyberpunk 2077      | Primary    | Sprint 2 validation target             |
+| Hogwarts Legacy     | TBD        | Same DLL; not yet smoke-tested         |
+| Portal RTX          | TBD        | Same DLL; not yet smoke-tested         |
+| Alan Wake 2         | TBD        | Same DLL; not yet smoke-tested         |
+| Other DLSS DX12     | Should work| File a report if exports go missing    |
+
+The proxy implementation is **game-agnostic**: no per-title quirks, no
+hardcoded paths beyond `C:\Windows\System32\dxgi.dll`. If a forwarder
+encounters a symbol that the local Windows version's system dxgi.dll does
+not export, the miss is logged to `interception.log` and the call returns
+`E_NOTIMPL`, allowing graceful degradation rather than a crash.
+
+### Fallback: `.def`-based forwarding
+
+A `.def` file with `EXPORTS Foo=C:/Windows/System32/dxgi.Foo` lines is a
+viable alternative to the runtime trampoline (see MSDN "Module-Definition
+(.def) Files"). It is documented here for completeness but **not used** —
+the runtime trampoline is more flexible: we can log misses, support new
+symbols without re-linking, and never bake a static path into the binary.
 
 ## License
 
@@ -82,8 +116,9 @@ oss_gaussian_get_render_mode
 oss_gaussian_version
 ```
 
-The DXGI proxy exports (`CreateDXGIFactory*`, etc.) are added in **T2.3** via
-`src/dxgi_proxy.def`.
+The DXGI proxy exports (`CreateDXGIFactory*`, `DXGIGetDebugInterface1`, the
+PIX/Compat/DXGID3D10 surface, etc.) are added in **T2.3** via
+`src/dxgi_proxy.cpp` (runtime LoadLibrary + GetProcAddress trampolines).
 
 ## Install (Cyberpunk 2077)
 
