@@ -80,6 +80,9 @@ class TrainArgs:
     renderer_backend: str   # "auto" | "cuda" | "reference"
     enable_gbuffer_bias: bool
     enable_engine_aliased_lr: bool
+    lr_synth_blur_sigma: float
+    lr_synth_jpeg: bool
+    lr_synth_jpeg_quality: int
     score_every: int         # run bicubic-vs-model comparison every N steps
     # Time-bounding
     max_time_seconds: Optional[int]
@@ -165,6 +168,28 @@ class TrainArgs:
             help="Wrap dataset with EngineAliasedLRSynth (jitter+TAA blur) for engine-realistic LR.",
         )
         p.add_argument(
+            "--lr-synth-blur-sigma",
+            type=float,
+            default=0.5,
+            help=(
+                "TAA blur kernel sigma when --enable-engine-aliased-lr is on. "
+                "0.5 = mild (≈DLSS), 1.0–1.5 = aggressive (drops the bicubic "
+                "baseline and gives the SR network more to learn)."
+            ),
+        )
+        p.add_argument(
+            "--lr-synth-jpeg",
+            action="store_true",
+            default=False,
+            help="Apply JPEG artifact pass in engine-aliased LR synth.",
+        )
+        p.add_argument(
+            "--lr-synth-jpeg-quality",
+            type=int,
+            default=85,
+            help="JPEG quality for --lr-synth-jpeg (1-95).",
+        )
+        p.add_argument(
             "--eval-every",
             type=int,
             default=500,
@@ -200,6 +225,9 @@ class TrainArgs:
         score_every = a.score_every
 
         force_lr_synth = a.force_lr_synth
+        lr_synth_blur_sigma = a.lr_synth_blur_sigma
+        lr_synth_jpeg = a.lr_synth_jpeg
+        lr_synth_jpeg_quality = a.lr_synth_jpeg_quality
         if smoke_test:
             # Hard overrides: pico tier, small batch, 3-hour wall clock.
             tier = "pico"
@@ -210,6 +238,11 @@ class TrainArgs:
             enable_engine_aliased_lr = True
             force_lr_synth = True  # avoid bicubic-LR-trap on SRGD's pre-baked LR
             use_synthetic_batch = False  # smoke test requires real data
+            # Aggressive engine-aliased synth: drop the bicubic baseline so the
+            # SR network has something meaningful to learn against.
+            if a.lr_synth_blur_sigma == 0.5:  # default → upgrade for smoke
+                lr_synth_blur_sigma = 1.5
+            lr_synth_jpeg = True if not a.lr_synth_jpeg else a.lr_synth_jpeg
 
         return cls(
             tier=tier,
@@ -232,6 +265,9 @@ class TrainArgs:
             renderer_backend=a.renderer_backend,
             enable_gbuffer_bias=enable_gbuffer_bias,
             enable_engine_aliased_lr=enable_engine_aliased_lr,
+            lr_synth_blur_sigma=lr_synth_blur_sigma,
+            lr_synth_jpeg=lr_synth_jpeg,
+            lr_synth_jpeg_quality=lr_synth_jpeg_quality,
             score_every=score_every,
             max_time_seconds=max_time_seconds,
             smoke_test=smoke_test,
@@ -314,7 +350,11 @@ def _build_lr_synth(args: TrainArgs):
     if not args.enable_engine_aliased_lr:
         return None
     return EngineAliasedLRSynth(
-        enable_jitter=True, enable_taa_blur=True, enable_jpeg=False
+        enable_jitter=True,
+        enable_taa_blur=True,
+        enable_jpeg=args.lr_synth_jpeg,
+        jpeg_quality=args.lr_synth_jpeg_quality,
+        blur_sigma=args.lr_synth_blur_sigma,
     )
 
 

@@ -197,39 +197,42 @@ def _gaussian_kernel_2d(sigma: float, kernel_size: int = 3) -> Tensor:
     return kernel
 
 
-def taa_blur_approx(lr: Tensor, sigma: float = 0.5) -> Tensor:
+def taa_blur_approx(lr: Tensor, sigma: float = 0.5, kernel_size: int = 3) -> Tensor:
     """Simulate TAA temporal blur via a small Gaussian blur on the LR image.
 
     Real TAA accumulates frames using an exponential moving average (EMA):
         I_t = α·I_t + (1−α)·warp(I_{t−1})
     This EMA blurs sharp edges across time.  In a random-access dataset where
     we do not have access to the prior frame and its optical flow, we approximate
-    the effect with a single-frame 3×3 Gaussian blur at σ≈0.5.  The kernel
-    size and sigma are chosen to roughly match the blur magnitude of a 10-frame
-    EMA (α=0.1) on a stationary scene.
+    the effect with a single-frame Gaussian blur.
 
     Args:
-        lr:    (C, H, W) float32 LR tensor.
-        sigma: Gaussian standard deviation in LR pixels. Default: 0.5.
+        lr:          (C, H, W) float32 LR tensor.
+        sigma:       Gaussian standard deviation in LR pixels. Default 0.5
+                     (mild — matches a 10-frame EMA at α=0.1). Bump to 1.0–1.5
+                     for more aggressive engine-aliased degradation.
+        kernel_size: Odd kernel side length. Default 3. Must satisfy
+                     ``3*sigma ≤ kernel_size // 2`` to avoid clipping the tail.
 
     Returns:
         (C, H, W) float32 blurred LR tensor.
     """
     if lr.dim() != 3:
         raise ValueError(f"taa_blur_approx expects (C, H, W); got {tuple(lr.shape)}")
+    if kernel_size % 2 == 0:
+        raise ValueError(f"kernel_size must be odd; got {kernel_size}")
     C, H, W = lr.shape
 
-    kernel = _gaussian_kernel_2d(sigma=sigma, kernel_size=3)  # (3, 3)
-    # Expand to (C, 1, 3, 3) for depthwise convolution.
-    kernel = kernel.to(lr.dtype).unsqueeze(0).unsqueeze(0).expand(C, 1, 3, 3)
+    kernel = _gaussian_kernel_2d(sigma=sigma, kernel_size=kernel_size)  # (k, k)
+    kernel = kernel.to(lr.dtype).unsqueeze(0).unsqueeze(0).expand(C, 1, kernel_size, kernel_size)
 
-    # Reflect padding to avoid zero-border artifacts.
+    pad = kernel_size // 2
     out = F.conv2d(
-        lr.unsqueeze(0),   # (1, C, H, W)
+        lr.unsqueeze(0),
         kernel,
-        padding=1,
+        padding=pad,
         groups=C,
-    ).squeeze(0)           # (C, H, W)
+    ).squeeze(0)
 
     return out.clamp(0.0, 1.0)
 
@@ -316,12 +319,15 @@ class EngineAliasedLRSynth:
     enable_taa_blur: bool = True
     enable_jpeg: bool = False
     jpeg_quality: int = 85
+    blur_sigma: float = 0.5  # TAA blur kernel sigma; raise to 1.0–1.5 for more aggressive degradation
 
     def __post_init__(self) -> None:
         if self.scale < 1.0:
             raise ValueError(f"scale must be >=1.0; got {self.scale}")
         if not 1 <= self.jpeg_quality <= 95:
             raise ValueError(f"jpeg_quality must be in [1, 95]; got {self.jpeg_quality}")
+        if self.blur_sigma <= 0:
+            raise ValueError(f"blur_sigma must be > 0; got {self.blur_sigma}")
 
     def synthesize(self, hr: Tensor, frame_idx: int) -> Tensor:
         """Produce an engine-aliased LR frame from a high-resolution input.
@@ -350,7 +356,9 @@ class EngineAliasedLRSynth:
 
         # Step 3 — TAA blur approximation on LR.
         if self.enable_taa_blur:
-            lr = taa_blur_approx(lr)
+            # Pick kernel size so 3*sigma fits inside the kernel half-width.
+            ksize = max(3, int(2 * round(3 * self.blur_sigma) + 1))
+            lr = taa_blur_approx(lr, sigma=self.blur_sigma, kernel_size=ksize)
 
         # Step 4 — Optional JPEG artefacts.
         if self.enable_jpeg:
