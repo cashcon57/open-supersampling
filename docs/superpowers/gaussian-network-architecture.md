@@ -1,8 +1,9 @@
 # OSS-Gaussian — Network Architecture
 
-**Sprint:** 4. **Status:** design + skeleton landed; training pending Lambda
-authorisation. **Spec:** `docs/superpowers/specs/2026-05-01-gaussian-temporal-canvas-design.md`.
+**Sprint:** 4. **Status:** design + skeleton landed; trainer wired end-to-end on RTX 3080 Ti; training **load-bearing on local hardware** (Lambda H100 spend out of budget for v0). **Trainability gate:** Lite or Standard tier must beat bicubic on the aggressive engine-aliased LR setup before community-capture or temporal-canvas work expands.
+**Spec:** `docs/superpowers/specs/2026-05-01-gaussian-temporal-canvas-design.md`.
 **Plan:** `docs/superpowers/plans/2026-05-01-gaussian-sprint-4-plan.md`.
+**Live findings:** `docs/superpowers/experiments/2026-05-02-sprint4-smoke-findings.md`.
 
 This document covers the param-network half of OSS-Gaussian: the small CNN
 that turns LR + G-buffers into per-tile Gaussian parameters that the Sprint 1
@@ -131,9 +132,13 @@ The Gaussians budget × K-per-tile relationship: `N_total ≈ K × n_complex_til
 On a 1440p frame ~30% of 16×16 tiles are complex per Sprint 3's analysis; with
 K=5 that gives 8 100 Gaussians ≈ Standard target.
 
+> **Tier-collapse correction (2026-05-02):** The earlier "single trained model fans out to all tiers via prune/retrain" plan does not survive contact with smoke-test data. Pico (75K) at lr=3e-4, mild engine-aliased LR, 5 000 steps on SRGD ActionRPG produced flat 11–12 dB PSNR vs bicubic 33–37 dB — too undersized to learn SR from scratch at 540×960. The current production plan: **train Lite or Standard from scratch on 3080 Ti, then distil down to Pico for Steam Deck inference only.** Pico is no longer a from-scratch training target. See `docs/superpowers/experiments/2026-05-02-sprint4-smoke-findings.md` §4 for the per-step PSNR table.
+
 ---
 
 ## 4. Loss function
+
+**Spec (target):**
 
 ```
 L_total = L_hdr_l1
@@ -143,13 +148,15 @@ L_total = L_hdr_l1
         + 0.001 · L_cov_reg
 ```
 
-| Term | What | Why |
-|------|------|-----|
-| `L_hdr_l1` | L1 on Reinhard-tonemapped HR images | Pixel accuracy under HDR-aware tone mapping. |
-| `L_ssim` | 1 − SSIM(window=11) | Structural correctness, low-frequency stability. |
-| `L_lpips` | LPIPS-VGG | Perceptual quality at human-relevant scale. |
-| `L_temporal` | L1 between current prediction and motion-warped previous prediction in static regions | Eliminates ghosting and twinkle in flat areas. |
-| `L_cov_reg` | `max(0, target_entropy − H(softmax(bank_logits)))`, target_entropy = 0.6 · log(K_bank) | Prevents bank collapse to one entry. |
+**Currently implemented in `oss/gaussian/train/train.py::composite_loss`:** `L1 + 0.1 · (1 − SSIM)` when `pytorch_msssim` is importable, otherwise `L1 + 0.1 · pooled_l1` as a dependency-free fallback. Real SSIM is now wired (commit on `v0.2-dev`, 2026-05-02). The earlier `ssim_proxy` metric was a misnamed pooled-L1; it's been removed and the field is now either `ssim` or `pooled_l1` depending on which path runs. **LPIPS, temporal, and covariance-regularisation terms are not yet wired** — they're spec'd but blocked behind the basic trainability gate.
+
+| Term | What | Why | Status |
+|------|------|-----|--------|
+| `L_hdr_l1` | L1 on Reinhard-tonemapped HR images | Pixel accuracy under HDR-aware tone mapping. | LDR-only L1 wired; tone-map step pending. |
+| `L_ssim` | 1 − SSIM(window=11) | Structural correctness, low-frequency stability. | ✓ wired (pytorch_msssim). |
+| `L_lpips` | LPIPS-VGG | Perceptual quality at human-relevant scale. | Pending. |
+| `L_temporal` | L1 between current prediction and motion-warped previous prediction in static regions | Eliminates ghosting and twinkle in flat areas. | Pending (gated on Sprint 5 canvas wiring). |
+| `L_cov_reg` | `max(0, target_entropy − H(softmax(bank_logits)))`, target_entropy = 0.6 · log(K_bank) | Prevents bank collapse to one entry. | Pending. |
 
 The coefficients match the Sprint 4 spec; ablation of `L_lpips` ∈ {0.0, 0.05,
 0.10} is part of T4.4 to confirm 0.05 is the sweet spot.
@@ -158,32 +165,32 @@ The coefficients match the Sprint 4 spec; ablation of `L_lpips` ∈ {0.0, 0.05,
 
 ## 5. Training resource estimate
 
-**Compute budget:** Lambda H100 SXM 80 GB. Single-node DDP (one GPU is enough
-for our model size; we just want fast wall-clock).
+**Compute budget (current):** RTX 3080 Ti 12 GB only. Lambda H100 spend is **postponed indefinitely** for v0 — Cyberpunk capture is gated behind first beating bicubic on this hardware. Master arch must work with the constraint that all training is local.
 
+**Implications:**
+- Batch size capped by 12 GB VRAM (no DDP, no bf16 mixed precision for now — gsplat 1.4.0 has fp16 NaN edge cases at SR resolution).
+- No multi-week burst training. Multi-day continuous runs only.
+- Ablation matrix (T4.9, T4.10) is shrunk to a single-variant pass; full ablation deferred to a v1 if v0 ships.
+- Tier fan-out (T4.11) is **pico/lite distillation-only** post-MVP, not parallel from-scratch training.
+
+**Cost model:** electricity, not cloud. ~$30–$50 across a multi-day production run. No accountable spend gate.
+
+**Future (only if v0 succeeds and budget reopens):**
 | Phase | H100-hours | $ at $3/h |
 |-------|----------:|---------:|
-| Pretrain (T4.6) standard tier, 50 epochs Sintel + TartanAir | 15 | $45 |
-| Fine-tune (T4.7) + Cyberpunk + temporal | 3 | $10 |
-| Bank size ablation (T4.9, 3 variants × 5 epochs) | 9 | $27 |
-| K ablation (T4.10, 3 variants × 5 epochs) | 9 | $27 |
-| Tier fan-out (T4.11, Pico+Lite prune-retrain + Ultra from scratch) | 25 | $75 |
-| Debug / restart buffer | ~10 | $30 |
-| **Total** | **~71** | **~$210** |
+| Standard tier full retrain on multi-game corpus | 20 | $60 |
+| Ultra tier ablation + fine-tune | 15 | $45 |
+| Bank/K ablation matrix | 18 | $54 |
+| **Total (deferred)** | **~53** | **~$160** |
 
-The master plan budget is $50–$100; the above is the comprehensive run
-including all ablations. Critical-path-only (skip ablations + Ultra) is ~$55.
+**Data volume on 3080 Ti:**
+- Sintel: clean + flow only (~8 GB; depth supplement not staged — see findings memo).
+- TartanAir: extracted partial; full triple available on `ocean/Easy/P*` only.
+- Cyberpunk: not captured yet (gated behind trainability gate).
+- SRGD: ~3 GB extracted, multi-scene; primary v0 dataset.
+- HyperSim: 18K scenes, zips on G:\ — extraction deferred until SRGD signal proven.
 
-**Data volume:**
-- Sintel: 1064 frames + flow + depth (~8 GB).
-- TartanAir: subsample to ~25 GB.
-- Cyberpunk: depends on Sprint 2 hook capture rate; budget 30 GB.
-- SRGD: ~3 GB.
-
-Total: ~70 GB; fits comfortably on a single Lambda H100 instance's local SSD.
-
-**Wall-clock:** ~4 weeks total sprint time. Of that, GPU-bound tasks are ~1.5
-weeks of cloud time spread across the sprint to leave room for debug + iter.
+**Wall-clock:** open-ended on local hardware. Multi-day runs feasible once trainability is unblocked.
 
 ---
 
@@ -198,3 +205,32 @@ weeks of cloud time spread across the sprint to leave room for debug + iter.
 - Sprint 7 (cross-platform ports) — re-exports the network for CoreML
   (M3 Max) and ncnn/Vulkan (Steam Deck). Bank decoding stays in PyTorch /
   host-side because it's a small post-process.
+
+---
+
+## 7. V0 → V2 staging (added 2026-05-02 from Codex 5.5 review)
+
+The original spec wanted single-frame Gaussian SR + persistent canvas + frame extrapolation as one unified output. External review (Codex 5.5) flagged this as over-promising: contour-aware splat literature ([Image-GS](https://arxiv.org/abs/2407.01866), [Gaussian Billboards](https://arxiv.org/abs/2412.12734), [Contour-aware 2DGS](https://arxiv.org/abs/2512.23255)) shows plain colored-blob Gaussians blur high-frequency edges without explicit texture/contour priors. We now stage the work:
+
+| Stage | Scope | Gate to next stage |
+|-------|-------|--------------------|
+| **V0** | Single-frame Gaussian SR: LR + depth + motion + normals → param net → splat raster. | Lite or Standard tier beats bicubic by ≥1 dB PSNR on aggressive engine-aliased LR (σ=1.5 + JPEG q=85) on at least one held-out scene. |
+| **V0.5** *(fallback if V0 stalls)* | Add a small **pixel-residual head** that predicts a residual on the Gaussian-rendered HR. The bulk of the structure comes from the splats; the CNN cleans up high-frequency texture. Used by GSASR ([arXiv:2501.06838](https://arxiv.org/abs/2501.06838)) and GS-STVSR ([arXiv:2604.18047](https://arxiv.org/abs/2604.18047)) and is the most-likely cure for the "pure-splats blur edges" failure mode. | Same gate as V0 with the residual head enabled. |
+| **V1** | Persistent canvas (Sprint 5 wiring) on top of V0 / V0.5. Flow-guided position and color evolution per [GS-STVSR](https://arxiv.org/abs/2604.18047), covariance resampling, adaptive motion windows. | Temporal stability ≥ baseline FSR2 Quality on a 10-second clip (no twinkling, no ghosting). |
+| **V1.5** | Frame extrapolation via fractional-time canvas warp + a **learned disocclusion-repair head** for newly-revealed pixels, particles, transparencies, UI, and speculars. The earlier "free byproduct" framing was wrong — disocclusion is a real learning problem. | Quality ≥ DLSS-FG on a side-by-side perceptual review on Cyberpunk 2077. |
+| **V2** | Denoising / RR track using Gaussians as geometry-aware accumulation. Treat as a separate gate from SR. | Beats OIDN on PSNR + LPIPS on real path-traced NoiseBase frames. |
+
+**Each stage has its own gate.** No work on V1+ until V0 (or V0.5) clears its bicubic gate. No community Cyberpunk capture until V0/V1 trains successfully on synthetic + game-engine datasets we already have.
+
+---
+
+## 8. References
+
+- [GaussianSR — feed-forward 2D Gaussian fields for arbitrary-scale SR (arXiv:2407.18046)](https://arxiv.org/abs/2407.18046)
+- [GSASR — image-conditioned Gaussian SR with CUDA rasterization (arXiv:2501.06838)](https://arxiv.org/abs/2501.06838)
+- [GS-STVSR — continuous spatial + temporal upscaling via 2D Gaussian evolution (arXiv:2604.18047)](https://arxiv.org/abs/2604.18047)
+- [Image-GS — texture-conditioned 2D Gaussian image rep (arXiv:2407.01866)](https://arxiv.org/abs/2407.01866)
+- [Gaussian Billboards — texture-augmented splats (arXiv:2412.12734)](https://arxiv.org/abs/2412.12734)
+- [Contour-aware 2DGS — explicit edge constraints for splat-based reconstruction (arXiv:2512.23255)](https://arxiv.org/abs/2512.23255)
+- [NVIDIA Streamline — color/depth/motion resource tagging for DLSS-style features](https://github.com/NVIDIA-RTX/Streamline/blob/main/docs/ProgrammingGuide.md)
+- [NVIDIA NRD — normal/roughness/viewZ/motion-conditioned ray-traced denoising](https://github.com/NVIDIA-RTX/NRD)

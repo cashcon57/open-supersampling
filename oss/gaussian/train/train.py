@@ -279,6 +279,24 @@ class TrainArgs:
 # ---------------------------------------------------------------------------
 
 
+_SSIM_FN = None
+_SSIM_IMPORT_TRIED = False
+
+
+def _get_ssim_fn():
+    """Lazy-load pytorch_msssim. Returns None when missing (e.g. on CI)."""
+    global _SSIM_FN, _SSIM_IMPORT_TRIED
+    if _SSIM_IMPORT_TRIED:
+        return _SSIM_FN
+    _SSIM_IMPORT_TRIED = True
+    try:
+        from pytorch_msssim import ssim  # type: ignore[import-not-found]
+        _SSIM_FN = ssim
+    except ImportError:
+        _SSIM_FN = None
+    return _SSIM_FN
+
+
 def composite_loss(
     rendered: torch.Tensor,
     target: torch.Tensor,
@@ -286,19 +304,34 @@ def composite_loss(
     w_l1: float = 1.0,
     w_ssim: float = 0.1,
 ) -> tuple[torch.Tensor, dict[str, float]]:
-    """Per Sprint 4 plan: HDR-aware L1 + (1 - SSIM). LPIPS deferred to a
-    perceptual variant since LPIPS is heavy and slows the inner loop.
+    """L1 + (1 - SSIM) when pytorch_msssim is installed; otherwise a pooled-L1
+    fallback that has the same shape but is *not* SSIM (use with care).
 
     Returns the scalar loss + a dict of components for logging.
     """
     l1 = F.l1_loss(rendered, target)
+
+    ssim_fn = _get_ssim_fn()
+    if ssim_fn is not None:
+        # pytorch_msssim.ssim expects values in [0, 1], shape (B, C, H, W).
+        ssim_val = ssim_fn(
+            rendered.clamp(0.0, 1.0),
+            target.clamp(0.0, 1.0),
+            data_range=1.0,
+            size_average=True,
+        )
+        loss = w_l1 * l1 + w_ssim * (1.0 - ssim_val)
+        return loss, {"l1": float(l1.item()), "ssim": float(ssim_val.item())}
+
+    # Fallback: pooled-L1 of luminance — mathematically distinct from SSIM,
+    # but cheap and dependency-free for CI.
     rendered_lum = rendered.mean(dim=1, keepdim=True)
     target_lum = target.mean(dim=1, keepdim=True)
     mu_r = F.avg_pool2d(rendered_lum, 8, 8)
     mu_t = F.avg_pool2d(target_lum, 8, 8)
-    ssim_proxy = 1.0 - F.l1_loss(mu_r, mu_t)
-    loss = w_l1 * l1 + w_ssim * (1.0 - ssim_proxy)
-    return loss, {"l1": float(l1.item()), "ssim_proxy": float(ssim_proxy.item())}
+    pooled_l1 = F.l1_loss(mu_r, mu_t)
+    loss = w_l1 * l1 + w_ssim * pooled_l1
+    return loss, {"l1": float(l1.item()), "pooled_l1": float(pooled_l1.item())}
 
 
 # ---------------------------------------------------------------------------
@@ -714,12 +747,15 @@ def main(argv: list[str] | None = None) -> int:
             if step % args.log_every == 0:
                 row = {"step": step, "loss": float(loss.item()), **parts}
                 metrics_log.append(row)
+                # parts has either 'ssim' (real) or 'pooled_l1' (fallback). Pick whichever is present.
+                aux_key = "ssim" if "ssim" in row else "pooled_l1"
                 log.info(
-                    "step=%d loss=%.4f l1=%.4f ssim_proxy=%.4f",
+                    "step=%d loss=%.4f l1=%.4f %s=%.4f",
                     step,
                     row["loss"],
                     row["l1"],
-                    row["ssim_proxy"],
+                    aux_key,
+                    row[aux_key],
                 )
 
             if step % args.ckpt_every == 0 or step == args.max_steps:
@@ -803,12 +839,15 @@ def main(argv: list[str] | None = None) -> int:
             if step % args.log_every == 0:
                 row = {"step": step, "loss": float(loss.item()), **parts}
                 metrics_log.append(row)
+                # parts has either 'ssim' (real) or 'pooled_l1' (fallback). Pick whichever is present.
+                aux_key = "ssim" if "ssim" in row else "pooled_l1"
                 log.info(
-                    "step=%d loss=%.4f l1=%.4f ssim_proxy=%.4f",
+                    "step=%d loss=%.4f l1=%.4f %s=%.4f",
                     step,
                     row["loss"],
                     row["l1"],
-                    row["ssim_proxy"],
+                    aux_key,
+                    row[aux_key],
                 )
 
             if step % args.ckpt_every == 0:
