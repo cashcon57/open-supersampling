@@ -355,6 +355,25 @@ def build_model(args: TrainArgs) -> tuple[GaussianParamNetwork, OutputHead, Cova
 
 
 @torch.no_grad()
+def _param_health(net: GaussianParamNetwork, head: OutputHead) -> dict[str, float]:
+    """Sanity stats on the parameters themselves — detects 'optimiser is moving
+    but you're measuring the wrong place' versus 'optimiser actually frozen'.
+    """
+    out = {}
+    out["head_bias_abs_mean"] = float(net.head.bias.detach().abs().mean().item())
+    out["head_weight_abs_mean"] = float(net.head.weight.detach().abs().mean().item())
+    if hasattr(net.head.bias, "grad") and net.head.bias.grad is not None:
+        out["head_bias_grad_norm"] = float(net.head.bias.grad.detach().norm().item())
+    else:
+        out["head_bias_grad_norm"] = 0.0
+    if hasattr(net.head.weight, "grad") and net.head.weight.grad is not None:
+        out["head_weight_grad_norm"] = float(net.head.weight.grad.detach().norm().item())
+    else:
+        out["head_weight_grad_norm"] = 0.0
+    return out
+
+
+@torch.no_grad()
 def _compute_diagnostics(
     head: OutputHead,
     raw: torch.Tensor,
@@ -893,13 +912,15 @@ def main(argv: list[str] | None = None) -> int:
 
             if step % args.log_every == 0:
                 diag = _compute_diagnostics(head, raw, depth=depth, normals=normals)
-                row = {"step": step, "loss": float(loss.item()), **parts, **diag}
+                health = _param_health(net, head)
+                row = {"step": step, "loss": float(loss.item()), **parts, **diag, **health}
                 metrics_log.append(row)
                 aux_key = "ssim" if "ssim" in row else "pooled_l1"
                 log.info(
-                    "step=%d loss=%.4f l1=%.4f %s=%.4f bank_H=%.3f dxy=%.3f color_std=%.3f",
+                    "step=%d loss=%.4f l1=%.4f %s=%.4f bank_H=%.3f dxy=%.3f cstd=%.3f bias_abs=%.4f bias_grad=%.4e w_grad=%.4e",
                     step, row["loss"], row["l1"], aux_key, row[aux_key],
                     row["bank_entropy_norm"], row["mean_dxy_norm"], row["color_std"],
+                    row["head_bias_abs_mean"], row["head_bias_grad_norm"], row["head_weight_grad_norm"],
                 )
 
             if step % args.ckpt_every == 0:
