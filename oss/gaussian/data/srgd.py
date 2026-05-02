@@ -51,28 +51,65 @@ class SRGDGaussianDataset(GaussianDataset):
         scale: float = 2.0,
         synthetic: bool = False,
         lr_synth: "EngineAliasedLRSynth | None" = None,
+        scene: str | None = None,
     ) -> None:
         super().__init__(root=root, scale=scale, lr_synth=lr_synth)
         self.synthetic = synthetic
+        self.scene = scene
         if not self.root.is_dir():
             raise FileNotFoundError(
                 f"SRGD dataset not found at {self.root}.\n"
-                "Expected layout: <root>/hr/*.png (and optionally <root>/lr/*.png)."
+                "Expected layouts:\n"
+                "  - <root>/hr/*.png (canonical), or\n"
+                "  - <root>/data/GameEngineData/<scene>/*.png paired with\n"
+                "    <root>/data/DownscaleData/<scene>/*.png (3080 Ti layout)."
             )
+
+        # Try canonical hr/ layout first.
         hr_dir = self.root / "hr"
-        if not hr_dir.is_dir():
+        if hr_dir.is_dir():
+            lr_dir = self.root / "lr"
+            self._items: List[Tuple[Path, Path | None]] = []
+            for hr in sorted(hr_dir.glob("*.png")):
+                lr_candidate = lr_dir / hr.name if lr_dir.is_dir() else None
+                self._items.append(
+                    (hr, lr_candidate if (lr_candidate and lr_candidate.exists()) else None)
+                )
+            if not self._items:
+                raise FileNotFoundError(f"SRGD HR directory {hr_dir} contains no PNGs.")
+            return
+
+        # Fall back to GameEngineData/DownscaleData layout (per-scene).
+        ge_root = self.root / "data" / "GameEngineData"
+        ds_root = self.root / "data" / "DownscaleData"
+        if not ge_root.is_dir():
             raise FileNotFoundError(
-                f"SRGD HR directory missing: {hr_dir}. "
-                "Expected layout: <root>/hr/*.png."
+                f"Neither {hr_dir} nor {ge_root} exist. "
+                "Cannot determine SRGD layout."
             )
-        lr_dir = self.root / "lr"
-        self._items: List[Tuple[Path, Path | None]] = []
-        for hr in sorted(hr_dir.glob("*.png")):
-            lr_candidate = lr_dir / hr.name if lr_dir.is_dir() else None
-            self._items.append((hr, lr_candidate if (lr_candidate and lr_candidate.exists()) else None))
+
+        if scene is not None:
+            scene_dirs = [ge_root / scene]
+            if not scene_dirs[0].is_dir():
+                raise FileNotFoundError(
+                    f"SRGD scene {scene!r} not found at {scene_dirs[0]}"
+                )
+        else:
+            scene_dirs = sorted(p for p in ge_root.iterdir() if p.is_dir())
+
+        self._items = []
+        for scene_dir in scene_dirs:
+            ds_scene = ds_root / scene_dir.name if ds_root.is_dir() else None
+            for hr in sorted(scene_dir.glob("*.png")):
+                lr_candidate = (ds_scene / hr.name) if ds_scene is not None else None
+                self._items.append(
+                    (hr, lr_candidate if (lr_candidate and lr_candidate.exists()) else None)
+                )
         if not self._items:
             raise FileNotFoundError(
-                f"SRGD HR directory {hr_dir} contains no PNGs."
+                f"SRGD GameEngineData under {ge_root} contains no PNGs"
+                + (f" for scene {scene!r}" if scene else "")
+                + "."
             )
 
     def __len__(self) -> int:

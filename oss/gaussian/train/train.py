@@ -73,7 +73,9 @@ class TrainArgs:
     device: str
     # Real-data flags
     use_synthetic_batch: bool
+    dataset: str             # "sintel" | "srgd"
     sintel_sequence: Optional[str]
+    srgd_scene: Optional[str]
     enable_gbuffer_bias: bool
     enable_engine_aliased_lr: bool
     score_every: int         # run bicubic-vs-model comparison every N steps
@@ -105,12 +107,27 @@ class TrainArgs:
             help="Use random synthetic tensors instead of real Sintel data (CI sanity path).",
         )
         p.add_argument(
+            "--dataset",
+            choices=["sintel", "srgd"],
+            default="sintel",
+            help="Real-data dataset adapter to use (default: sintel).",
+        )
+        p.add_argument(
             "--sintel-sequence",
             type=str,
             default=None,
             help=(
                 "Restrict training to a single Sintel sequence name (e.g. alley_1). "
-                "Required when --smoke-test is set."
+                "Used only when --dataset=sintel."
+            ),
+        )
+        p.add_argument(
+            "--srgd-scene",
+            type=str,
+            default=None,
+            help=(
+                "Restrict training to a single SRGD scene name (e.g. ActionRPG). "
+                "Used only when --dataset=srgd."
             ),
         )
         p.add_argument(
@@ -184,7 +201,9 @@ class TrainArgs:
             seed=a.seed,
             device=a.device,
             use_synthetic_batch=use_synthetic_batch,
+            dataset=a.dataset,
             sintel_sequence=a.sintel_sequence,
+            srgd_scene=a.srgd_scene,
             enable_gbuffer_bias=enable_gbuffer_bias,
             enable_engine_aliased_lr=enable_engine_aliased_lr,
             score_every=score_every,
@@ -264,24 +283,18 @@ def synthetic_batch(
 # ---------------------------------------------------------------------------
 
 
-def build_dataloader(args: TrainArgs):  # type: ignore[return]
-    """Construct a DataLoader over SintelGaussianDataset.
+def _build_lr_synth(args: TrainArgs):
+    from oss.gaussian.data import EngineAliasedLRSynth
+    if not args.enable_engine_aliased_lr:
+        return None
+    return EngineAliasedLRSynth(
+        enable_jitter=True, enable_taa_blur=True, enable_jpeg=False
+    )
 
-    Optionally wraps with EngineAliasedLRSynth when --enable-engine-aliased-lr
-    is set. Filters to a single sequence when --sintel-sequence is given.
-    """
-    from oss.gaussian.data import SintelGaussianDataset, EngineAliasedLRSynth, collate_examples
-    from torch.utils.data import DataLoader
 
-    lr_synth = None
-    if args.enable_engine_aliased_lr:
-        lr_synth = EngineAliasedLRSynth(
-            enable_jitter=True, enable_taa_blur=True, enable_jpeg=False
-        )
+def _build_sintel_dataset(args: TrainArgs):
+    from oss.gaussian.data import SintelGaussianDataset
 
-    # Accept either a direct Sintel root (containing training/clean) or a
-    # parent directory containing MPI-Sintel-complete/. Some installs ship
-    # under the canonical name, others (e.g. our 3080 Ti) use the short name.
     candidate_roots = [
         args.dataset_root,
         args.dataset_root / "MPI-Sintel-complete",
@@ -303,9 +316,8 @@ def build_dataloader(args: TrainArgs):  # type: ignore[return]
         root=sintel_root,
         scale=2.0,
         pass_name="clean",
-        lr_synth=lr_synth,
+        lr_synth=_build_lr_synth(args),
     )
-
     if args.sintel_sequence:
         ds._items = [
             it for it in ds._items if it[0].parent.name == args.sintel_sequence
@@ -313,9 +325,45 @@ def build_dataloader(args: TrainArgs):  # type: ignore[return]
         if not ds._items:
             raise ValueError(
                 f"No frames found for sequence {args.sintel_sequence!r} under "
-                f"{sintel_root}. "
-                f"Check --dataset-root and --sintel-sequence values."
+                f"{sintel_root}. Check --dataset-root and --sintel-sequence."
             )
+    return ds
+
+
+def _build_srgd_dataset(args: TrainArgs):
+    from oss.gaussian.data import SRGDGaussianDataset
+
+    # Probe two layouts: a direct SRGD root or a `srgd` subdir.
+    candidates = [args.dataset_root, args.dataset_root / "srgd"]
+    srgd_root = None
+    for cand in candidates:
+        if (cand / "data" / "GameEngineData").is_dir() or (cand / "hr").is_dir():
+            srgd_root = cand
+            break
+    if srgd_root is None:
+        raise FileNotFoundError(
+            f"SRGD dataset not found. Looked under: {[str(c) for c in candidates]}."
+        )
+
+    return SRGDGaussianDataset(
+        root=srgd_root,
+        scale=2.0,
+        lr_synth=_build_lr_synth(args),
+        scene=args.srgd_scene,
+    )
+
+
+def build_dataloader(args: TrainArgs):  # type: ignore[return]
+    """Construct a DataLoader for the configured dataset (sintel | srgd)."""
+    from oss.gaussian.data import collate_examples
+    from torch.utils.data import DataLoader
+
+    if args.dataset == "sintel":
+        ds = _build_sintel_dataset(args)
+    elif args.dataset == "srgd":
+        ds = _build_srgd_dataset(args)
+    else:
+        raise ValueError(f"Unknown --dataset value: {args.dataset!r}")
 
     return DataLoader(
         ds,

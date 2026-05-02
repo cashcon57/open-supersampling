@@ -8,9 +8,13 @@ $outdir = "<train-host-data>\checkpoints\sprint4-smoke-$timestamp"
 New-Item -ItemType Directory -Force -Path "<train-host-data>\logs" | Out-Null
 New-Item -ItemType Directory -Force -Path $outdir | Out-Null
 
-$sintelRoot = "<train-host-data>\datasets\sintel"  # 3080 Ti layout (training/clean directly)
-if (-not (Test-Path "$sintelRoot\training\clean")) {
-    Write-Error "Sintel dataset missing at $sintelRoot\training\clean"
+# Use SRGD GameEngineData (real game engine renders, paired LR/HR).
+# Sintel ships clean+flow on this machine but no depth, so the Sintel adapter
+# can't form a (frame, depth, flow) triple. SRGD has no G-buffers and the
+# adapter zeros them out — fine for a smoke-test gate against bicubic.
+$srgdRoot = "<train-host-data>\datasets\srgd"
+if (-not (Test-Path "$srgdRoot\data\GameEngineData\ActionRPG")) {
+    Write-Error "SRGD ActionRPG scene missing at $srgdRoot\data\GameEngineData\ActionRPG"
     exit 1
 }
 
@@ -26,8 +30,9 @@ cd <train-host-data>\oss-gaussian
 $pyArgs = @(
     "-m", "oss.gaussian.train.train",
     "--smoke-test",
-    "--sintel-sequence", "alley_1",
-    "--dataset-root", $sintelRoot,
+    "--dataset", "srgd",
+    "--srgd-scene", "ActionRPG",
+    "--dataset-root", $srgdRoot,
     "--output-dir", $outdir,
     "--max-steps", "20000",
     "--max-time-seconds", "10800",
