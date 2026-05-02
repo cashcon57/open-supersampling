@@ -113,6 +113,53 @@ def test_apply_jitter_nonzero_changes_pixels() -> None:
     assert not torch.equal(out, hr)
 
 
+def test_apply_jitter_direction_x_axis() -> None:
+    """Positive jx must shift content to the right by jx pixels.
+
+    A sign flip in apply_jitter would silently train the network on the
+    wrong jitter polarity. This test catches that.
+    """
+    # Build a vertical edge: left half black, right half white
+    H, W = 16, 32
+    img = torch.zeros(3, H, W)
+    img[:, :, W // 2:] = 1.0
+
+    # Shift content right by ~1 pixel via positive jx
+    shifted = apply_jitter(img, (1.0, 0.0))
+
+    # The edge should now be at column ~W/2 + 1
+    # Check column sums: column at W/2 was the boundary; after +1px shift,
+    # column at W/2 should now be brighter than original (was 0, now closer to 1)
+    original_col = img[0, :, W // 2].sum().item()      # 0
+    shifted_col = shifted[0, :, W // 2].sum().item()
+    assert shifted_col > original_col + 1.0, (
+        f"+1px jitter should shift edge right; col={W//2} sum was {original_col}, became {shifted_col}"
+    )
+
+
+def test_apply_jitter_direction_y_axis_independent() -> None:
+    """jy=0 must not change x-direction content; row/col swap detector."""
+    H, W = 16, 32
+    img = torch.zeros(3, H, W)
+    img[:, :, W // 2:] = 1.0  # vertical edge — no Y variation
+
+    # Shift only in X
+    shifted_x = apply_jitter(img, (1.0, 0.0))
+    # Shift only in Y (jy=1.0, jx=0.0) — should NOT shift the vertical edge horizontally
+    shifted_y = apply_jitter(img, (0.0, 1.0))
+
+    # Y-only shift should leave column sums approximately unchanged on a vertical edge
+    col_sums_orig = img.sum(dim=(0, 1))         # (W,)
+    col_sums_y = shifted_y.sum(dim=(0, 1))
+    # Allow small edge differences from border padding
+    diff = (col_sums_orig - col_sums_y).abs().mean().item()
+    assert diff < 0.5, f"jy=1.0 should not shift X content significantly; diff={diff}"
+
+    # X-only shift should differ from Y-only shift (catches row/col swap)
+    assert not torch.allclose(shifted_x, shifted_y, atol=1e-3), \
+        "X-jitter and Y-jitter produced identical output — likely row/col swap"
+
+
 # ==============================================================================
 # 3. area_downsample — matches existing _box_downsample byte-for-byte
 # ==============================================================================

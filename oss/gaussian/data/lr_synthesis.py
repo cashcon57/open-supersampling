@@ -32,15 +32,11 @@ from __future__ import annotations
 
 import io
 import math
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from dataclasses import dataclass
 
 import torch
 import torch.nn.functional as F
 from torch import Tensor
-
-if TYPE_CHECKING:
-    pass  # avoid circular imports — base.py is thin, but keep this file standalone
 
 
 # ==============================================================================
@@ -66,24 +62,30 @@ def _halton_single(idx: int, base: int) -> float:
     return result
 
 
-def halton_jitter(idx: int, dim_x: int = 2, dim_y: int = 3) -> tuple[float, float]:
+def halton_jitter(idx: int, base_x: int = 2, base_y: int = 3) -> tuple[float, float]:
     """Return the (jx, jy) sub-pixel jitter offset for ``frame_idx`` in HR pixels.
 
-    Uses the Halton(dim_x, dim_y) quasi-random sequence — the same construction
+    Uses the Halton(base_x, base_y) quasi-random sequence — the same construction
     used by Unreal Engine and DLSS for TAA jitter patterns.  The offset is
     shifted from [0, 1) to [-0.5, 0.5) so that jitter is symmetric around the
     pixel centre.
 
+    The sequence is evaluated at ``idx + 1`` rather than ``idx`` to match the
+    TAA convention used by Unreal Engine and DLSS: Halton(0, base) == 0.0, which
+    maps to the maximum-offset corner (-0.5, -0.5) after the [-0.5, 0.5) shift.
+    Starting at index 1 avoids this corner-bias on the first frame of every epoch
+    and keeps the sequence consistent with real engine implementations.
+
     Args:
-        idx: frame index (0-based, monotonically increasing per sequence).
-        dim_x: Halton base for the x-axis jitter. Default: 2.
-        dim_y: Halton base for the y-axis jitter. Default: 3.
+        idx:    frame index (0-based, monotonically increasing per sequence).
+        base_x: Halton base for the x-axis jitter. Default: 2.
+        base_y: Halton base for the y-axis jitter. Default: 3.
 
     Returns:
         (jx, jy) in HR-pixel units, each in [-0.5, 0.5].
     """
-    jx = _halton_single(idx, dim_x) - 0.5
-    jy = _halton_single(idx, dim_y) - 0.5
+    jx = _halton_single(idx + 1, base_x) - 0.5
+    jy = _halton_single(idx + 1, base_y) - 0.5
     return float(jx), float(jy)
 
 
