@@ -291,6 +291,158 @@ def test_end_to_end_differentiability_grads_flow() -> None:
     assert bank.log_sx.grad is not None and torch.any(bank.log_sx.grad != 0)
 
 
+# ---------------------------------------------------------------------------
+# Anisotropic G-buffer-conditioned covariance bias (validation memo Decision 2)
+# ---------------------------------------------------------------------------
+
+
+def test_output_head_gbuffer_bias_disabled_default() -> None:
+    """Default OutputHead has no gbuffer_bias module (backward compat)."""
+    bank = CovariancePriorBank()
+    head = OutputHead(bank=bank)
+    assert head.enable_gbuffer_bias is False
+    assert head.gbuffer_bias is None
+
+
+def test_output_head_gbuffer_bias_zero_init_matches_baseline() -> None:
+    """Enabling the bias with zero-init must match disabled output bit-for-bit
+    when called without G-buffer inputs (graceful enablement)."""
+    torch.manual_seed(0)
+    bank = CovariancePriorBank()
+    head_off = OutputHead(bank=bank, tile_size=16, k_per_tile=5)
+    head_on = OutputHead(bank=bank, tile_size=16, k_per_tile=5,
+                         enable_gbuffer_bias=True)
+    raw = _random_raw(B=1, k=5, bank_size=bank.bank_size, Ht=2, Wt=2)
+    d_off = head_off.decode(raw)
+    d_on = head_on.decode(raw)  # No depth/normals → bias is zero.
+    assert torch.allclose(d_off.bank_weights, d_on.bank_weights), \
+        "enable_gbuffer_bias=True without G-buffers should match the baseline"
+
+
+def test_output_head_gbuffer_bias_zero_input_no_change() -> None:
+    """Even with the bias enabled and G-buffers passed, all-zero G-buffers
+    produce no logit change (zero-init linear of all-zero input = 0)."""
+    torch.manual_seed(0)
+    bank = CovariancePriorBank()
+    head_off = OutputHead(bank=bank, tile_size=16, k_per_tile=5)
+    head_on = OutputHead(bank=bank, tile_size=16, k_per_tile=5,
+                         enable_gbuffer_bias=True)
+    Ht, Wt = 2, 2
+    H_lr, W_lr = Ht * 16, Wt * 16
+    raw = _random_raw(B=1, k=5, bank_size=bank.bank_size, Ht=Ht, Wt=Wt)
+    depth = torch.zeros(1, 1, H_lr, W_lr)
+    normals = torch.zeros(1, 3, H_lr, W_lr)
+    d_off = head_off.decode(raw)
+    d_on = head_on.decode(raw, depth=depth, normals=normals)
+    assert torch.allclose(d_off.bank_weights, d_on.bank_weights), \
+        "Zero G-buffers + zero-init bias must equal baseline output"
+
+
+def test_output_head_gbuffer_bias_changes_weights_after_training_step() -> None:
+    """Once the bias linear has non-zero weights, non-zero G-buffers must
+    actually shift the bank softmax distribution."""
+    torch.manual_seed(0)
+    bank = CovariancePriorBank()
+    head = OutputHead(bank=bank, tile_size=16, k_per_tile=5,
+                      enable_gbuffer_bias=True)
+    # Simulate a partially-trained bias head.
+    with torch.no_grad():
+        head.gbuffer_bias.proj.weight.normal_(0, 0.5)
+        head.gbuffer_bias.proj.bias.normal_(0, 0.5)
+    Ht, Wt = 2, 2
+    H_lr, W_lr = Ht * 16, Wt * 16
+    raw = _random_raw(B=1, k=5, bank_size=bank.bank_size, Ht=Ht, Wt=Wt)
+    depth = torch.rand(1, 1, H_lr, W_lr)
+    normals = torch.randn(1, 3, H_lr, W_lr)
+    normals = normals / normals.norm(dim=1, keepdim=True).clamp(min=1e-6)
+
+    d_no_gbuf = head.decode(raw)
+    d_gbuf = head.decode(raw, depth=depth, normals=normals)
+    assert not torch.allclose(d_no_gbuf.bank_weights, d_gbuf.bank_weights), \
+        "Non-trivial G-buffers + non-zero bias weights should change softmax"
+    # Softmax outputs must still be valid probability distributions.
+    assert torch.allclose(d_gbuf.bank_weights.sum(dim=-1),
+                          torch.ones_like(d_gbuf.bank_weights.sum(dim=-1)),
+                          atol=1e-5)
+    assert (d_gbuf.bank_weights >= 0).all()
+
+
+def test_output_head_gbuffer_bias_per_tile_shared_across_k() -> None:
+    """The G-buffer bias is per-tile, applied identically to all K Gaussians
+    in the same tile. Verify by constructing input where bank_logits are
+    identical across K, plus a non-trivial bias — output bank_weights should
+    be identical across K within each tile."""
+    torch.manual_seed(0)
+    bank = CovariancePriorBank()
+    K = 5
+    bank_size = bank.bank_size
+    head = OutputHead(bank=bank, tile_size=16, k_per_tile=K,
+                      enable_gbuffer_bias=True)
+    with torch.no_grad():
+        head.gbuffer_bias.proj.weight.normal_(0, 0.5)
+        head.gbuffer_bias.proj.bias.normal_(0, 0.5)
+
+    Ht, Wt = 2, 2
+    H_lr, W_lr = Ht * 16, Wt * 16
+    per_g = per_gaussian_channels(bank_size)
+    # Build a raw tensor where every Gaussian within a tile gets the same
+    # per-Gaussian channel vector (identical bank_logits across K).
+    base = torch.randn(1, 1, per_g, Ht, Wt)
+    raw_5d = base.expand(1, K, per_g, Ht, Wt).contiguous()
+    raw = raw_5d.view(1, K * per_g, Ht, Wt)
+    depth = torch.rand(1, 1, H_lr, W_lr)
+    normals = torch.randn(1, 3, H_lr, W_lr)
+    d = head.decode(raw, depth=depth, normals=normals)
+
+    # bank_weights shape: (1, N, bank_size); N = Ht*Wt*K.
+    bw = d.bank_weights.view(1, Ht, Wt, K, bank_size)
+    # Within each tile, all K rows should be identical.
+    for ti in range(Ht):
+        for tj in range(Wt):
+            tile = bw[0, ti, tj]  # (K, bank_size)
+            assert torch.allclose(tile[0], tile[-1], atol=1e-6), \
+                f"tile ({ti},{tj}) bank_weights not shared across K Gaussians"
+
+
+def test_output_head_gbuffer_bias_grad_flow() -> None:
+    """Gradients must flow through the G-buffer bias module when it's used."""
+    torch.manual_seed(0)
+    bank = CovariancePriorBank()
+    head = OutputHead(bank=bank, tile_size=16, k_per_tile=3,
+                      enable_gbuffer_bias=True)
+    # Break the zero init so the loss depends on the bias projection.
+    with torch.no_grad():
+        head.gbuffer_bias.proj.weight.normal_(0, 0.1)
+
+    Ht, Wt = 2, 2
+    H_lr, W_lr = Ht * 16, Wt * 16
+    raw = _random_raw(B=1, k=3, bank_size=bank.bank_size, Ht=Ht, Wt=Wt)
+    raw = raw.detach().requires_grad_(False)
+    depth = torch.rand(1, 1, H_lr, W_lr, requires_grad=False)
+    normals = torch.randn(1, 3, H_lr, W_lr, requires_grad=False)
+
+    d = head.decode(raw, depth=depth, normals=normals)
+    # Loss anchored on bank_weights so the bias projection is on-graph.
+    loss = d.bank_weights.sum()
+    loss.backward()
+    assert head.gbuffer_bias.proj.weight.grad is not None
+    assert torch.any(head.gbuffer_bias.proj.weight.grad != 0)
+
+
+def test_output_head_gbuffer_bias_rejects_wrong_shapes() -> None:
+    """Spatial mismatch between G-buffers and tile grid must fail loudly."""
+    bank = CovariancePriorBank()
+    head = OutputHead(bank=bank, tile_size=16, k_per_tile=3,
+                      enable_gbuffer_bias=True)
+    raw = _random_raw(B=1, k=3, bank_size=bank.bank_size, Ht=2, Wt=2)
+    bad_depth = torch.zeros(1, 1, 24, 24)  # not a multiple of tile_size×Ht
+    with pytest.raises(ValueError, match="depth spatial"):
+        head.decode(raw, depth=bad_depth)
+    bad_normals = torch.zeros(1, 3, 24, 24)
+    with pytest.raises(ValueError, match="normals spatial"):
+        head.decode(raw, normals=bad_normals)
+
+
 def test_param_net_param_count_pico_under_50k() -> None:
     """Pico tier should be markedly smaller than the standard tier."""
     pico = param_net_for_tier("pico")
