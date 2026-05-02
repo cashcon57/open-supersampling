@@ -19,9 +19,11 @@ No closed weights. No SDK SLAs. No vendor lock-in.
 
 ## Gaussian track
 
-> A **vector-based upscaler**: where DLSS and FSR work in pixels, OSS-Gaussian works in continuous 2D Gaussian primitives that warp coherently with engine motion vectors — eliminating ghosting structurally and producing frame extrapolation as a free byproduct of the same canvas.
+> A **vector-based DLSS replacement**: drops in wherever DLSS works. Where DLSS and FSR work in pixels, OSS-Gaussian works in continuous 2D Gaussian primitives that warp coherently with engine motion vectors — eliminating ghosting structurally and producing frame extrapolation as a free byproduct of the same canvas.
 
 The Gaussian track adds **3D-aware temporal accumulation** to the project. A persistent set of 2D Gaussian splats lives across frames; each frame the engine's motion vectors warp the splats forward, the rasterizer renders them at any output resolution, and disocclusions get filled by spawning new Gaussians where the residual error is high. Frame extrapolation is the same warp pass at fractional time — no separate model.
+
+**Compatibility:** the interception DLL implements the universal NGX DLSS API surface (10 `NVSDK_NGX_D3D12_*` exports + DXGI proxy via game-local DLL search). It targets **any DX12 game shipping DLSS** — Cyberpunk 2077 is the primary validation target (no anti-cheat, ships native DLSS 2/3, well-documented hook patterns). Post-v1 expansion: Hogwarts Legacy, Portal RTX, Alan Wake 2, and any other DLSS-using title without a kernel-level anti-cheat.
 
 Component map:
 
