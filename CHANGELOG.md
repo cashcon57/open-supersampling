@@ -5,6 +5,11 @@ Versioning: SemVer pre-1.0 (PATCH = bug fixes / docs; MINOR = new features; MAJO
 
 ## [Unreleased] — `v0.2-dev` branch
 
+### Sprint 1 — CLOSED ✓ (2026-05-01)
+
+CUDA Gaussian renderer integration. T1.1 through T1.8 complete. Heuristic dry-run review verdict: APPROVE. Bench numbers on RTX 3080 Ti: 1080p 3.3ms / 1440p 5.0ms / 4K 10.3ms across 1K–15K Gaussian counts (raster-bound, not Gaussian-count-bound). 129 pass / 2 CUDA backward fail / 3 skip on 3080 Ti; 121 pass / 4 CUDA skip on M3 Max.
+
+
 ### Gaussian track (new — sits alongside pixel-based modules)
 
 A vector-based real-time game upscaler. Where DLSS and FSR work in pixels, OSS-Gaussian works in continuous 2D Gaussian primitives that warp coherently with engine motion vectors — eliminating ghosting structurally and producing frame extrapolation as a free byproduct of the same canvas. See [README.md](README.md#gaussian-track) and [design spec](docs/superpowers/specs/2026-05-01-gaussian-temporal-canvas-design.md) for architecture.
