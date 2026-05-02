@@ -161,9 +161,12 @@ class Rasterizer:
                 f"Original import error: {_GSPLAT_IMPORT_ERROR}. "
                 "Build the extension: cd oss/gaussian/renderer/vendor/image_gs && pip install -e ."
             )
-        # gsplat tile_bounds is (num_tiles_h, num_tiles_w, 1) per upstream convention.
-        tile_bounds = ((h + self.tile_size - 1) // self.tile_size,
-                       (w + self.tile_size - 1) // self.tile_size,
+        # gsplat tile_bounds is (num_tiles_W, num_tiles_H, 1) — width first, height
+        # second. Image-GS model.py line 130 uses this ordering. Earlier our
+        # wrapper had (H, W, 1) which made the projection step return
+        # num_tiles_hit=0 for any reasonable input → CUDA crash downstream.
+        tile_bounds = ((w + self.tile_size - 1) // self.tile_size,
+                       (h + self.tile_size - 1) // self.tile_size,
                        1)
         # gsplat's `scale` argument is the *inverse* scale (smaller = wider
         # footprint). Our public `GaussianBatch.scale` API is the natural
