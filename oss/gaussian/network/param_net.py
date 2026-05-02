@@ -160,16 +160,31 @@ class GaussianParamNetwork(nn.Module):
         self._init_head()
 
     def _init_head(self) -> None:
-        """Initialise the head so initial outputs are tame.
+        """Initialise the head so K parallel Gaussians per tile START DIFFERENT.
 
-        Δposition / rotation_offset start ≈0 (last layer near-zero so
-        predicted Gaussian centers fall at the tile center on step 0).
-        Bank logits start uniform → softmax is uniform.
-        log_scale starts at 0 → scale_factor exp(0)=1.
-        Color is left to standard kaiming.
+        Pure zero-init (the prior implementation) was a dead-init symmetry
+        failure: the K Gaussians within each tile shared identical
+        (position, bank weights, color, scale, rotation), the loss gradient
+        was symmetric across them, AdamW updated them in lockstep, and the
+        symmetry never broke. Diagnostic output (`bank_entropy_norm=1.000`,
+        `mean_dxy_norm=0.000`, `color_std<0.03`) was pinned across 500
+        steps. See `docs/superpowers/experiments/2026-05-02-output-head-dead-init.md`.
+
+        We now keep the WEIGHTS near zero (so the spatial features don't
+        dominate at init — small Gaussian, std=1e-3) but apply a small
+        Gaussian random BIAS (std=0.05) so each output channel — and
+        therefore each of the K parallel decoder slots — starts at a
+        different point. This is enough to break K-way symmetry without
+        destabilising early training:
+          - tanh(0.05) ≈ 0.05 → ±5% of a tile-size offset on positions.
+          - softmax over a vector with std 0.05 is still nearly uniform but
+            no longer perfectly so, giving the bank weights a gradient to
+            follow.
+          - sigmoid(0.05) ≈ 0.512, sigmoid(−0.05) ≈ 0.488 → tiny color
+            differential, again enough to break symmetry.
         """
-        nn.init.zeros_(self.head.weight)
-        nn.init.zeros_(self.head.bias)
+        nn.init.normal_(self.head.weight, mean=0.0, std=1e-3)
+        nn.init.normal_(self.head.bias, mean=0.0, std=0.05)
 
     # ---- Forward -----------------------------------------------------------
     def forward(self, x: torch.Tensor) -> torch.Tensor:
