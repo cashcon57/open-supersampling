@@ -8,13 +8,40 @@
 
 ## What is OSS?
 
-OSS is a community-governed alternative to proprietary reconstruction stacks (DLSS RR, FSR Ray Regen, XeSS). It targets **+1.6 to +2 dB PSNR over DLSS 4 RR** on flagship hardware and is **the only ray-reconstruction-class option** for the ~60% of the GPU market that NVIDIA and AMD flagship stacks don't cover.
+OSS is a community-governed alternative to proprietary reconstruction stacks (DLSS RR, FSR Ray Regen, XeSS). Two parallel tracks:
+
+- **Pixel-based track (v0.2-current)** — kernel-prediction U-Nets that operate on pixel buffers. Targets **+1.6 to +2 dB PSNR over DLSS 4 RR** on flagship hardware and is **the only ray-reconstruction-class option** for the ~60% of the GPU market that NVIDIA and AMD flagship stacks don't cover.
+- **Gaussian track (v0.2-dev, in flight)** — see [Gaussian temporal canvas](#gaussian-track) below.
 
 No closed weights. No SDK SLAs. No vendor lock-in.
 
 ---
 
-## Modules
+## Gaussian track
+
+> A **vector-based upscaler**: where DLSS and FSR work in pixels, OSS-Gaussian works in continuous 2D Gaussian primitives that warp coherently with engine motion vectors — eliminating ghosting structurally and producing frame extrapolation as a free byproduct of the same canvas.
+
+The Gaussian track adds **3D-aware temporal accumulation** to the project. A persistent set of 2D Gaussian splats lives across frames; each frame the engine's motion vectors warp the splats forward, the rasterizer renders them at any output resolution, and disocclusions get filled by spawning new Gaussians where the residual error is high. Frame extrapolation is the same warp pass at fractional time — no separate model.
+
+Component map:
+
+| Sprint | Module | Status |
+|---|---|---|
+| 1 | `oss/gaussian/renderer/` (CUDA tile-based rasterizer, vendored Image-GS) | ✓ scaffolded, tests pass |
+| 2 | `oss/gaussian/interception/` (D3D12/DXGI hook, NGX shim) | ✓ scaffolded |
+| 3 | `oss/gaussian/classifier/` (16×16 tile complex/simple mask) | ✓ scaffolded, tests pass |
+| 4 | `oss/gaussian/network/` + `oss/gaussian/data/` (param net + datasets) | ✓ scaffolded, trainer wired |
+| 5 | `oss/gaussian/canvas/` (persistent canvas + warp + prune/spawn) | ✓ scaffolded, tests pass |
+| 6 | `oss/gaussian/extrapolation/` (α-conditioned warp) | ✓ scaffolded, tests pass |
+| 7 | `oss/gaussian/ports/{metal,vulkan_ncnn}/` (M3 Max + Steam Deck) | ✓ scaffolded |
+
+The Gaussian track sits alongside the pixel-based modules until the [graduation criterion](docs/superpowers/specs/2026-05-01-gaussian-temporal-canvas-design.md#5-graduation-criterion-gaussian--primary) is met (PSNR + SSIM beats OSSPico AND temporal stability ≥ baseline AND user-approved AND latency ≤ 110% of baseline).
+
+See [research synthesis](docs/superpowers/research-synthesis-2026-05-01.md) for concurrent work (GaussianSR / GSASR / GS-STVSR / arXiv 2503.14171) and the [design spec](docs/superpowers/specs/2026-05-01-gaussian-temporal-canvas-design.md) for architecture detail.
+
+---
+
+## Modules (pixel-based track)
 
 | Module | Class | Description | Params |
 |--------|-------|-------------|--------|
