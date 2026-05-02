@@ -18,12 +18,15 @@ Motion is always zero (3 ch wide spatial, fits the 12-ch contract).
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Tuple
+from typing import TYPE_CHECKING, List, Tuple
 
 import numpy as np
 import torch
 
 from .base import GaussianDataset, GaussianTrainingExample, MOTION_CHANNELS
+
+if TYPE_CHECKING:
+    from .lr_synthesis import EngineAliasedLRSynth
 
 
 def _load_image(path: Path) -> torch.Tensor:
@@ -62,8 +65,9 @@ class HyperSimGaussianDataset(GaussianDataset):
         root: Path | str,
         scale: float = 2.0,
         synthetic: bool = False,
+        lr_synth: "EngineAliasedLRSynth | None" = None,
     ) -> None:
-        super().__init__(root=root, scale=scale)
+        super().__init__(root=root, scale=scale, lr_synth=lr_synth)
         self.synthetic = synthetic
         if not self.root.is_dir():
             raise FileNotFoundError(
@@ -122,7 +126,11 @@ class HyperSimGaussianDataset(GaussianDataset):
         elif depth_hr.dim() == 3 and depth_hr.shape[-1] == 1:
             depth_hr = depth_hr.permute(2, 0, 1)
 
-        lr = self._box_downsample(hr, self.scale)
+        lr = (
+            self.lr_synth.synthesize(hr, idx)
+            if self.lr_synth is not None
+            else self._box_downsample(hr, self.scale)
+        )
         lr_h, lr_w = lr.shape[-2:]
         depth_lr = self._box_downsample(_normalize_depth(depth_hr), self.scale)
         # Static frames → motion is zero.

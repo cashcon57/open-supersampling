@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import struct
 from pathlib import Path
-from typing import List, Tuple
+from typing import TYPE_CHECKING, List, Tuple
 
 import torch
 import torch.nn.functional as F
@@ -30,6 +30,9 @@ from .base import (
     GaussianDataset,
     GaussianTrainingExample,
 )
+
+if TYPE_CHECKING:
+    from .lr_synthesis import EngineAliasedLRSynth
 
 
 # ---- Format readers (Sintel-canonical .flo and .dpt). ----------------------
@@ -92,8 +95,9 @@ class SintelGaussianDataset(GaussianDataset):
         scale: float = 2.0,
         pass_name: str = "clean",
         synthetic: bool = False,
+        lr_synth: "EngineAliasedLRSynth | None" = None,
     ) -> None:
-        super().__init__(root=root, scale=scale)
+        super().__init__(root=root, scale=scale, lr_synth=lr_synth)
         self.pass_name = pass_name
         self.synthetic = synthetic
 
@@ -138,8 +142,12 @@ class SintelGaussianDataset(GaussianDataset):
         depth_hr = _read_dpt(depth_path)          # (1, H, W)
         flow_hr = _read_flo(flow_path)            # (2, H, W)
 
-        # LR is box-downsample of HR.
-        lr = self._box_downsample(hr, self.scale)
+        # LR: use engine-aliased synthesis when available, box-downsample otherwise.
+        lr = (
+            self.lr_synth.synthesize(hr, idx)
+            if self.lr_synth is not None
+            else self._box_downsample(hr, self.scale)
+        )
         lr_h, lr_w = lr.shape[-2:]
 
         # Depth + motion + normals at LR resolution.

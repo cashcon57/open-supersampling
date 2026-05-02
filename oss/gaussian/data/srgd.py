@@ -17,7 +17,7 @@ Canonical layout:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Tuple
+from typing import TYPE_CHECKING, List, Tuple
 
 import torch
 import torch.nn.functional as F
@@ -29,6 +29,9 @@ from .base import (
     MOTION_CHANNELS,
     NORMAL_CHANNELS,
 )
+
+if TYPE_CHECKING:
+    from .lr_synthesis import EngineAliasedLRSynth
 
 
 def _load_png(path: Path) -> torch.Tensor:
@@ -47,8 +50,9 @@ class SRGDGaussianDataset(GaussianDataset):
         root: Path | str,
         scale: float = 2.0,
         synthetic: bool = False,
+        lr_synth: "EngineAliasedLRSynth | None" = None,
     ) -> None:
-        super().__init__(root=root, scale=scale)
+        super().__init__(root=root, scale=scale, lr_synth=lr_synth)
         self.synthetic = synthetic
         if not self.root.is_dir():
             raise FileNotFoundError(
@@ -79,13 +83,21 @@ class SRGDGaussianDataset(GaussianDataset):
         hr = _load_png(hr_path)
         if lr_path is not None:
             lr = _load_png(lr_path)
-            # If shapes don't line up with scale, fall back to box-downsample.
+            # If shapes don't line up with scale, fall back to synthesis/box-downsample.
             target_h = hr.shape[-2] // int(round(self.scale))
             target_w = hr.shape[-1] // int(round(self.scale))
             if lr.shape[-2:] != (target_h, target_w):
-                lr = self._box_downsample(hr, self.scale)
+                lr = (
+                    self.lr_synth.synthesize(hr, idx)
+                    if self.lr_synth is not None
+                    else self._box_downsample(hr, self.scale)
+                )
         else:
-            lr = self._box_downsample(hr, self.scale)
+            lr = (
+                self.lr_synth.synthesize(hr, idx)
+                if self.lr_synth is not None
+                else self._box_downsample(hr, self.scale)
+            )
 
         lr_h, lr_w = lr.shape[-2:]
         depth_lr = torch.zeros((DEPTH_CHANNELS, lr_h, lr_w), dtype=torch.float32)

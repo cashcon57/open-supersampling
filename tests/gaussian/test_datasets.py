@@ -18,6 +18,7 @@ from oss.gaussian.data import (
     CANVAS_CHANNELS,
     DEPTH_CHANNELS,
     DEFAULT_WEIGHTS,
+    EngineAliasedLRSynth,
     GaussianDataset,
     GaussianTrainingExample,
     HyperSimGaussianDataset,
@@ -340,6 +341,35 @@ def test_mixed_dataset_describe(sintel_root: Path) -> None:
 def test_mixed_dataset_rejects_empty() -> None:
     with pytest.raises(ValueError):
         MixedGaussianDataset(datasets={"sintel": None, "tartanair": None})
+
+
+# ---- lr_synth integration: SintelGaussianDataset with EngineAliasedLRSynth --
+
+
+def test_sintel_with_lr_synth_correct_shape(sintel_root: Path) -> None:
+    """SintelGaussianDataset with a non-None lr_synth must still return
+    GaussianTrainingExample with the correct LR spatial shape.
+
+    This verifies that wiring the engine-aliased synthesis path does not break
+    the dataset contract (shapes, dtypes, metadata).
+    """
+    synth = EngineAliasedLRSynth(
+        scale=SCALE,
+        enable_jitter=True,
+        enable_taa_blur=True,
+        enable_jpeg=False,
+    )
+    ds = SintelGaussianDataset(root=sintel_root, scale=SCALE, lr_synth=synth)
+    assert len(ds) > 0
+    e = ds[0]
+    _check_example_shapes(
+        e,
+        lr_h=HR_H // int(SCALE),
+        lr_w=HR_W // int(SCALE),
+        hr_h=HR_H,
+        hr_w=HR_W,
+    )
+    assert e.metadata["source"] == "sintel"
 
 
 # ---- Helper: depth → normals -----------------------------------------------

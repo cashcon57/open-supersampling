@@ -21,11 +21,14 @@ from __future__ import annotations
 import abc
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping
 
 import torch
 from torch import Tensor
 from torch.utils.data import Dataset
+
+if TYPE_CHECKING:
+    from .lr_synthesis import EngineAliasedLRSynth
 
 
 # Channel layout (reference) — keep in sync with param_net.py's 12-ch contract.
@@ -154,12 +157,32 @@ class GaussianDataset(Dataset, abc.ABC):
 
     name: str = "gaussian-dataset"
 
-    def __init__(self, root: Path | str, scale: float = 2.0) -> None:
+    def __init__(
+        self,
+        root: Path | str,
+        scale: float = 2.0,
+        lr_synth: "EngineAliasedLRSynth | None" = None,
+    ) -> None:
+        """Initialise the dataset base.
+
+        Args:
+            root:     Path to the dataset root directory.
+            scale:    HR/LR downsample ratio (must be ≥ 1.0).
+            lr_synth: Optional :class:`~oss.gaussian.data.lr_synthesis.EngineAliasedLRSynth`
+                      instance.  When provided, all ``__getitem__`` implementations
+                      MUST use ``self.lr_synth.synthesize(hr, idx)`` for RGB LR
+                      generation instead of ``self._box_downsample``.  When
+                      ``None`` (the default), the existing ``_box_downsample``
+                      path is used, preserving backward compatibility for all
+                      existing tests and training runs that do not opt in to
+                      engine-aliased LR synthesis.
+        """
         super().__init__()
         if scale < 1.0:
             raise ValueError(f"scale must be >=1.0; got {scale}")
         self.root = Path(root)
         self.scale = float(scale)
+        self.lr_synth = lr_synth
 
     @abc.abstractmethod
     def __len__(self) -> int: ...
