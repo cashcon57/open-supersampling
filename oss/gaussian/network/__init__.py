@@ -27,6 +27,7 @@ from oss.gaussian.network.param_net import (
     per_gaussian_channels,
 )
 from oss.gaussian.network.output_head import DecodedParams, OutputHead
+from oss.gaussian.network.pixel_residual import PixelResidualHead
 
 __all__ = [
     "CovariancePriorBank",
@@ -42,4 +43,5 @@ __all__ = [
     "DEFAULT_TILE_SIZE",
     "OutputHead",
     "DecodedParams",
+    "PixelResidualHead",
 ]

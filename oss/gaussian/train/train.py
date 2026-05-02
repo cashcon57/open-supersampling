@@ -45,6 +45,7 @@ from oss.gaussian.network import (
     CovariancePriorBank,
     GaussianParamNetwork,
     OutputHead,
+    PixelResidualHead,
 )
 from oss.gaussian.network.param_net import TIER_CONFIGS, param_net_for_tier
 from oss.gaussian.renderer import Rasterizer
@@ -83,6 +84,8 @@ class TrainArgs:
     lr_synth_blur_sigma: float
     lr_synth_jpeg: bool
     lr_synth_jpeg_quality: int
+    enable_pixel_residual: bool
+    pixel_residual_hidden: int
     score_every: int         # run bicubic-vs-model comparison every N steps
     # Time-bounding
     max_time_seconds: Optional[int]
@@ -190,6 +193,23 @@ class TrainArgs:
             help="JPEG quality for --lr-synth-jpeg (1-95).",
         )
         p.add_argument(
+            "--enable-pixel-residual",
+            action="store_true",
+            default=False,
+            help=(
+                "V0.5: add a small CNN that predicts a per-pixel RGB "
+                "residual on top of the splat-rendered output. Required to "
+                "escape the V0 plateau per "
+                "docs/superpowers/experiments/2026-05-02-output-head-dead-init.md."
+            ),
+        )
+        p.add_argument(
+            "--pixel-residual-hidden",
+            type=int,
+            default=32,
+            help="Hidden channel count for the pixel-residual CNN (default 32).",
+        )
+        p.add_argument(
             "--eval-every",
             type=int,
             default=500,
@@ -228,6 +248,8 @@ class TrainArgs:
         lr_synth_blur_sigma = a.lr_synth_blur_sigma
         lr_synth_jpeg = a.lr_synth_jpeg
         lr_synth_jpeg_quality = a.lr_synth_jpeg_quality
+        enable_pixel_residual = a.enable_pixel_residual
+        pixel_residual_hidden = a.pixel_residual_hidden
         if smoke_test:
             # Hard overrides: pico tier, small batch, 3-hour wall clock.
             tier = "pico"
@@ -268,6 +290,8 @@ class TrainArgs:
             lr_synth_blur_sigma=lr_synth_blur_sigma,
             lr_synth_jpeg=lr_synth_jpeg,
             lr_synth_jpeg_quality=lr_synth_jpeg_quality,
+            enable_pixel_residual=enable_pixel_residual,
+            pixel_residual_hidden=a.pixel_residual_hidden,
             score_every=score_every,
             max_time_seconds=max_time_seconds,
             smoke_test=smoke_test,
@@ -339,10 +363,14 @@ def composite_loss(
 # ---------------------------------------------------------------------------
 
 
-def build_model(args: TrainArgs) -> tuple[GaussianParamNetwork, OutputHead, CovariancePriorBank]:
+def build_model(
+    args: TrainArgs,
+) -> tuple[GaussianParamNetwork, OutputHead, CovariancePriorBank, "PixelResidualHead | None"]:
     """Wire up Sprint 4 components.
 
     Note: per-tier K-per-tile is fixed by TIER_CONFIGS in param_net.py.
+    Returns ``(net, head, bank, residual_head)`` where ``residual_head`` is
+    ``None`` unless ``args.enable_pixel_residual`` is set.
     """
     bank = CovariancePriorBank(learnable=False)
     net = param_net_for_tier(args.tier, bank_size=args.bank_size)
@@ -351,7 +379,12 @@ def build_model(args: TrainArgs) -> tuple[GaussianParamNetwork, OutputHead, Cova
         k_per_tile=net.k_per_tile,
         enable_gbuffer_bias=args.enable_gbuffer_bias,
     )
-    return net, head, bank
+    residual_head = (
+        PixelResidualHead(in_channels=6, hidden_channels=args.pixel_residual_hidden)
+        if args.enable_pixel_residual
+        else None
+    )
+    return net, head, bank, residual_head
 
 
 @torch.no_grad()
@@ -609,6 +642,7 @@ def evaluate_against_bicubic(
     device: str,
     n_samples: int = 8,
     renderer_backend: str = "auto",
+    residual_head: "PixelResidualHead | None" = None,
 ) -> dict:
     """Compare model output PSNR against bicubic upsample on held-out examples.
 
@@ -673,6 +707,14 @@ def evaluate_against_bicubic(
                     normals=normals_b,
                 )
                 rendered = renderer(gaussians, output_hw=(H_hr, W_hr)).clamp(0.0, 1.0)
+
+                # Apply V0.5 pixel-residual head if wired.
+                if residual_head is not None:
+                    res = residual_head(
+                        rendered.unsqueeze(0),
+                        bicubic_hr[b_idx : b_idx + 1],
+                    ).squeeze(0)
+                    rendered = (rendered + res).clamp(0.0, 1.0)
 
                 gt_single = gt_hr[b_idx]
                 bicubic_single = bicubic_hr[b_idx]
@@ -763,24 +805,26 @@ def main(argv: list[str] | None = None) -> int:
             args.max_time_seconds / 3600.0,
         )
 
-    net, head, bank = build_model(args)
+    net, head, bank, residual_head = build_model(args)
     net.to(args.device)
     bank.to(args.device)
     if args.enable_gbuffer_bias and head.gbuffer_bias is not None:
         head.gbuffer_bias.to(args.device)
+    if residual_head is not None:
+        residual_head.to(args.device)
 
     renderer = Rasterizer(
         force_backend=None if args.renderer_backend == "auto" else args.renderer_backend
     )
-    optim = torch.optim.AdamW(
-        list(net.parameters()) + list(bank.parameters()),
-        lr=args.learning_rate,
-        weight_decay=1e-5,
-    )
+    optim_params = list(net.parameters()) + list(bank.parameters())
+    if residual_head is not None:
+        optim_params += list(residual_head.parameters())
+    optim = torch.optim.AdamW(optim_params, lr=args.learning_rate, weight_decay=1e-5)
     log.info(
-        "net params=%d bank params=%d",
+        "net params=%d bank params=%d residual params=%d",
         sum(p.numel() for p in net.parameters()),
         sum(p.numel() for p in bank.parameters()),
+        sum(p.numel() for p in residual_head.parameters()) if residual_head else 0,
     )
 
     metrics_log: list[dict] = []
@@ -903,11 +947,22 @@ def main(argv: list[str] | None = None) -> int:
                 rendered_batch.append(renderer(gaussians, output_hw=(H_hr, W_hr)))
             rendered = torch.stack(rendered_batch, dim=0)
 
-            loss, parts = composite_loss(rendered, gt_hr)
+            # V0.5: pixel-residual head on top of the splat raster.
+            if residual_head is not None:
+                lr_up = F.interpolate(
+                    lr, size=(H_hr, W_hr), mode="bicubic", antialias=True
+                ).clamp(0.0, 1.0)
+                residual = residual_head(rendered.clamp(0.0, 1.0), lr_up)
+                final = (rendered + residual).clamp(0.0, 1.0)
+            else:
+                final = rendered
+
+            loss, parts = composite_loss(final, gt_hr)
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(
-                list(net.parameters()) + list(bank.parameters()), max_norm=1.0
-            )
+            clip_params = list(net.parameters()) + list(bank.parameters())
+            if residual_head is not None:
+                clip_params += list(residual_head.parameters())
+            torch.nn.utils.clip_grad_norm_(clip_params, max_norm=1.0)
             optim.step()
 
             if step % args.log_every == 0:
@@ -932,6 +987,7 @@ def main(argv: list[str] | None = None) -> int:
                 result = evaluate_against_bicubic(
                     net, head, bank, score_loader, args.device, n_samples=8,
                     renderer_backend=args.renderer_backend,
+                    residual_head=residual_head,
                 )
                 score_row = {"step": step, **result}
                 score_log.append(score_row)

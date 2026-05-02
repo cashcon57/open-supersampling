@@ -108,6 +108,8 @@ def _minimal_args(tmp_path: Path, **overrides: Any) -> TrainArgs:
         lr_synth_blur_sigma=0.5,
         lr_synth_jpeg=False,
         lr_synth_jpeg_quality=85,
+        enable_pixel_residual=False,
+        pixel_residual_hidden=32,
         score_every=0,
         max_time_seconds=None,
         smoke_test=False,
