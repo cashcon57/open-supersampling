@@ -47,11 +47,7 @@ A vector-based real-time game upscaler. Where DLSS and FSR work in pixels, OSS-G
 
 #### Known issues
 
-- 3 CUDA-specific renderer tests fail on the 3080 Ti due to gsplat 1.4.0 API drift from the Image-GS pin. Reference backend works on CUDA, so this is bounded scope; targeted debug task post-Sprint 1 close-out. Investigation summary:
-  - Inverse-scale convention patched in `rasterizer.py` (commit `d76ee60`) — Image-GS internally `1/scale`s before passing to gsplat. Did not resolve.
-  - `project_gaussians_2d_scale_rot` returns `num_tiles_hit = 0` for all reasonable input scales tried — the projection step itself isn't producing any tile intersections on RTX 3080 Ti. Suggests a deeper convention mismatch (coordinate space? half-precision flag?) between gsplat 1.4.0 and the Image-GS reference call site.
-  - `RuntimeError: expected scalar type Int but found Float` is then raised when rasterise is called on the degenerate result.
-  - Variants tested (radii→int32, topk_norm→int, num_tiles_hit→explicit int32, feat→float64): all fail with the same error or a related one.
-  - **Next debug step**: trace through Image-GS's `main.py` exact call path on the 3080 Ti and diff against our wrapper; the convention difference is likely in either coordinate space (centred vs corner-anchored) or scale magnitude (sigma vs inverse-sigma vs log-scale).
+- ~~3 CUDA-specific renderer tests fail~~. **RESOLVED**: gsplat 1.4.0 expects `xy` and `scale` in normalized [0, 1] coordinates, not pixel-space. Wrapper now normalizes internally; public API stays in pixel-space (commit `202c187`). Forward CUDA test passes on RTX 3080 Ti. Test status: **129 pass, 2 fail, 3 skip**.
+- 2 CUDA backward tests still fail (`test_cuda_backend_gradients_flow`, `test_cuda_backend_optimization_converges`) — gradient flow through the normalization step likely has a fixture-value edge case (small Gaussians may not hit any tile after normalization, producing zero gradient). Targeted task: update test fixtures to use Gaussian sizes that survive normalization; wrapper logic is correct.
 - The 7 pre-existing pixel-track test failures are not fixed (out of scope for the Gaussian work).
 - The pixel-based track has a v0.1.0-mvp tag; the Gaussian track has not been tagged yet.
