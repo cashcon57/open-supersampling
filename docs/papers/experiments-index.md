@@ -11,6 +11,8 @@ Auto-curated index of `docs/superpowers/experiments/*.md`. Update on every new m
 | 2026-05-01 | [validation-decision-memo](../superpowers/experiments/2026-05-01-validation-decision-memo.md) | Sprint 4 authorised conditional on smoke-test gate; engine-aliased LR mandated; anisotropic G-buffer covariance pulled into Sprint 4. |
 | 2026-05-02 | [sprint4-smoke-findings](../superpowers/experiments/2026-05-02-sprint4-smoke-findings.md) | Pipeline ✓; CUDA backward live; pico undersized; lite trainability still unresolved at lr={5e-4, 1e-4}. |
 | 2026-05-02 | [pico-lite-aggressive-srgd](../superpowers/experiments/2026-05-02-pico-lite-aggressive-srgd.md) | Pico AND lite both flat at 11–12 dB across 12K–20K steps on SRGD ActionRPG with σ=1.5 + JPEG q=85. **V0 architecture fails its own gate.** Promotes V0.5 pixel-residual head as next test. |
+| 2026-05-02 | [output-head-dead-init](../superpowers/experiments/2026-05-02-output-head-dead-init.md) | Diagnostic root-cause: V0 output head was zero-init, K Gaussians per tile started identical, gradient symmetry never broke. Smoking gun #2: gsplat 1.4.0 backward returns silent zero when Gaussians too small to hit tiles. Fixes (`6900300` + `6c02cc8`) unstick diagnostics but model still plateaus at 12 dB → V0.5 needed. |
+| 2026-05-02 | [v05-pixel-residual-success](../superpowers/experiments/2026-05-02-v05-pixel-residual-success.md) | **V0.5 BICUBIC GATE CLEARED.** Trained on ActionRPG, beats bicubic by +1.47 dB (8/8). Held-out CitySample +1.26, StylizedRendering +0.84, ArchVizInterior +2.08 — all 16/16. Splat-only ablation: 12 dB. **Residual CNN does all the work; splat path is decorative.** Multi-day production unblocked. |
 
 ### Naive baseline floors (no training)
 
