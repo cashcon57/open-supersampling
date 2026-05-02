@@ -1,0 +1,45 @@
+; =============================================================================
+;  dxgi_proxy.def
+;
+;  Module-definition file for the OSS-Gaussian interception DLL (`dxgi.dll`).
+;
+;  Purpose: alias the public DXGI export names to internal `Ossg`-prefixed
+;  C++ implementations defined in dxgi_proxy.cpp. We can't decorate the C++
+;  trampolines with `__declspec(dllexport)` under their public DXGI names
+;  because <dxgi.h>/<dxgi1_3.h> already declare those same symbols as
+;  `__declspec(dllimport)` — MSVC then rejects the redefinition with C2375
+;  ("different linkage").
+;
+;  The internal functions use private names that don't collide with the
+;  system headers; this .def re-publishes them under their public names in
+;  the produced DLL's export table. Same pattern as OptiScaler / ReShade.
+;
+;  LIBRARY name matches the produced DLL (dxgi.dll) so the Windows loader
+;  treats this proxy as a drop-in replacement when placed in the game's
+;  bin\x64\ folder.
+;
+;  Copyright 2026 OSS-Gaussian contributors
+;  Licensed under the Apache License, Version 2.0 (see ../LICENSE).
+; =============================================================================
+
+LIBRARY dxgi
+EXPORTS
+  CreateDXGIFactory                = OssgCreateDXGIFactory
+  CreateDXGIFactory1               = OssgCreateDXGIFactory1
+  CreateDXGIFactory2               = OssgCreateDXGIFactory2
+  DXGIDeclareAdapterRemovalSupport = OssgDXGIDeclareAdapterRemovalSupport
+  DXGIGetDebugInterface1           = OssgDXGIGetDebugInterface1
+  DXGIDisableVBlankVirtualization  = OssgDXGIDisableVBlankVirtualization
+  DXGIDumpJournal                  = OssgDXGIDumpJournal
+  DXGIReportAdapterConfiguration   = OssgDXGIReportAdapterConfiguration
+  ApplyCompatResolutionQuirking    = OssgApplyCompatResolutionQuirking
+  CompatString                     = OssgCompatString
+  CompatValue                      = OssgCompatValue
+  DXGID3D10CreateDevice            = OssgDXGID3D10CreateDevice
+  DXGID3D10CreateLayeredDevice     = OssgDXGID3D10CreateLayeredDevice
+  DXGID3D10GetLayeredDeviceSize    = OssgDXGID3D10GetLayeredDeviceSize
+  DXGID3D10RegisterLayers          = OssgDXGID3D10RegisterLayers
+  SetAppCompatStringPointer        = OssgSetAppCompatStringPointer
+  PIXBeginCapture                  = OssgPIXBeginCapture
+  PIXEndCapture                    = OssgPIXEndCapture
+  PIXGetCaptureState               = OssgPIXGetCaptureState
