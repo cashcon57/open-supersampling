@@ -166,13 +166,17 @@ class Rasterizer:
         tile_bounds = ((w + self.tile_size - 1) // self.tile_size,
                        (h + self.tile_size - 1) // self.tile_size,
                        1)
-        # Pass gaussians.scale through directly. Image-GS *stores* its
-        # internal parameter as 1/scale and then `_get_scale()` inverts
-        # it back to the natural value before calling gsplat (see
-        # model.py:_get_scale, lines 372-377). Net: gsplat receives the
-        # natural pixel-space scale.
+        # gsplat 1.4.0 uses **normalized [0, 1] coordinates** for both xy and
+        # scale, not pixel-space. Our public API takes pixel-space (which is
+        # the intuitive convention for game upscaling), so we normalize here.
+        # Verified by direct test: xy=(0.25, 0.25) at 64x64 → projected
+        # xy_proj=(16, 16), 16 tile hits. xy=(16, 16) → projected (1024, 1024)
+        # outside frame → 0 hits → degenerate-tile crash inside the kernel.
+        norm = torch.tensor([w, h], dtype=gaussians.xy.dtype, device=gaussians.xy.device)
+        xy_norm = gaussians.xy / norm
+        scale_norm = gaussians.scale / norm
         xy_proj, radii, conics, num_tiles_hit = project_gaussians_2d_scale_rot(
-            gaussians.xy, gaussians.scale, gaussians.rot, h, w, tile_bounds,
+            xy_norm, scale_norm, gaussians.rot, h, w, tile_bounds,
         )
         out_flat = rasterize_gaussians_sum(
             xy_proj, radii, conics, num_tiles_hit,
