@@ -175,8 +175,13 @@ class Rasterizer:
         norm = torch.tensor([w, h], dtype=gaussians.xy.dtype, device=gaussians.xy.device)
         xy_norm = gaussians.xy / norm
         scale_norm = gaussians.scale / norm
+        # gsplat expects rot as (N, 1) per Image-GS model.py line 167. Our
+        # public API uses (N,) (more natural in PyTorch), so unsqueeze here.
+        # Without this the backward path returns gradient shape (N, 1) for
+        # an input (N,) tensor → autograd shape-mismatch RuntimeError.
+        rot_unsq = gaussians.rot.unsqueeze(-1)
         xy_proj, radii, conics, num_tiles_hit = project_gaussians_2d_scale_rot(
-            xy_norm, scale_norm, gaussians.rot, h, w, tile_bounds,
+            xy_norm, scale_norm, rot_unsq, h, w, tile_bounds,
         )
         out_flat = rasterize_gaussians_sum(
             xy_proj, radii, conics, num_tiles_hit,
