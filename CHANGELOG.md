@@ -60,3 +60,5 @@ A vector-based real-time game upscaler. Where DLSS and FSR work in pixels, OSS-G
 ### Sprint 2 — In Progress
 
 - **T2.1 + T2.2 ✓** — `dxgi.dll` (1.4 MB) built clean on RTX 3080 Ti via VS 2026 / MSVC 14.50 / CMake. All 10 `NVSDK_NGX_D3D12_*` exports present (verified via `dumpbin /exports`). Detours static lib linked. CMakeLists.txt was missing from origin — `.gitignore` had `*.txt` blanket rule swallowing it; carve-out added.
+
+- **T2.3 ✓** — DXGI export forwarder (19 exports) + game-agnostic positioning. First build hit MSVC C2375 redefinition errors (system `<dxgi.h>` already declares CreateDXGIFactory etc. as `dllimport`); resolved with `.def` file rename pattern (internal C++ uses `OssgCreateDXGIFactory` etc.; `.def` aliases to public DXGI names). Build clean, dxgi.dll exports all 19 DXGI + 10 NGX + 3 PIX symbols verified via `dumpbin /exports`.
