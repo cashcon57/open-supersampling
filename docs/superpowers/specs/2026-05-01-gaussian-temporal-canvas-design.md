@@ -80,11 +80,27 @@ Single trained model. Gaussian count is a runtime parameter.
 
 ## 4. Targets
 
-### 4.1 Primary target (Sprints 1–6)
-- **Hardware:** RTX 3080 Ti (Windows, in apartment via Tailscale LAN)
-- **Game:** Cyberpunk 2077 (DX12, native DLSS for direct comparison)
-- **Integration:** DLL swap (DLSS DLL replacement), DXGI hook for G-buffer extraction
+### 4.0 Scope: any DLSS-using DX12 game
+
+OSS-Gaussian targets the universal DLSS API surface (10 `NVSDK_NGX_D3D12_*` exports + DXGI proxy), not any single game. The interception DLL is renamed `dxgi.dll` and dropped in any DX12 game's `bin\x64\` folder; game-local DLL search resolves it before system32. Compatible games are: any DX12 title that ships native DLSS 2/3, has no kernel-level anti-cheat, and runs without Path Tracing (PT forces DLSS-RR which is a different API surface — see Sprint 2 T2.11).
+
+Per-game compat profiles (community-editable JSON, runtime-loaded) handle game-specific quirks post-v1. No game-specific code in the DLL itself.
+
+### 4.1 Primary validation target (Sprints 1–6)
+- **Hardware:** RTX 3080 Ti (Windows, apartment LAN via Tailscale)
+- **Game:** Cyberpunk 2077 (DX12, native DLSS, no anti-cheat, well-documented hook patterns from OptiScaler)
+- **Integration:** universal DLL swap (DLSS DLL replacement), DXGI hook for G-buffer extraction
 - **Output target:** 1440p with frame extrapolation 60→120 FPS
+
+### 4.1.b Post-v1 expansion target list
+
+Post-Sprint 6, validate on at least 2 more DLSS-shipping titles to prove the universal DLL approach. Candidate matrix:
+- Hogwarts Legacy (DX12, DLSS 3 + FG, no AC)
+- Portal RTX (DX12, DLSS-RR — tests PT-detection guardrail)
+- Alan Wake 2 (DX12, DLSS 3.5)
+- Cyberpunk 2077 modded (DLSS 4 / Frame Warp)
+
+Compatibility matrix updated in `docs/compatibility.md` (TBD post-Sprint 6).
 
 ### 4.2 Cross-platform ports (Sprint 7)
 - **M3 Max MacBook Pro:** Metal compute renderer + CoreML network. Test under CrossOver with same Cyberpunk 2077 install or other CrossOver-compatible game.
