@@ -754,21 +754,22 @@ def _save_checkpoint(
     net: GaussianParamNetwork,
     bank: CovariancePriorBank,
     args: TrainArgs,
+    residual_head: "PixelResidualHead | None" = None,
 ) -> None:
     ckpt_path = output_dir / f"step-{step:08d}.pt"
-    torch.save(
-        {
-            "step": step,
-            "tier": tier,
-            "net": net.state_dict(),
-            "bank": bank.state_dict(),
-            "args": {
-                k: (str(v) if isinstance(v, Path) else v)
-                for k, v in args.__dict__.items()
-            },
+    payload = {
+        "step": step,
+        "tier": tier,
+        "net": net.state_dict(),
+        "bank": bank.state_dict(),
+        "args": {
+            k: (str(v) if isinstance(v, Path) else v)
+            for k, v in args.__dict__.items()
         },
-        ckpt_path,
-    )
+    }
+    if residual_head is not None:
+        payload["residual_head"] = residual_head.state_dict()
+    torch.save(payload, ckpt_path)
     log.info("ckpt -> %s", ckpt_path)
 
 
@@ -979,7 +980,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
 
             if step % args.ckpt_every == 0:
-                _save_checkpoint(args.output_dir, step, args.tier, net, bank, args)
+                _save_checkpoint(args.output_dir, step, args.tier, net, bank, args, residual_head=residual_head)
 
             # Periodic bicubic comparison.
             if args.score_every > 0 and step % args.score_every == 0:
@@ -1001,7 +1002,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
 
         # Final checkpoint (covers both natural end and timeout).
-        _save_checkpoint(args.output_dir, final_step, args.tier, net, bank, args)
+        _save_checkpoint(args.output_dir, final_step, args.tier, net, bank, args, residual_head=residual_head)
 
         # Final bicubic comparison (always at end of real-data training).
         log.info("--- final bicubic comparison at step %d ---", final_step)
