@@ -95,10 +95,26 @@ except Exception:
 @pytest.mark.skipif(not (cuda_available and gsplat_available),
                     reason="CUDA / gsplat not available")
 def test_cuda_backend_gradients_flow() -> None:
-    """CUDA backend must also propagate gradients to Gaussian parameters."""
-    g = _make_batch(torch.device("cuda"))
+    """CUDA backend must also propagate gradients to Gaussian parameters.
+
+    Uses a larger image (128×128) so the normalized-coords convention
+    inside the wrapper produces non-degenerate Gaussian footprints. At
+    32×32 with the small fixture Gaussians, the projection step yields
+    very few tile hits → near-zero gradient signal.
+    """
+    # Asymmetric scales so rotation gradient is non-zero (a circular
+    # Gaussian is rotation-invariant).
+    g = GaussianBatch(
+        xy=torch.tensor([[40.0, 40.0], [88.0, 40.0], [64.0, 88.0]],
+                        device="cuda", requires_grad=True),
+        scale=torch.tensor([[12.0, 4.0], [4.0, 12.0], [10.0, 6.0]],
+                           device="cuda", requires_grad=True),
+        rot=torch.tensor([0.3, 0.5, 1.0], device="cuda", requires_grad=True),
+        feat=torch.tensor([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+                          device="cuda", requires_grad=True),
+    )
     r = Rasterizer(force_backend="cuda")
-    out = r(g, output_hw=(32, 32))
+    out = r(g, output_hw=(128, 128))
     out.sum().backward()
     for name, t in (("xy", g.xy), ("scale", g.scale), ("rot", g.rot), ("feat", g.feat)):
         assert t.grad is not None, f"{name}.grad is None"
@@ -109,28 +125,29 @@ def test_cuda_backend_gradients_flow() -> None:
 @pytest.mark.skipif(not (cuda_available and gsplat_available),
                     reason="CUDA / gsplat not available")
 def test_cuda_backend_optimization_converges() -> None:
-    """Same as the reference convergence test but on CUDA."""
-    target_xy = torch.tensor([24.0, 24.0], device="cuda")
+    """Same as the reference convergence test but on CUDA. Uses a 128×128
+    image so the normalized-coords convention produces stable gradients."""
+    target_xy = torch.tensor([96.0, 96.0], device="cuda")
     g = GaussianBatch(
-        xy=torch.tensor([[8.0, 8.0]], device="cuda", requires_grad=True),
-        scale=torch.tensor([[2.0, 2.0]], device="cuda", requires_grad=True),
+        xy=torch.tensor([[32.0, 32.0]], device="cuda", requires_grad=True),
+        scale=torch.tensor([[12.0, 12.0]], device="cuda", requires_grad=True),
         rot=torch.tensor([0.0], device="cuda", requires_grad=True),
         feat=torch.tensor([[1.0]], device="cuda", requires_grad=True),
     )
     target_g = GaussianBatch(
         xy=target_xy.unsqueeze(0),
-        scale=torch.tensor([[2.0, 2.0]], device="cuda"),
+        scale=torch.tensor([[12.0, 12.0]], device="cuda"),
         rot=torch.tensor([0.0], device="cuda"),
         feat=torch.tensor([[1.0]], device="cuda"),
     )
     r = Rasterizer(force_backend="cuda")
-    target_image = r(target_g, output_hw=(32, 32)).detach()
+    target_image = r(target_g, output_hw=(128, 128)).detach()
 
     initial_dist = torch.norm(g.xy[0].detach() - target_xy).item()
-    opt = torch.optim.Adam([g.xy, g.scale, g.rot, g.feat], lr=0.5)
-    for _step in range(20):
+    opt = torch.optim.Adam([g.xy, g.scale, g.rot, g.feat], lr=2.0)
+    for _step in range(50):
         opt.zero_grad()
-        out = r(g, output_hw=(32, 32))
+        out = r(g, output_hw=(128, 128))
         loss = torch.nn.functional.mse_loss(out, target_image)
         loss.backward()
         opt.step()
