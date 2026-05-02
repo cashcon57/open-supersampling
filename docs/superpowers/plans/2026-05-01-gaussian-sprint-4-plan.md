@@ -92,6 +92,8 @@ configs/gaussian/
 
 ## Tasks
 
+> **Status update 2026-05-02:** T4.1, T4.2, T4.3 (data adapters + engine-aliased LR), T4.5 (training script wiring) are landed. T4.6 / T4.11 (Lambda H100 training) are **postponed indefinitely** — cloud spend is out of budget and v0 MVP must come from the 3080 Ti alone. Anisotropic G-buffer-conditioned covariance bias (Decision 2 from the validation memo) was pulled into T4.2 / `OutputHead`. Live training findings are tracked in `docs/superpowers/experiments/2026-05-02-sprint4-smoke-findings.md`.
+
 ### T4.1 — Covariance Prior Bank (DONE during planning)
 
 **Status:** Architecture skeleton already landed.
@@ -111,9 +113,9 @@ PSD covariance from (sx, sy, θ); softmax weights → per-Gaussian (sx, sy, θ, 
 
 ---
 
-### T4.2 — GaussianParamNetwork + OutputHead (DONE during planning)
+### T4.2 — GaussianParamNetwork + OutputHead (DONE during planning, extended 2026-05-02)
 
-**Status:** Architecture skeleton + tests landed.
+**Status:** Architecture skeleton + tests landed. Anisotropic G-buffer-conditioned covariance bias added per validation-memo Decision 2 (commit `da916d0`).
 **Files:** `oss/gaussian/network/param_net.py`, `output_head.py`, `__init__.py`,
 `tests/gaussian/test_network.py`.
 
@@ -121,12 +123,13 @@ PSD covariance from (sx, sy, θ); softmax weights → per-Gaussian (sx, sy, θ, 
 parameter tensor. `OutputHead.decode` produces a `GaussianBatch` ready for
 the Rasterizer.
 
+**Goal (2026-05-02 addition):** `OutputHead.enable_gbuffer_bias=True` adds a per-tile (mean normal, mean depth gradient) → 5-feature linear projection that biases the bank softmax toward edge-aligned anisotropic entries. Zero-init projection means enabling the flag is graceful (matches the disabled output until trained). Shared across the K Gaussians per tile.
+
 **Verify:** `pytest tests/gaussian/test_network.py -v`
 
-**Acceptance:** all 25 unit tests pass on CPU. End-to-end differentiability
-test produces non-zero gradients on stem, head, AND learnable bank.
+**Acceptance:** all 25 + 7 (gbuffer-bias) unit tests pass on CPU. End-to-end differentiability test produces non-zero gradients on stem, head, AND learnable bank. CUDA backward verified non-zero on 3080 Ti via `scripts/probe_cuda_grad_flow.py`.
 
-**Time:** done (~2 days equivalent).
+**Time:** done (~2 days base + ~1 day gbuffer-bias extension).
 
 ---
 
@@ -234,7 +237,9 @@ during the LPIPS computation; full-frame is unnecessary for perceptual loss.
 
 ---
 
-### T4.5 — Training script (Lambda H100 + local 3080 Ti)
+### T4.5 — Training script (3080 Ti only — Lambda H100 postponed) ✓ basic wiring landed 2026-05-02
+
+> **2026-05-02 status:** v0 trainer wired end-to-end on the 3080 Ti. Lambda H100 path is postponed; v0 MVP must come from local hardware. Cosine LR schedule + warmup + DDP are not yet implemented (see "Open follow-ups" below). CSV log now writes per-step metrics. `--smoke-test` produces the gate signal.
 
 **Goal:** End-to-end training loop runnable on either local 3080 Ti
 (reduced batch size for development) or Lambda H100 SXM 80 GB.

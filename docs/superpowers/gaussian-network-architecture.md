@@ -85,6 +85,31 @@ parametrisation stays in the same space the renderer consumes).
 Bank size and entries are ablated in Sprint 4 / T4.9. If size 32 wins by
 > 0.3 dB PSNR we adopt it as the default.
 
+### 2.1 Anisotropic G-buffer-conditioned bias (added 2026-05-02)
+
+Implements Decision 2 from `docs/superpowers/experiments/2026-05-01-validation-decision-memo.md`. The naive-denoising D1 test showed the Gaussian prior over-smooths textured regions; biasing the bank softmax toward elongated entries aligned with surface gradients addresses this.
+
+```
+per-pixel depth (B,1,H,W) ─┐
+per-pixel normals (B,3,H,W)┤  avg_pool(tile_size)  ┌─────────────────┐
+                           ├──────────────────────►│ tile features   │
+depth_gradient (∂z/∂x,∂z/∂y)                       │ (B, Ht, Wt, 5)  │
+                                                   └────────┬────────┘
+                                                            │
+                                                  Linear(5 → bank_size)
+                                                  zero-init
+                                                            │
+                                                            ▼
+bank_logits (B,Ht,Wt,K,bank_size) ──────────► add ──► softmax ──► bank_w
+```
+
+- **5-channel feature** = 3 mean normal components + 2 mean depth-gradient components per tile.
+- **Per-tile bias**, *not* per-Gaussian. The K Gaussians inside one 16×16 tile share the bias term — the tile is the geometric primitive that has a single dominant orientation.
+- **Zero-init projection** so a freshly-enabled `OutputHead(enable_gbuffer_bias=True)` matches the disabled output bit-for-bit. The network learns when/how to use the bias; default is "no signal."
+- **Backward compat**: `enable_gbuffer_bias=False` (the default) skips the bias module entirely. `OutputHead.decode(raw)` without `depth=`/`normals=` also bypasses it even when enabled.
+
+Implementation: `oss/gaussian/network/output_head.py::GBufferCovarianceBias`. 7 tests in `tests/gaussian/test_network.py` cover the activation/deactivation states and gradient flow.
+
 ---
 
 ## 3. Tier scaling

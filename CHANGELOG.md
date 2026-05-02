@@ -62,3 +62,32 @@ A vector-based real-time game upscaler. Where DLSS and FSR work in pixels, OSS-G
 - **T2.1 + T2.2 ✓** — `dxgi.dll` (1.4 MB) built clean on RTX 3080 Ti via VS 2026 / MSVC 14.50 / CMake. All 10 `NVSDK_NGX_D3D12_*` exports present (verified via `dumpbin /exports`). Detours static lib linked. CMakeLists.txt was missing from origin — `.gitignore` had `*.txt` blanket rule swallowing it; carve-out added.
 
 - **T2.3 ✓** — DXGI export forwarder (19 exports) + game-agnostic positioning. First build hit MSVC C2375 redefinition errors (system `<dxgi.h>` already declares CreateDXGIFactory etc. as `dllimport`); resolved with `.def` file rename pattern (internal C++ uses `OssgCreateDXGIFactory` etc.; `.def` aliases to public DXGI names). Build clean, dxgi.dll exports all 19 DXGI + 10 NGX + 3 PIX symbols verified via `dumpbin /exports`.
+
+### Sprint 4 — In Progress (post-validation-memo)
+
+Triggered by the 5-test pre-training validation suite (`docs/superpowers/experiments/2026-05-01-validation-decision-memo.md`). Three architectural prerequisites landed before any cloud-GPU spend; live training on the 3080 Ti is uncovering hyperparameter / data issues that would have been masked at scale.
+
+- **Engine-aliased LR synthesis pipeline ✓** — `oss/gaussian/data/lr_synthesis.py`. Halton(2,3) subpixel jitter (idx+1 per Unreal/DLSS convention), area-filter downsample, configurable TAA Gaussian blur (σ=0.5 mild → σ=1.5 aggressive, kernel size auto-fits 3σ), optional JPEG q≥85. `EngineAliasedLRSynth` dataclass orchestrator threaded through all four dataset adapters (sintel/tartanair/hypersim/srgd) via opt-in `lr_synth=` parameter. Default behaviour preserved (backward compat for fixtures). 28 new tests in `test_lr_synthesis.py` including directional assertions that catch sign-flips and row/col swaps; `test_apply_jitter_direction_x_axis` was self-corrected after an inverted assertion.
+
+- **Anisotropic G-buffer-conditioned covariance bias ✓** — `oss/gaussian/network/output_head.py`. New `GBufferCovarianceBias` module: per-tile (mean normal, mean depth gradient) → 5-channel feature → zero-init linear → additive bias on bank logits before softmax. Bias is per-tile (shared across the K Gaussians in that tile). When `enable_gbuffer_bias=False` (default) or `depth=normals=None` is passed, behaviour matches the pre-existing `OutputHead` bit-for-bit. 7 new tests covering backward-compat, zero-input invariance, per-tile sharing, gradient flow, and shape validation.
+
+- **Trainer wired to real data ✓** — `oss/gaussian/train/train.py`. Real `DataLoader` over `SintelGaussianDataset` or `SRGDGaussianDataset` (selectable via `--dataset`), `--smoke-test` mode (pico tier, batch=2, 3-hr wall clock, aggressive σ=1.5 + JPEG defaults), `--force-lr-synth` to bypass pre-baked LR (avoids the bicubic-LR-trap), `--renderer-backend {auto,cuda,reference}`, tile-aligned center-crop helper for non-multiple-of-16 datasets like SRGD (540×960 → 256×480 LR), bicubic-vs-model PSNR evaluation at `--eval-every` steps, wall-clock kill switch with orderly final-eval+checkpoint, `SMOKE TEST RESULT: PASS/FAIL` verdict line. Backward-compat `--use-synthetic-batch` preserves the random-tensor CI sanity path.
+
+- **3080 Ti smoke-test results (architecture-validation but uncovered hyperparameter issues)** — Pico tier (75K params) on SRGD ActionRPG: model PSNR flat at 11–13 dB across 5K steps while bicubic baseline sat at 33–37 dB. Gradient probe (`scripts/probe_cuda_grad_flow.py`) confirms gradients flow on both reference and CUDA renderer backends — CUDA grads are 5–100× weaker than reference but non-zero on every leaf, expected from different forward semantics, not a backward bug. Lite tier (178K) at lr=5e-4 with aggressive multi-scene LR synth showed unstable / diverging loss (model PSNR went 13.8 → 13.2 → 7.97 over steps 1k–3k). Diagnostic conclusion: pico is undersized for 540×960 SR; lr=5e-4 is too high for lite tier; aggressive LR synth (σ=1.5 + JPEG q=85) successfully drops the bicubic ceiling from ~35 dB to ~26 dB so the model has something to optimise against. Lite-tier rerun at lr=1e-4 in progress.
+
+- **Critical training-data correction implemented** — `--force-lr-synth` ensures the SRGD adapter ignores any pre-baked DownscaleData and always synthesises LR via `EngineAliasedLRSynth`. SRGD's `DownscaleData/` appears to be bicubic-downsampled, which would make bicubic upsampling its near-inverse — exactly the bicubic-LR-trap that 2U flagged in the validation memo. Smoke-test mode now hard-overrides aggressive defaults (σ=1.5, JPEG=on) to drop the baseline ceiling.
+
+- **CUDA backward gradient flow verified** — Adds `scripts/probe_cuda_grad_flow.py`. Single forward+backward step on both reference and CUDA renderers, prints per-leaf gradient L2 norms. On the 3080 Ti both backends produce non-zero gradients on `net.stem.conv.weight`, `net.head.weight`, `head.gbuffer_bias.proj.weight`, and `bank.log_sx`. Settles the open question from Sprint 1's known issue list — the smoke-test learning failure is *not* caused by silent-zero CUDA backward; it's tier capacity + learning-rate.
+
+#### New tests
+
+- `tests/gaussian/test_lr_synthesis.py` — 28 tests for halton_jitter / apply_jitter / area_downsample regression / taa_blur_approx HF reduction / EngineAliasedLRSynth orchestration / JPEG round-trip / directional sign + row-col-swap detection.
+- `tests/gaussian/test_train_smoke.py` — 6 tests for evaluate_against_bicubic, smoke-test arg overrides, build_dataloader sequence filtering.
+- `tests/gaussian/test_network.py` — 7 new gbuffer-bias tests (default disabled, zero-init invariance, per-tile sharing across K, gradient flow, shape rejection).
+- `tests/gaussian/test_datasets.py` — 1 integration test for `SintelGaussianDataset(lr_synth=...)`.
+
+#### Open issues / next moves
+
+- Lite tier at lr=1e-4 currently running; if it stabilises and PSNR climbs monotonically, scale to standard tier multi-day. If still diverges, investigate (1) loss function (the misnamed `ssim_proxy` is mathematically equivalent to a pooled L1, not SSIM — may be redundant or actively unhelpful), (2) gradient clipping threshold, (3) per-scene learning-rate warmup.
+- Multi-day production run on 3080 Ti targets standard tier (500K params) on full SRGD GameEngineData — NOT scheduled until lite-tier stability is proven on this dataset.
+- Lambda H100 cloud spend remains gated and is currently out of budget; v0 MVP must come from 3080 Ti only.

@@ -32,7 +32,7 @@ Component map:
 | 1 | `oss/gaussian/renderer/` (CUDA tile-based rasterizer, vendored Image-GS) | ✓ scaffolded, tests pass |
 | 2 | `oss/gaussian/interception/` (D3D12/DXGI hook, NGX shim) | ✓ scaffolded |
 | 3 | `oss/gaussian/classifier/` (16×16 tile complex/simple mask) | ✓ scaffolded, tests pass |
-| 4 | `oss/gaussian/network/` + `oss/gaussian/data/` (param net + datasets) | ✓ scaffolded, trainer wired |
+| 4 | `oss/gaussian/network/` + `oss/gaussian/data/` (param net + datasets) | ✓ scaffolded; trainer wired to real data; engine-aliased LR + anisotropic G-buffer covariance landed; live training on 3080 Ti uncovering hyperparameter issues (see [smoke findings](docs/superpowers/experiments/2026-05-02-sprint4-smoke-findings.md)) |
 | 5 | `oss/gaussian/canvas/` (persistent canvas + warp + prune/spawn) | ✓ scaffolded, tests pass |
 | 6 | `oss/gaussian/extrapolation/` (α-conditioned warp) | ✓ scaffolded, tests pass |
 | 7 | `oss/gaussian/ports/{metal,vulkan_ncnn}/` (M3 Max + Steam Deck) | ✓ scaffolded |
