@@ -10,6 +10,7 @@ Auto-curated index of `docs/superpowers/experiments/*.md`. Update on every new m
 |------|------|---------|
 | 2026-05-01 | [validation-decision-memo](../superpowers/experiments/2026-05-01-validation-decision-memo.md) | Sprint 4 authorised conditional on smoke-test gate; engine-aliased LR mandated; anisotropic G-buffer covariance pulled into Sprint 4. |
 | 2026-05-02 | [sprint4-smoke-findings](../superpowers/experiments/2026-05-02-sprint4-smoke-findings.md) | Pipeline ✓; CUDA backward live; pico undersized; lite trainability still unresolved at lr={5e-4, 1e-4}. |
+| 2026-05-02 | [pico-lite-aggressive-srgd](../superpowers/experiments/2026-05-02-pico-lite-aggressive-srgd.md) | Pico AND lite both flat at 11–12 dB across 12K–20K steps on SRGD ActionRPG with σ=1.5 + JPEG q=85. **V0 architecture fails its own gate.** Promotes V0.5 pixel-residual head as next test. |
 
 ### Naive baseline floors (no training)
 
@@ -26,7 +27,7 @@ Auto-curated index of `docs/superpowers/experiments/*.md`. Update on every new m
 | Date | Memos |
 |------|-------|
 | 2026-05-01 | baseline-bench-floor, gaussian-upscaling-naive-test, pretrained-gaussian-sr-eval, naive-canvas-temporal-stability, gaussian-denoising-naive-test, validation-decision-memo |
-| 2026-05-02 | sprint4-smoke-findings |
+| 2026-05-02 | sprint4-smoke-findings, pico-lite-aggressive-srgd |
 
 ## What goes in a memo
 
