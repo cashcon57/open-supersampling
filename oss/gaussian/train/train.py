@@ -279,8 +279,28 @@ def build_dataloader(args: TrainArgs):  # type: ignore[return]
             enable_jitter=True, enable_taa_blur=True, enable_jpeg=False
         )
 
+    # Accept either a direct Sintel root (containing training/clean) or a
+    # parent directory containing MPI-Sintel-complete/. Some installs ship
+    # under the canonical name, others (e.g. our 3080 Ti) use the short name.
+    candidate_roots = [
+        args.dataset_root,
+        args.dataset_root / "MPI-Sintel-complete",
+        args.dataset_root / "sintel",
+    ]
+    sintel_root = None
+    for cand in candidate_roots:
+        if (cand / "training" / "clean").is_dir():
+            sintel_root = cand
+            break
+    if sintel_root is None:
+        raise FileNotFoundError(
+            f"Sintel dataset not found. Looked under each of: "
+            f"{[str(c) for c in candidate_roots]}. "
+            f"Expected `<root>/training/clean/<sequence>/...` layout."
+        )
+
     ds = SintelGaussianDataset(
-        root=args.dataset_root / "MPI-Sintel-complete",
+        root=sintel_root,
         scale=2.0,
         pass_name="clean",
         lr_synth=lr_synth,
@@ -293,7 +313,7 @@ def build_dataloader(args: TrainArgs):  # type: ignore[return]
         if not ds._items:
             raise ValueError(
                 f"No frames found for sequence {args.sintel_sequence!r} under "
-                f"{args.dataset_root / 'MPI-Sintel-complete'}. "
+                f"{sintel_root}. "
                 f"Check --dataset-root and --sintel-sequence values."
             )
 
