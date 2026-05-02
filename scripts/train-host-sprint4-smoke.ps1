@@ -8,17 +8,20 @@ $outdir = "<train-host-data>\checkpoints\sprint4-smoke-$timestamp"
 New-Item -ItemType Directory -Force -Path "<train-host-data>\logs" | Out-Null
 New-Item -ItemType Directory -Force -Path $outdir | Out-Null
 
-$sintelRoot = "<train-host-data>\datasets"  # expects <train-host-data>\datasets\MPI-Sintel-complete\
-if (-not (Test-Path "$sintelRoot\MPI-Sintel-complete\training\clean")) {
-    Write-Error "Sintel dataset missing at $sintelRoot\MPI-Sintel-complete\training\clean"
+$sintelRoot = "<train-host-data>\datasets\sintel"  # 3080 Ti layout (training/clean directly)
+if (-not (Test-Path "$sintelRoot\training\clean")) {
+    Write-Error "Sintel dataset missing at $sintelRoot\training\clean"
     exit 1
 }
 
-# Activate conda env with CUDA + torch installed
-& "C:\ProgramData\anaconda3\shell\condabin\conda-hook.ps1"
-conda activate oss
+# Use the existing image-gs miniconda env — it already has torch 2.4.1 + CUDA wired.
+$pythonExe = "<windows-home>\Miniconda3\envs\image-gs\python.exe"
+if (-not (Test-Path $pythonExe)) {
+    Write-Error "Python not found at $pythonExe. Run conda env list to verify."
+    exit 1
+}
 
-cd <windows-home>\open-reconstruction-suite  # adjust path if different
+cd <train-host-data>\oss-gaussian
 
 $pyArgs = @(
     "-m", "oss.gaussian.train.train",
@@ -33,7 +36,7 @@ $pyArgs = @(
 )
 
 Write-Host "Starting Sprint 4 smoke test -> $logfile"
-python @pyArgs 2>&1 | Tee-Object -FilePath $logfile
+& $pythonExe @pyArgs 2>&1 | Tee-Object -FilePath $logfile
 $exitCode = $LASTEXITCODE
 
 Write-Host ""
