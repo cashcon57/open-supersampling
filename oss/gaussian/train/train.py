@@ -77,6 +77,7 @@ class TrainArgs:
     sintel_sequence: Optional[str]
     srgd_scene: Optional[str]
     force_lr_synth: bool
+    renderer_backend: str   # "auto" | "cuda" | "reference"
     enable_gbuffer_bias: bool
     enable_engine_aliased_lr: bool
     score_every: int         # run bicubic-vs-model comparison every N steps
@@ -129,6 +130,16 @@ class TrainArgs:
             help=(
                 "Restrict training to a single SRGD scene name (e.g. ActionRPG). "
                 "Used only when --dataset=srgd."
+            ),
+        )
+        p.add_argument(
+            "--renderer-backend",
+            choices=["auto", "cuda", "reference"],
+            default="auto",
+            help=(
+                "Force the rasterizer backend. 'reference' (pure PyTorch) is "
+                "slower but has verified backward; 'cuda' (gsplat 1.4.0) is "
+                "much faster but its backward path has known issues."
             ),
         )
         p.add_argument(
@@ -218,6 +229,7 @@ class TrainArgs:
             sintel_sequence=a.sintel_sequence,
             srgd_scene=a.srgd_scene,
             force_lr_synth=force_lr_synth,
+            renderer_backend=a.renderer_backend,
             enable_gbuffer_bias=enable_gbuffer_bias,
             enable_engine_aliased_lr=enable_engine_aliased_lr,
             score_every=score_every,
@@ -464,7 +476,9 @@ def evaluate_against_bicubic(
         bicubic_psnr_per_sample  (list[float])
         model_beats_bicubic_count (int)
     """
-    renderer = Rasterizer()
+    renderer = Rasterizer(
+        force_backend=None if args.renderer_backend == "auto" else args.renderer_backend
+    )
     net.train(False)
     model_psnrs: list[float] = []
     bicubic_psnrs: list[float] = []
@@ -604,7 +618,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.enable_gbuffer_bias and head.gbuffer_bias is not None:
         head.gbuffer_bias.to(args.device)
 
-    renderer = Rasterizer()
+    renderer = Rasterizer(
+        force_backend=None if args.renderer_backend == "auto" else args.renderer_backend
+    )
     optim = torch.optim.AdamW(
         list(net.parameters()) + list(bank.parameters()),
         lr=args.learning_rate,
