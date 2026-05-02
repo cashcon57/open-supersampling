@@ -1008,6 +1008,7 @@ def main(argv: list[str] | None = None) -> int:
         final_result = evaluate_against_bicubic(
             net, head, bank, score_loader, args.device, n_samples=8,
             renderer_backend=args.renderer_backend,
+            residual_head=residual_head,
         )
         score_log.append({"step": final_step, "final": True, **final_result})
         log.info(
