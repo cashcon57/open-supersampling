@@ -118,22 +118,31 @@ def test_apply_jitter_direction_x_axis() -> None:
 
     A sign flip in apply_jitter would silently train the network on the
     wrong jitter polarity. This test catches that.
+
+    Setup: vertical edge at col W/2 (cols 0..W/2-1 black, cols W/2..W-1 white).
+    After shifting content right by +1 px:
+      - col W/2     should become BLACK (was white edge, now sourced from col W/2 - 1 = black)
+      - col W/2 + 1 should remain WHITE (sourced from col W/2 = white)
     """
-    # Build a vertical edge: left half black, right half white
     H, W = 16, 32
     img = torch.zeros(3, H, W)
     img[:, :, W // 2:] = 1.0
 
-    # Shift content right by ~1 pixel via positive jx
     shifted = apply_jitter(img, (1.0, 0.0))
 
-    # The edge should now be at column ~W/2 + 1
-    # Check column sums: column at W/2 was the boundary; after +1px shift,
-    # column at W/2 should now be brighter than original (was 0, now closer to 1)
-    original_col = img[0, :, W // 2].sum().item()      # 0
-    shifted_col = shifted[0, :, W // 2].sum().item()
-    assert shifted_col > original_col + 1.0, (
-        f"+1px jitter should shift edge right; col={W//2} sum was {original_col}, became {shifted_col}"
+    edge_col_orig = img[0, :, W // 2].sum().item()       # 16.0 (white)
+    edge_col_shifted = shifted[0, :, W // 2].sum().item()
+    next_col_shifted = shifted[0, :, W // 2 + 1].sum().item()
+
+    # The white edge column must become much darker (content shifted right, now black).
+    assert edge_col_shifted < edge_col_orig - 8.0, (
+        f"+1px jitter should shift white edge OUT of col {W//2}; "
+        f"orig={edge_col_orig}, shifted={edge_col_shifted}"
+    )
+    # The column to the right of the edge must remain bright (white shifted into it).
+    assert next_col_shifted > edge_col_orig - 1.0, (
+        f"+1px jitter should shift white INTO col {W//2 + 1}; "
+        f"got {next_col_shifted}, expected ~{edge_col_orig}"
     )
 
 
