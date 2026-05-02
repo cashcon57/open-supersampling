@@ -1,0 +1,128 @@
+% ============================================================================
+% OSS-Gaussian Bibliography
+% Single source of truth for citations across paper drafts, the architecture
+% doc (docs/superpowers/gaussian-network-architecture.md), and research-
+% synthesis memos. Add an entry whenever a new paper informs a design
+% decision or experiment.
+% ============================================================================
+
+% --- Feed-forward 2D Gaussian super-resolution -------------------------------
+
+@article{gaussiansr2024,
+  title   = {GaussianSR: 3D Gaussian Super-Resolution with 2D Diffusion Priors},
+  author  = {Hu, Xiaoliang and Wang, Xuesong and Zhao, Hailing and Liu, Jianlin and Bai, Lu},
+  journal = {arXiv preprint arXiv:2407.18046},
+  year    = {2024},
+  url     = {https://arxiv.org/abs/2407.18046},
+  note    = {Feed-forward 2D Gaussian fields for arbitrary-scale SR.}
+}
+
+@article{gsasr2025,
+  title   = {GSASR: Generalizable Image Super-Resolution via Image-Conditioned 2D Gaussian Splatting},
+  author  = {Hu, Du and others},
+  journal = {arXiv preprint arXiv:2501.06838},
+  year    = {2025},
+  url     = {https://arxiv.org/abs/2501.06838},
+  note    = {Image-conditioned Gaussian SR with CUDA rasterization. Includes pixel residual head.}
+}
+
+@article{gs_stvsr2026,
+  title   = {GS-STVSR: Continuous Spatial-Temporal Video Super-Resolution via 2D Gaussian Evolution},
+  author  = {Anonymous},
+  journal = {arXiv preprint arXiv:2604.18047},
+  year    = {2026},
+  url     = {https://arxiv.org/abs/2604.18047},
+  note    = {Optical-flow-guided motion, covariance alignment, adaptive offset windows.}
+}
+
+% --- Anisotropic / contour-aware Gaussian primitives -------------------------
+
+@article{imagegs2024,
+  title   = {Image-GS: Content-Adaptive Image Representation via 2D Gaussians},
+  author  = {Anonymous},
+  journal = {arXiv preprint arXiv:2407.01866},
+  year    = {2024},
+  url     = {https://arxiv.org/abs/2407.01866},
+  note    = {Texture-conditioned 2D Gaussian image rep; vendored as oss/gaussian/renderer/vendor/image_gs.}
+}
+
+@article{gaussianbillboards2024,
+  title   = {Gaussian Billboards: Texture-Augmented Splats for High-Frequency Scene Detail},
+  author  = {Anonymous},
+  journal = {arXiv preprint arXiv:2412.12734},
+  year    = {2024},
+  url     = {https://arxiv.org/abs/2412.12734},
+  note    = {Counters the "plain colored blob blurs edges" failure mode.}
+}
+
+@article{contour2dgs2025,
+  title   = {Contour-Aware 2D Gaussian Splatting},
+  author  = {Anonymous},
+  journal = {arXiv preprint arXiv:2512.23255},
+  year    = {2025},
+  url     = {https://arxiv.org/abs/2512.23255},
+  note    = {Explicit edge constraints for splat-based reconstruction.}
+}
+
+% --- DLSS / FSR / NRD industrial baselines -----------------------------------
+
+@misc{nvidia_streamline,
+  title  = {NVIDIA Streamline Programming Guide},
+  author = {{NVIDIA}},
+  year   = {2024},
+  url    = {https://github.com/NVIDIA-RTX/Streamline/blob/main/docs/ProgrammingGuide.md},
+  note   = {Color/depth/motion resource tagging convention used by DLSS, FSR3, XeSS plugins.}
+}
+
+@misc{nvidia_nrd,
+  title  = {NVIDIA Real-time Denoiser (NRD)},
+  author = {{NVIDIA}},
+  year   = {2024},
+  url    = {https://github.com/NVIDIA-RTX/NRD},
+  note   = {Normal/roughness/viewZ/motion-conditioned ray-traced denoising.}
+}
+
+@inproceedings{realesrgan2021,
+  title     = {Real-ESRGAN: Training Real-World Blind Super-Resolution with Pure Synthetic Data},
+  author    = {Wang, Xintao and Xie, Liangbin and Dong, Chao and Shan, Ying},
+  booktitle = {ICCV Workshops},
+  year      = {2021},
+  url       = {https://arxiv.org/abs/2107.10833},
+  note      = {Section 3.1 documents the bicubic-LR-trap our validation memo references.}
+}
+
+% --- Loss / quality metrics -------------------------------------------------
+
+@inproceedings{ssim2004,
+  title     = {Image Quality Assessment: From Error Visibility to Structural Similarity},
+  author    = {Wang, Zhou and Bovik, Alan C. and Sheikh, Hamid R. and Simoncelli, Eero P.},
+  booktitle = {IEEE Transactions on Image Processing},
+  year      = {2004},
+  url       = {https://ece.uwaterloo.ca/~z70wang/publications/ssim.pdf}
+}
+
+@inproceedings{lpips2018,
+  title     = {The Unreasonable Effectiveness of Deep Features as a Perceptual Metric},
+  author    = {Zhang, Richard and Isola, Phillip and Efros, Alexei A. and Shechtman, Eli and Wang, Oliver},
+  booktitle = {CVPR},
+  year      = {2018},
+  url       = {https://arxiv.org/abs/1801.03924}
+}
+
+% --- Datasets ---------------------------------------------------------------
+
+@inproceedings{sintel2012,
+  title     = {A Naturalistic Open Source Movie for Optical Flow Evaluation},
+  author    = {Butler, Daniel J. and Wulff, Jonas and Stanley, Garrett B. and Black, Michael J.},
+  booktitle = {ECCV},
+  year      = {2012},
+  url       = {http://sintel.is.tue.mpg.de/}
+}
+
+@inproceedings{tartanair2020,
+  title     = {TartanAir: A Dataset to Push the Limits of Visual SLAM},
+  author    = {Wang, Wenshan and Zhu, Delong and Wang, Xiangwei and Hu, Yaoyu and Qiu, Yuheng and Wang, Chen and Hu, Yafei and Kapoor, Ashish and Scherer, Sebastian},
+  booktitle = {IROS},
+  year      = {2020},
+  url       = {https://arxiv.org/abs/2003.14338}
+}
