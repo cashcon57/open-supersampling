@@ -458,6 +458,7 @@ def evaluate_against_bicubic(
     dataloader,  # type: ignore[type-arg]
     device: str,
     n_samples: int = 8,
+    renderer_backend: str = "auto",
 ) -> dict:
     """Compare model output PSNR against bicubic upsample on held-out examples.
 
@@ -477,7 +478,7 @@ def evaluate_against_bicubic(
         model_beats_bicubic_count (int)
     """
     renderer = Rasterizer(
-        force_backend=None if args.renderer_backend == "auto" else args.renderer_backend
+        force_backend=None if renderer_backend == "auto" else renderer_backend
     )
     net.train(False)
     model_psnrs: list[float] = []
@@ -777,7 +778,8 @@ def main(argv: list[str] | None = None) -> int:
             if args.score_every > 0 and step % args.score_every == 0:
                 log.info("--- bicubic comparison at step %d ---", step)
                 result = evaluate_against_bicubic(
-                    net, head, bank, score_loader, args.device, n_samples=8
+                    net, head, bank, score_loader, args.device, n_samples=8,
+                    renderer_backend=args.renderer_backend,
                 )
                 score_row = {"step": step, **result}
                 score_log.append(score_row)
@@ -796,7 +798,8 @@ def main(argv: list[str] | None = None) -> int:
         # Final bicubic comparison (always at end of real-data training).
         log.info("--- final bicubic comparison at step %d ---", final_step)
         final_result = evaluate_against_bicubic(
-            net, head, bank, score_loader, args.device, n_samples=8
+            net, head, bank, score_loader, args.device, n_samples=8,
+            renderer_backend=args.renderer_backend,
         )
         score_log.append({"step": final_step, "final": True, **final_result})
         log.info(
