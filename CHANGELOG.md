@@ -56,3 +56,7 @@ A vector-based real-time game upscaler. Where DLSS and FSR work in pixels, OSS-G
 - 2 CUDA backward tests still fail (`test_cuda_backend_gradients_flow`, `test_cuda_backend_optimization_converges`) — gradient flow through the normalization step likely has a fixture-value edge case (small Gaussians may not hit any tile after normalization, producing zero gradient). Targeted task: update test fixtures to use Gaussian sizes that survive normalization; wrapper logic is correct.
 - The 7 pre-existing pixel-track test failures are not fixed (out of scope for the Gaussian work).
 - The pixel-based track has a v0.1.0-mvp tag; the Gaussian track has not been tagged yet.
+
+### Sprint 2 — In Progress
+
+- **T2.1 + T2.2 ✓** — `dxgi.dll` (1.4 MB) built clean on RTX 3080 Ti via VS 2026 / MSVC 14.50 / CMake. All 10 `NVSDK_NGX_D3D12_*` exports present (verified via `dumpbin /exports`). Detours static lib linked. CMakeLists.txt was missing from origin — `.gitignore` had `*.txt` blanket rule swallowing it; carve-out added.
