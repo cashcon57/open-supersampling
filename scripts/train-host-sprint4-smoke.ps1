@@ -1,7 +1,10 @@
 # Sprint 4 low-capacity smoke test on 3080 Ti.
 # Must beat bicubic on >=1 scene to gate Lambda H100 spend.
 # Per 2026-05-01 validation decision memo, Decision 1.
-$ErrorActionPreference = "Stop"
+# Don't use $ErrorActionPreference = "Stop" — Python sends INFO logging to
+# stderr, which PS treats as a NativeCommandError under Stop policy and kills
+# the script. We rely on $LASTEXITCODE for the real exit status.
+$ErrorActionPreference = "Continue"
 $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $logfile = "<train-host-data>\logs\sprint4-smoke-$timestamp.log"
 $outdir = "<train-host-data>\checkpoints\sprint4-smoke-$timestamp"
