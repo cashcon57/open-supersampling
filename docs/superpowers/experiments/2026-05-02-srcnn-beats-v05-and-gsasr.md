@@ -60,3 +60,31 @@ The day's investigation closes with a single, simple architectural picture. We h
 The `oss/gaussian/` modules (renderer, network, output_head, prior_bank) are not deleted. They remain available for the OSS-Gaussian-RR (denoising) track per `docs/superpowers/oss-gaussian-rr-track.md`, where the splat representation is known to fit (D1 result on synthetic noise beat OIDN PSNR).
 
 The Sprint 4 trainer infrastructure — DataLoader path, engine-aliased LR synth, bicubic comparison, held-out probe, lab notebook discipline — was built once and serves both tracks unchanged.
+
+## 2026-05-02 (later) — System-level reframe
+
+After this memo landed, a system-level framing came up that none of the per-component analysis above considered. Restating the relevant numbers honestly:
+
+- **GSASR margin of −0.04 dB on engine-aliased LR** is not statistically meaningful. With per-frame PSNR variance of ~1–2 dB, the standard error on a 24-sample mean is ~±0.4 dB — the observed margin is ≈10× smaller than the noise floor. The "0/24 wins" stat is the actually-load-bearing finding, but even that only says "GSASR sits consistently slightly below bicubic on this distribution," not "GSASR's architecture is incapable."
+- **The strong claim "architecture is not the bottleneck"** in the GSASR memo is therefore overstated. We have evidence that GSASR's *pretrained-on-bicubic-clean weights* don't transfer to engine-aliased LR. We do *not* have evidence that GSASR's *architecture, retrained on engine-aliased LR*, would lose to SR-CNN.
+
+**The system-level argument we missed:**
+
+If splat-based SR achieves *parity* (or near-parity) with bicubic on single-image SR, but *also* makes frame extrapolation essentially free via Gaussian-position warping along motion vectors, then a slightly worse SR + much cheaper extrapolation could be a better total system than a much better SR + a separate CNN extrapolator.
+
+| System | SR quality | Extrapolation cost | Extrapolation quality |
+|--------|-----------|--------------------:|-----------------------|
+| SR-CNN + (separate CNN extrapolator, TBD) | +2.7 dB vs bicubic | ~1 ms (separate model fwd) | learned, can ghost |
+| GSASR-style + Gaussian warp | ≈ bicubic (parity) | ~tens of µs (just rasterize) | structurally coherent |
+| GSASR-style + small CNN decoder + Gaussian warp | ?? (untested) | ~tens of µs | structurally coherent |
+
+We have not measured rows 2 or 3. We measured *only* per-component SR quality and concluded splats were dead — but Sprint 5 (canvas) and Sprint 6 (extrapolation) were the entire reason to use splats in the first place. Killing them on a per-component SR result alone is the wrong frame.
+
+## Updated decisions
+
+1. **SR-CNN ships as v0** — that part stays. We have a working CNN super-resolver; ship it as the immediate deliverable.
+2. **Sprint 5 (canvas) and Sprint 6 (extrapolation) are NOT cancelled.** They were the original motivation for the splat path; the per-component SR result alone does not justify killing them.
+3. **The next decisive test is on extrapolation, not SR.** Take GSASR's pretrained weights → predict Gaussians for frame N → warp Gaussian centres along motion vectors → rasterize at frame N+1 → compare to ground truth. Compare to the trivial bicubic-warp baseline (bicubic upsample of frame N + flow warp). If the Gaussian-warp extrapolation beats the bicubic-warp extrapolation by a clear margin, the system-level case for splats is alive even if their per-frame SR is at parity. ~1–2 days to set up.
+4. **The "splats are dead for SR" framing is too strong.** The accurate version: "splats-as-direct-RGB at our scale do not beat bicubic on per-frame SR, AND we have not yet measured whether they unlock cheap extrapolation that compensates."
+
+This entry corrects the over-conclusion in this memo and the GSASR memo. The original numbers stand; the strong qualitative framing is what's been walked back.

@@ -102,6 +102,12 @@ This still matches the empirical literature picture — papers that succeed at G
 
 **Optional v2 stretch (not blocking the v0 SR ship):** validate the feature-space thesis by running the released GSASR code on our engine-aliased LR. If GSASR also plateaus below bicubic on engine-aliased LR, the LR domain is the binding constraint. If GSASR beats bicubic, we have empirical justification to reimplement Gaussians-as-features. ~2–5 days of setup. See `docs/superpowers/experiments/2026-05-02-splats-SR-literature-delta.md`.
 
+> **2026-05-02 (later) follow-up: Decisions 3 and the supporting framing have been walked back.**
+>
+> Per `docs/superpowers/experiments/2026-05-02-srcnn-beats-v05-and-gsasr.md` §"System-level reframe": the per-component SR analysis above is incomplete. Sprint 5 (canvas) and Sprint 6 (extrapolation) were the *original motivation* for using splats. The right test for the splat track is not "does splat-SR beat bicubic-SR" — it is "does (Gaussian SR + Gaussian-warp extrapolation) beat (CNN SR + CNN extrapolation) at the *full pipeline*." We have not measured that. Sprint 5/6 are not cancelled. The accurate version of the strong claim above is: *splats-as-direct-RGB at our scale do not beat bicubic on per-frame SR alone, AND we have not yet measured whether they unlock cheap extrapolation that compensates*.
+>
+> See `docs/superpowers/oss-gaussian-temporal-track.md` for the temporal-track plan that pursues this.
+
 ## Open questions (real, not exhaustive)
 
 1. Does **alpha-compositing** (replacing `rasterize_gaussians_sum` with an OVER operator) change anything? GSASR uses alpha-style compositing; we use sum. Cheap to test if the upstream gsplat exposes an alpha rasterizer; otherwise it's a real reimplementation. Probably not the unlock — the direct-fit test in #1 above already used the same rasterizer and topped out at −3.59 dB.
