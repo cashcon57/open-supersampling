@@ -1,4 +1,4 @@
-"""Benchmark PyTorch FP32 vs ONNX FP32 vs ONNX FP16 at 4 representative resolutions.
+"""Benchmark PyTorch FP32 vs ONNX FP32 vs ONNX FP16 vs TRT FP16 vs TRT INT8.
 
 Mirrors the measurement methodology in sr_inference_vram.py:
 - 3 warmup passes, then 5 timed passes (matching vram script)
@@ -11,8 +11,16 @@ At standard tier (~306K params) peak VRAM is ~300-500 MB per run -- well
 within the ~7-8 GB headroom available alongside the running training job.
 1080p inputs are included but skipped automatically if they would OOM.
 
+TRT INT8 path uses the native TRT engine built by sr_export_trt_int8.py.
+If the engine file is not present (default: <train-host-data>\\onnx\\srcnn-prod-v3-int8.trt),
+the TRT INT8 column is skipped automatically.
+
 Usage:
-    python scripts/sr_bench_onnx.py --onnx-dir <train-host-data>\onnx
+    python scripts/sr_bench_onnx.py --onnx-dir <train-host-data>\\onnx
+
+    # After building INT8 engine:
+    python scripts/sr_bench_onnx.py --onnx-dir <train-host-data>\\onnx \\
+        --trt-int8-engine <train-host-data>\\onnx\\srcnn-prod-v3-int8.trt
 """
 
 from __future__ import annotations
@@ -46,6 +54,20 @@ if sys.platform == "win32":
         import tensorrt as _trt_warmup  # noqa: F401
     except ImportError:
         pass
+
+# ---------------------------------------------------------------------------
+# Optional TRT INT8 engine import (native tensorrt bindings)
+# ---------------------------------------------------------------------------
+_trt_int8_module = None
+try:
+    import importlib.util as _ilu
+    _int8_script = Path(__file__).parent / "sr_export_trt_int8.py"
+    if _int8_script.exists():
+        _spec_int8 = _ilu.spec_from_file_location("sr_export_trt_int8", str(_int8_script))
+        _trt_int8_module = _ilu.module_from_spec(_spec_int8)
+        _spec_int8.loader.exec_module(_trt_int8_module)
+except Exception as _e:
+    pass  # TRT INT8 path not available; column will be skipped.
 
 import numpy as np
 import torch
@@ -233,6 +255,10 @@ def main() -> int:
     p.add_argument("--device", type=str, default="cuda")
     p.add_argument("--output-dir-ckpt", type=Path, default=Path("<train-host-data>/checkpoints/srcnn-prod-v3"),
                    help="Checkpoint dir for PyTorch model load.")
+    p.add_argument("--trt-int8-engine", type=Path,
+                   default=Path("<train-host-data>/onnx/srcnn-prod-v3-int8.trt"),
+                   help="Path to pre-built TRT INT8 engine from sr_export_trt_int8.py. "
+                        "If the file does not exist the TRT INT8 column is skipped.")
     args = p.parse_args()
 
     fp32_onnx = args.onnx_dir / f"{args.stem}-fp32.onnx"
@@ -274,8 +300,31 @@ def main() -> int:
     providers = _ort_providers()
     print(f"  ORT providers: {providers}")
 
+    # -----------------------------------------------------------------------
+    # TRT INT8 engine — load once if available, reuse across resolutions.
+    # -----------------------------------------------------------------------
+    trt_int8_engine = None
+    trt_int8_available = (
+        _trt_int8_module is not None
+        and args.trt_int8_engine.exists()
+        and hasattr(_trt_int8_module, "TRTEngine")
+    )
+    if trt_int8_available:
+        try:
+            trt_int8_engine = _trt_int8_module.TRTEngine(args.trt_int8_engine)
+            int8_engine_mb = args.trt_int8_engine.stat().st_size / 1024**2
+            print(f"  TRT INT8 engine: {args.trt_int8_engine}  ({int8_engine_mb:.2f} MB)")
+        except Exception as exc:
+            print(f"  TRT INT8 engine load failed: {exc} — column will be skipped.")
+            trt_int8_engine = None
+    else:
+        int8_engine_mb = float("nan")
+        if not args.trt_int8_engine.exists():
+            print(f"  TRT INT8: engine not found at {args.trt_int8_engine} — column will be skipped.")
+            print(f"            Run: python scripts/sr_export_trt_int8.py --bench")
+
     print("\n" + "=" * 80)
-    print("Benchmark: PyTorch FP32  vs  ONNX-RT FP32  vs  ONNX-RT FP16")
+    print("Benchmark: PyTorch FP32  vs  ONNX-RT FP32  vs  ONNX-RT FP16  vs  TRT FP16  vs  TRT INT8")
     print("=" * 80)
 
     all_tables = []
@@ -311,7 +360,7 @@ def main() -> int:
             rows.append({"label": "ONNX-RT FP16", "ms": float("nan"), "fps": 0.0, "peak_mib": float("nan"), "size_mb": fp16_mb})
             print(f"  ONNX-RT FP16 @ {h}x{w}: {exc}")
 
-        # TensorRT FP16 (if provider is available — first build can take 1-5 min per shape).
+        # TensorRT FP16 via ORT TRT EP (first build can take 1-5 min per shape).
         if "TensorrtExecutionProvider" in ort.get_available_providers():
             try:
                 r = _bench_ort(fp16_onnx, args.device, h, w, label="TRT FP16",
@@ -323,20 +372,56 @@ def main() -> int:
                              "peak_mib": float("nan"), "size_mb": fp16_mb})
                 print(f"  TRT FP16 @ {h}x{w}: {exc}")
 
+        # TRT INT8 via native TRT engine (built by sr_export_trt_int8.py).
+        if trt_int8_engine is not None:
+            try:
+                import numpy as _np_bench
+                x_np = _np_bench.zeros((1, 12, h, w), dtype=_np_bench.float32)
+                # Warmup passes.
+                for _ in range(N_WARMUP):
+                    trt_int8_engine.infer(x_np)
+                import time as _time_bench
+                t0 = _time_bench.monotonic()
+                for _ in range(N_RUNS):
+                    trt_int8_engine.infer(x_np)
+                elapsed = (_time_bench.monotonic() - t0) / N_RUNS
+                rows.append({
+                    "label": "TRT INT8",
+                    "ms": elapsed * 1000,
+                    "fps": 1.0 / elapsed,
+                    "peak_mib": float("nan"),   # pycuda allocator not tracked by torch
+                    "size_mb": int8_engine_mb,
+                })
+            except Exception as exc:
+                rows.append({"label": "TRT INT8", "ms": float("nan"), "fps": 0.0,
+                             "peak_mib": float("nan"), "size_mb": int8_engine_mb})
+                print(f"  TRT INT8 @ {h}x{w}: {exc}")
+
         _print_table(rows, res_label)
         all_tables.append((res_label, h, w, rows))
 
     print("\n" + "=" * 80)
-    print("Done. Speedup summary (ONNX FP16 vs PyTorch FP32):")
+    print("Speedup summary:")
+    print(f"  {'Resolution':<45}  {'ORT FP16 vs PT FP32':>20}  {'TRT INT8 vs PT FP32':>20}  {'TRT INT8 vs TRT FP16':>21}")
+    print(f"  {'-'*45}  {'-'*20}  {'-'*20}  {'-'*21}")
     for res_label, h, w, rows in all_tables:
         by_label = {r["label"]: r for r in rows}
         pt_ms = by_label.get("PyTorch FP32", {}).get("ms", float("nan"))
-        fp16_ms = by_label.get("ONNX-RT FP16", {}).get("ms", float("nan"))
-        if pt_ms == pt_ms and fp16_ms == fp16_ms and fp16_ms > 0:
-            speedup = pt_ms / fp16_ms
-            print(f"  {res_label:<45}  {speedup:.2f}x faster")
-        else:
-            print(f"  {res_label:<45}  N/A")
+        fp16_ort_ms = by_label.get("ONNX-RT FP16", {}).get("ms", float("nan"))
+        trt_fp16_ms = by_label.get("TRT FP16", {}).get("ms", float("nan"))
+        trt_int8_ms = by_label.get("TRT INT8", {}).get("ms", float("nan"))
+
+        def _su(base_ms: float, faster_ms: float) -> str:
+            if base_ms == base_ms and faster_ms == faster_ms and faster_ms > 0:
+                return f"{base_ms / faster_ms:.2f}x"
+            return "  N/A"
+
+        print(
+            f"  {res_label:<45}  "
+            f"{_su(pt_ms, fp16_ort_ms):>20}  "
+            f"{_su(pt_ms, trt_int8_ms):>20}  "
+            f"{_su(trt_fp16_ms, trt_int8_ms):>21}"
+        )
 
     return 0
 
