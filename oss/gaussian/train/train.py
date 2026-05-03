@@ -909,6 +909,7 @@ def _save_checkpoint(
     args: TrainArgs,
     residual_head: "PixelResidualHead | None" = None,
     sr_model: "torch.nn.Module | None" = None,
+    optim: "torch.optim.Optimizer | None" = None,
 ) -> None:
     """Save a training checkpoint.
 
@@ -916,6 +917,10 @@ def _save_checkpoint(
     ``bank`` + optional ``residual_head``.  For the SR track, saves
     ``sr_model`` under the ``"sr_model"`` key.  Both paths write the full
     ``args`` dict for reproducibility.
+
+    When ``optim`` is provided, its ``state_dict`` is also saved so that
+    auto-resume can restore AdamW momentum/variance and the run continues
+    seamlessly after a process death.
     """
     ckpt_path = output_dir / f"step-{step:08d}.pt"
     payload: dict = {
@@ -926,6 +931,8 @@ def _save_checkpoint(
             for k, v in args.__dict__.items()
         },
     }
+    if optim is not None:
+        payload["optim"] = optim.state_dict()
     if sr_model is not None:
         # SR track: only the SR model state is needed.
         payload["sr_model"] = sr_model.state_dict()
@@ -975,6 +982,35 @@ def _main_sr(args: TrainArgs) -> int:
     metrics_log: list[dict] = []
     score_log: list[dict] = []
     train_start = time.monotonic()
+    resume_step = 0
+
+    # Auto-resume from the most recent checkpoint in args.output_dir if any.
+    # This protects 36+hr runs from process death — restart with the same CLI
+    # and training picks up from the last 5000-step boundary.
+    if args.output_dir.exists():
+        ckpts = sorted(args.output_dir.glob("step-*.pt"))
+        if ckpts:
+            latest = ckpts[-1]
+            log.info("SR: resuming from %s", latest)
+            ck = torch.load(latest, map_location=args.device, weights_only=False)
+            if "sr_model" in ck:
+                sr_model.load_state_dict(ck["sr_model"])
+            if "optim" in ck:
+                optim.load_state_dict(ck["optim"])
+            resume_step = int(ck.get("step", 0))
+            # Restore previously-flushed metrics if present (avoids losing history).
+            mp = args.output_dir / "metrics.json"
+            if mp.exists():
+                with mp.open() as _f:
+                    _saved = json.load(_f)
+                metrics_log = _saved.get("train", [])
+                score_log = _saved.get("score", [])
+            sp = args.output_dir / "score_log.json"
+            if sp.exists() and not score_log:
+                with sp.open() as _f:
+                    score_log = json.load(_f)
+            log.info("SR: resumed at step=%d (metrics=%d entries, score=%d entries)",
+                     resume_step, len(metrics_log), len(score_log))
 
     # ------------------------------------------------------------------
     # Synthetic-batch path (CI / sanity -- no real data needed)
@@ -983,7 +1019,7 @@ def _main_sr(args: TrainArgs) -> int:
         h, w = 64, 64
         log.info("SR: using synthetic_batch path (no real data)")
         final_step = 0
-        for step in range(1, args.max_steps + 1):
+        for step in range(resume_step + 1, args.max_steps + 1):
             if args.max_time_seconds is not None:
                 elapsed = time.monotonic() - train_start
                 if elapsed > args.max_time_seconds:
@@ -1017,13 +1053,13 @@ def _main_sr(args: TrainArgs) -> int:
             if step % args.ckpt_every == 0 or step == args.max_steps:
                 _save_checkpoint(
                     args.output_dir, step, args.tier,
-                    net=None, bank=None, args=args, sr_model=sr_model,  # type: ignore[arg-type]
+                    net=None, bank=None, args=args, sr_model=sr_model, optim=optim,  # type: ignore[arg-type]
                 )
 
             final_step = step
 
     # ------------------------------------------------------------------
-    # Real-data path
+    # Real-data path (SR track)
     # ------------------------------------------------------------------
     else:
         loader = build_dataloader(args)
@@ -1034,8 +1070,8 @@ def _main_sr(args: TrainArgs) -> int:
             args.sintel_sequence,
         )
 
-        step = 0
-        final_step = 0
+        step = resume_step
+        final_step = resume_step
         data_iter = iter(loader)
 
         while step < args.max_steps:
@@ -1088,7 +1124,7 @@ def _main_sr(args: TrainArgs) -> int:
             if step % args.ckpt_every == 0:
                 _save_checkpoint(
                     args.output_dir, step, args.tier,
-                    net=None, bank=None, args=args, sr_model=sr_model,  # type: ignore[arg-type]
+                    net=None, bank=None, args=args, sr_model=sr_model, optim=optim,  # type: ignore[arg-type]
                 )
                 # Rolling metrics dump — survives process death.
                 _metrics_path = args.output_dir / "metrics.json"
@@ -1118,7 +1154,7 @@ def _main_sr(args: TrainArgs) -> int:
         # Final checkpoint + comparison.
         _save_checkpoint(
             args.output_dir, final_step, args.tier,
-            net=None, bank=None, args=args, sr_model=sr_model,  # type: ignore[arg-type]
+            net=None, bank=None, args=args, sr_model=sr_model, optim=optim,  # type: ignore[arg-type]
         )
 
         log.info("SR: final bicubic comparison at step %d", final_step)
