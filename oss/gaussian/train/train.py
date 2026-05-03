@@ -1220,10 +1220,11 @@ def _main_sr(args: TrainArgs) -> int:
                 row = {"step": step, "loss": float(loss.item()), **parts, **diag}
                 metrics_log.append(row)
                 aux_key = "ssim" if "ssim" in row else "pooled_l1"
+                lpips_str = f" lpips={row['lpips']:.4f}" if "lpips" in row else ""
                 log.info(
-                    "SR step=%d loss=%.4f l1=%.4f %s=%.4f out_mean=%.3f out_std=%.3f "
+                    "SR step=%d loss=%.4f l1=%.4f %s=%.4f%s out_mean=%.3f out_std=%.3f "
                     "head_grad=%.4e up_grad=%.4e",
-                    step, row["loss"], row["l1"], aux_key, row[aux_key],
+                    step, row["loss"], row["l1"], aux_key, row[aux_key], lpips_str,
                     row["sr_out_mean"], row["sr_out_std"],
                     row["sr_head_conv_grad_norm"], row["sr_upsample_conv_grad_norm"],
                 )
