@@ -1090,6 +1090,10 @@ def _main_sr(args: TrainArgs) -> int:
                     args.output_dir, step, args.tier,
                     net=None, bank=None, args=args, sr_model=sr_model,  # type: ignore[arg-type]
                 )
+                # Rolling metrics dump — survives process death.
+                _metrics_path = args.output_dir / "metrics.json"
+                with _metrics_path.open("w") as _f:
+                    json.dump({"train": metrics_log, "score": score_log}, _f, indent=2)
 
             if args.score_every > 0 and step % args.score_every == 0:
                 log.info("SR: bicubic comparison at step %d", step)
@@ -1098,6 +1102,10 @@ def _main_sr(args: TrainArgs) -> int:
                 )
                 score_row = {"step": step, **result}
                 score_log.append(score_row)
+                # Rolling score dump after each eval — survives process death.
+                _score_path = args.output_dir / "score_log.json"
+                with _score_path.open("w") as _f:
+                    json.dump(score_log, _f, indent=2)
                 log.info(
                     "SR step=%d model_psnr=%.2f dB  bicubic_psnr=%.2f dB  "
                     "beats_bicubic=%d/8",
