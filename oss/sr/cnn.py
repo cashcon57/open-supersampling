@@ -110,14 +110,17 @@ class SRCNNSimple(nn.Module):
 
         # Upsample tail: map to scale^2 * 3 channels, then PixelShuffle.
         self.upsample_conv = nn.Conv2d(hidden, 3 * scale * scale, 3, padding=1)
-        # Small-magnitude weight init (NOT zero — gradient must flow into the body
-        # via the chain rule). Zero-init bias. Kaiming-normal would give residual
-        # std ~0.5 which, combined with `clamp(0, 1)` on the final output downstream,
-        # zeroes ~half the output (negative bicubic+residual clips to 0). Clamp
-        # gradients are zero where clipped, so the network couldn't escape. With
-        # std=0.01 the residual at init is ≈ ±0.01, leaving the output essentially
-        # equal to bicubic at step 0 and unblocking gradient flow.
-        nn.init.normal_(self.upsample_conv.weight, mean=0.0, std=0.01)
+        # Depth-aware small init. The body's residual blocks accumulate
+        # variance roughly with sqrt(n_blocks); the upsample-conv weight scale
+        # has to compensate so the final residual stays in ±~0.05 magnitude
+        # regardless of depth. Without this, deeper networks (e.g. standard
+        # tier at n_blocks=8) hit clamp(0,1) at the output, which kills the
+        # clamp gradient and freezes training. Lite (n_blocks=4) was fine at
+        # std=0.01 because the body magnitude there is small enough.
+        # Empirically: residual std ≈ 0.01 * sqrt(hidden) * sqrt(n_blocks).
+        # Cap at 0.05 magnitude → std = 0.05 / (sqrt(hidden) * sqrt(n_blocks)).
+        depth_safe_std = 0.05 / max(1.0, (hidden ** 0.5) * (max(1, n_blocks) ** 0.5))
+        nn.init.normal_(self.upsample_conv.weight, mean=0.0, std=depth_safe_std)
         nn.init.zeros_(self.upsample_conv.bias)
 
         self.pixel_shuffle = nn.PixelShuffle(scale)
