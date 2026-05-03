@@ -993,7 +993,11 @@ def _main_sr(args: TrainArgs) -> int:
 
             x, target = synthetic_batch(args.batch_size, h, w, args.device)
             optim.zero_grad()
-            final = sr_model(x).clamp(0.0, 1.0)
+            # No clamp during training — clamp(0,1) creates a gradient-killer
+            # whenever (bicubic + residual) leaves [0, 1], which happens at
+            # standard tier on multi-scene data even with depth-aware init.
+            # Loss naturally penalises out-of-range output via L1.
+            final = sr_model(x)
             loss, parts = composite_loss(final, target)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(sr_model.parameters(), max_norm=1.0)
@@ -1061,7 +1065,8 @@ def _main_sr(args: TrainArgs) -> int:
             x = torch.cat([lr, depth, motion, normals, canvas], dim=1)
 
             optim.zero_grad()
-            final = sr_model(x).clamp(0.0, 1.0)
+            # No clamp during training (see synth-batch path for rationale).
+            final = sr_model(x)
             loss, parts = composite_loss(final, gt_hr)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(sr_model.parameters(), max_norm=1.0)
