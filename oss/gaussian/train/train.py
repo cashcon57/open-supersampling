@@ -91,6 +91,9 @@ class TrainArgs:
     max_time_seconds: Optional[int]
     # Smoke-test mode (implies pico tier, batch=2, 3-hr kill, bicubic comparison, real data)
     smoke_test: bool
+    # SR-track fields (no effect when model_kind == "gaussian")
+    model_kind: str   # "gaussian" | "sr_cnn" | "sr_rrdb"
+    sr_backbone: str  # "simple" | "rrdb" (used only when model_kind == "sr_cnn"/"sr_rrdb")
 
     @classmethod
     def from_cli(cls, argv: list[str] | None = None) -> "TrainArgs":
@@ -232,6 +235,31 @@ class TrainArgs:
                 "Gates Lambda H100 spend per 2026-05-01 validation memo Decision 1."
             ),
         )
+        # ---------------------------------------------------------------------------
+        # SR-track model selection (2026-05-02 pivot, post-sprint-4 falsification)
+        # ---------------------------------------------------------------------------
+        p.add_argument(
+            "--model",
+            choices=["gaussian", "sr_cnn", "sr_rrdb"],
+            default="gaussian",
+            dest="model_kind",
+            help=(
+                "Training target model. 'gaussian' (default) trains the Gaussian-splat "
+                "param network (OSS-RR track). 'sr_cnn' trains SRCNNSimple (OSS-SR "
+                "CNN track). 'sr_rrdb' trains SRRRDB (OSS-SR RRDB variant). "
+                "The gaussian path is bit-identical to the pre-2026-05-02 behavior."
+            ),
+        )
+        p.add_argument(
+            "--sr-backbone",
+            choices=["simple", "rrdb"],
+            default="simple",
+            dest="sr_backbone",
+            help=(
+                "SR backbone variant.  Only used when --model is sr_cnn or sr_rrdb. "
+                "'simple' uses SRCNNSimple; 'rrdb' uses SRRRDB."
+            ),
+        )
         a = p.parse_args(argv)
 
         # Smoke-test overrides applied after arg parsing.
@@ -295,6 +323,8 @@ class TrainArgs:
             score_every=score_every,
             max_time_seconds=max_time_seconds,
             smoke_test=smoke_test,
+            model_kind=a.model_kind,
+            sr_backbone=a.sr_backbone,
         )
 
 
@@ -385,6 +415,129 @@ def build_model(
         else None
     )
     return net, head, bank, residual_head
+
+
+def build_sr_model_from_args(args: TrainArgs) -> "torch.nn.Module":
+    """Build an SR model (SRCNNSimple or SRRRDB) from trainer args.
+
+    Returns the model on CPU; caller is responsible for ``.to(args.device)``.
+    Only called when ``args.model_kind in ("sr_cnn", "sr_rrdb")``.
+    """
+    from oss.sr import build_sr_model
+
+    # model_kind selects the training target; sr_backbone selects the variant.
+    # --model=sr_cnn -> kind="simple", --model=sr_rrdb -> kind="rrdb".
+    # The --sr-backbone flag further overrides for the sr_cnn case.
+    if args.model_kind == "sr_rrdb":
+        kind = "rrdb"
+    else:
+        # sr_cnn: use --sr-backbone to choose simple vs rrdb
+        kind = args.sr_backbone
+
+    return build_sr_model(kind, args.tier, in_channels=12, scale=2)
+
+
+@torch.no_grad()
+def _sr_diagnostics(sr_model: "torch.nn.Module", out: torch.Tensor) -> dict[str, float]:
+    """Diagnostic stats for the SR training path.
+
+    Replaces the Gaussian-specific bank_entropy/dxy/color_std metrics.
+    Reports model output statistics and gradient norms of first and last conv.
+    """
+    result: dict[str, float] = {}
+    result["sr_out_mean"] = float(out.mean().item())
+    result["sr_out_std"] = float(out.std().item())
+
+    # First conv gradient norm (head_conv in SRCNNSimple, head_conv in SRRRDB).
+    first_conv = getattr(sr_model, "head_conv", None)
+    if first_conv is not None and first_conv.weight.grad is not None:
+        result["sr_head_conv_grad_norm"] = float(
+            first_conv.weight.grad.detach().norm().item()
+        )
+    else:
+        result["sr_head_conv_grad_norm"] = 0.0
+
+    # Last upsample conv gradient norm.
+    upsample_conv = getattr(sr_model, "upsample_conv", None)
+    if upsample_conv is not None and upsample_conv.weight.grad is not None:
+        result["sr_upsample_conv_grad_norm"] = float(
+            upsample_conv.weight.grad.detach().norm().item()
+        )
+    else:
+        result["sr_upsample_conv_grad_norm"] = 0.0
+
+    return result
+
+
+def evaluate_against_bicubic_sr(
+    sr_model: "torch.nn.Module",
+    dataloader,  # type: ignore[type-arg]
+    device: str,
+    n_samples: int = 8,
+) -> dict:
+    """Compare SR model PSNR against bicubic baseline on held-out examples.
+
+    Same return-dict schema as ``evaluate_against_bicubic`` (Gaussian path)
+    for consistent logging.
+
+    Args:
+        sr_model:   Trained SR model (SRCNNSimple or SRRRDB).
+        dataloader: DataLoader yielding collated GaussianTrainingExample dicts.
+        device:     torch device string.
+        n_samples:  Maximum examples to evaluate.
+
+    Returns dict with keys:
+        model_psnr_mean, bicubic_psnr_mean, model_psnr_per_sample,
+        bicubic_psnr_per_sample, model_beats_bicubic_count.
+    """
+    sr_model.train(False)
+    model_psnrs: list[float] = []
+    bicubic_psnrs: list[float] = []
+
+    with torch.no_grad():
+        for batch in dataloader:
+            if len(model_psnrs) >= n_samples:
+                break
+
+            lr = batch["lr_frame"].to(device)
+            depth = batch["depth"].to(device)
+            motion = batch["motion"].to(device)
+            normals = batch["normals"].to(device)
+            canvas = batch["canvas_hint"].to(device)
+            gt_hr = batch["gt_hr_frame"].to(device)
+
+            x = torch.cat([lr, depth, motion, normals, canvas], dim=1)
+            H_hr, W_hr = gt_hr.shape[-2:]
+
+            bicubic_hr = F.interpolate(
+                lr, size=(H_hr, W_hr), mode="bicubic", antialias=True
+            ).clamp(0.0, 1.0)
+
+            final = sr_model(x).clamp(0.0, 1.0)
+
+            for b_idx in range(lr.shape[0]):
+                if len(model_psnrs) >= n_samples:
+                    break
+                model_psnrs.append(_psnr(final[b_idx], gt_hr[b_idx]))
+                bicubic_psnrs.append(_psnr(bicubic_hr[b_idx], gt_hr[b_idx]))
+
+    sr_model.train(True)
+
+    beats_count = sum(1 for m, b in zip(model_psnrs, bicubic_psnrs) if m > b)
+    if model_psnrs:
+        model_mean = float(sum(model_psnrs) / len(model_psnrs))
+        bicubic_mean = float(sum(bicubic_psnrs) / len(bicubic_psnrs))
+    else:
+        model_mean = float("nan")
+        bicubic_mean = float("nan")
+
+    return {
+        "model_psnr_mean": model_mean,
+        "bicubic_psnr_mean": bicubic_mean,
+        "model_psnr_per_sample": model_psnrs,
+        "bicubic_psnr_per_sample": bicubic_psnrs,
+        "model_beats_bicubic_count": beats_count,
+    }
 
 
 @torch.no_grad()
@@ -751,26 +904,231 @@ def _save_checkpoint(
     output_dir: Path,
     step: int,
     tier: str,
-    net: GaussianParamNetwork,
-    bank: CovariancePriorBank,
+    net: "GaussianParamNetwork | None",
+    bank: "CovariancePriorBank | None",
     args: TrainArgs,
     residual_head: "PixelResidualHead | None" = None,
+    sr_model: "torch.nn.Module | None" = None,
 ) -> None:
+    """Save a training checkpoint.
+
+    For the Gaussian track (``args.model_kind == "gaussian"``), saves ``net`` +
+    ``bank`` + optional ``residual_head``.  For the SR track, saves
+    ``sr_model`` under the ``"sr_model"`` key.  Both paths write the full
+    ``args`` dict for reproducibility.
+    """
     ckpt_path = output_dir / f"step-{step:08d}.pt"
-    payload = {
+    payload: dict = {
         "step": step,
         "tier": tier,
-        "net": net.state_dict(),
-        "bank": bank.state_dict(),
         "args": {
             k: (str(v) if isinstance(v, Path) else v)
             for k, v in args.__dict__.items()
         },
     }
-    if residual_head is not None:
-        payload["residual_head"] = residual_head.state_dict()
+    if sr_model is not None:
+        # SR track: only the SR model state is needed.
+        payload["sr_model"] = sr_model.state_dict()
+        payload["model_kind"] = args.model_kind
+    else:
+        # Gaussian track: net + bank + optional residual head.
+        payload["net"] = net.state_dict()
+        payload["bank"] = bank.state_dict()
+        if residual_head is not None:
+            payload["residual_head"] = residual_head.state_dict()
     torch.save(payload, ckpt_path)
     log.info("ckpt -> %s", ckpt_path)
+
+
+# ---------------------------------------------------------------------------
+# SR training loop (2026-05-02 pivot — bypasses splat rendering)
+# ---------------------------------------------------------------------------
+
+
+def _main_sr(args: TrainArgs) -> int:
+    """Training loop for the SR CNN track (SRCNNSimple or SRRRDB).
+
+    Structurally mirrors the Gaussian real-data loop but:
+    - Builds the SR model (no net/head/bank/renderer).
+    - Calls sr_model(x).clamp(0, 1) directly — no splat rendering.
+    - Skips Gaussian-specific diagnostics (bank_entropy, dxy, color_std, etc.)
+      and replaces them with SR output stats + conv grad norms.
+    - Saves checkpoints under the "sr_model" key.
+
+    The bicubic comparison uses evaluate_against_bicubic_sr() which has the
+    same return schema as evaluate_against_bicubic() for consistent logging.
+    """
+    sr_model = build_sr_model_from_args(args)
+    sr_model.to(args.device)
+
+    optim = torch.optim.AdamW(
+        sr_model.parameters(), lr=args.learning_rate, weight_decay=1e-5
+    )
+    log.info(
+        "SR model: kind=%s backbone=%s tier=%s params=%d",
+        args.model_kind,
+        args.sr_backbone,
+        args.tier,
+        sum(p.numel() for p in sr_model.parameters()),
+    )
+
+    metrics_log: list[dict] = []
+    score_log: list[dict] = []
+    train_start = time.monotonic()
+
+    # ------------------------------------------------------------------
+    # Synthetic-batch path (CI / sanity -- no real data needed)
+    # ------------------------------------------------------------------
+    if args.use_synthetic_batch:
+        h, w = 64, 64
+        log.info("SR: using synthetic_batch path (no real data)")
+        final_step = 0
+        for step in range(1, args.max_steps + 1):
+            if args.max_time_seconds is not None:
+                elapsed = time.monotonic() - train_start
+                if elapsed > args.max_time_seconds:
+                    log.info("SR: wall-clock limit at step %d (%.1f s)", step, elapsed)
+                    step -= 1
+                    break
+
+            x, target = synthetic_batch(args.batch_size, h, w, args.device)
+            optim.zero_grad()
+            final = sr_model(x).clamp(0.0, 1.0)
+            loss, parts = composite_loss(final, target)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(sr_model.parameters(), max_norm=1.0)
+            optim.step()
+
+            if step % args.log_every == 0:
+                diag = _sr_diagnostics(sr_model, final.detach())
+                row = {"step": step, "loss": float(loss.item()), **parts, **diag}
+                metrics_log.append(row)
+                aux_key = "ssim" if "ssim" in row else "pooled_l1"
+                log.info(
+                    "SR step=%d loss=%.4f l1=%.4f %s=%.4f out_mean=%.3f out_std=%.3f",
+                    step, row["loss"], row["l1"], aux_key, row[aux_key],
+                    row["sr_out_mean"], row["sr_out_std"],
+                )
+
+            if step % args.ckpt_every == 0 or step == args.max_steps:
+                _save_checkpoint(
+                    args.output_dir, step, args.tier,
+                    net=None, bank=None, args=args, sr_model=sr_model,  # type: ignore[arg-type]
+                )
+
+            final_step = step
+
+    # ------------------------------------------------------------------
+    # Real-data path
+    # ------------------------------------------------------------------
+    else:
+        loader = build_dataloader(args)
+        score_loader = build_dataloader(args)
+        log.info(
+            "SR: dataset size=%d sequence_filter=%r",
+            len(loader.dataset),  # type: ignore[arg-type]
+            args.sintel_sequence,
+        )
+
+        step = 0
+        final_step = 0
+        data_iter = iter(loader)
+
+        while step < args.max_steps:
+            if args.max_time_seconds is not None:
+                elapsed = time.monotonic() - train_start
+                if elapsed > args.max_time_seconds:
+                    log.info("SR: wall-clock limit at step %d (%.1f s)", step, elapsed)
+                    break
+
+            try:
+                batch = next(data_iter)
+            except StopIteration:
+                data_iter = iter(loader)
+                batch = next(data_iter)
+
+            step += 1
+            final_step = step
+
+            lr = batch["lr_frame"].to(args.device)
+            depth = batch["depth"].to(args.device)
+            motion = batch["motion"].to(args.device)
+            normals = batch["normals"].to(args.device)
+            canvas = batch["canvas_hint"].to(args.device)
+            gt_hr = batch["gt_hr_frame"].to(args.device)
+
+            # 12-channel input: LR(3)+depth(1)+motion(2)+normals(3)+canvas(3).
+            x = torch.cat([lr, depth, motion, normals, canvas], dim=1)
+
+            optim.zero_grad()
+            final = sr_model(x).clamp(0.0, 1.0)
+            loss, parts = composite_loss(final, gt_hr)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(sr_model.parameters(), max_norm=1.0)
+            optim.step()
+
+            if step % args.log_every == 0:
+                diag = _sr_diagnostics(sr_model, final.detach())
+                row = {"step": step, "loss": float(loss.item()), **parts, **diag}
+                metrics_log.append(row)
+                aux_key = "ssim" if "ssim" in row else "pooled_l1"
+                log.info(
+                    "SR step=%d loss=%.4f l1=%.4f %s=%.4f out_mean=%.3f out_std=%.3f "
+                    "head_grad=%.4e up_grad=%.4e",
+                    step, row["loss"], row["l1"], aux_key, row[aux_key],
+                    row["sr_out_mean"], row["sr_out_std"],
+                    row["sr_head_conv_grad_norm"], row["sr_upsample_conv_grad_norm"],
+                )
+
+            if step % args.ckpt_every == 0:
+                _save_checkpoint(
+                    args.output_dir, step, args.tier,
+                    net=None, bank=None, args=args, sr_model=sr_model,  # type: ignore[arg-type]
+                )
+
+            if args.score_every > 0 and step % args.score_every == 0:
+                log.info("SR: bicubic comparison at step %d", step)
+                result = evaluate_against_bicubic_sr(
+                    sr_model, score_loader, args.device, n_samples=8
+                )
+                score_row = {"step": step, **result}
+                score_log.append(score_row)
+                log.info(
+                    "SR step=%d model_psnr=%.2f dB  bicubic_psnr=%.2f dB  "
+                    "beats_bicubic=%d/8",
+                    step,
+                    result["model_psnr_mean"],
+                    result["bicubic_psnr_mean"],
+                    result["model_beats_bicubic_count"],
+                )
+
+        # Final checkpoint + comparison.
+        _save_checkpoint(
+            args.output_dir, final_step, args.tier,
+            net=None, bank=None, args=args, sr_model=sr_model,  # type: ignore[arg-type]
+        )
+
+        log.info("SR: final bicubic comparison at step %d", final_step)
+        final_result = evaluate_against_bicubic_sr(
+            sr_model, score_loader, args.device, n_samples=8
+        )
+        score_log.append({"step": final_step, "final": True, **final_result})
+        log.info(
+            "SR FINAL model_psnr=%.2f dB  bicubic_psnr=%.2f dB  beats_bicubic=%d/8",
+            final_result["model_psnr_mean"],
+            final_result["bicubic_psnr_mean"],
+            final_result["model_beats_bicubic_count"],
+        )
+
+    # Write metrics.
+    metrics_path = args.output_dir / "metrics.json"
+    with metrics_path.open("w") as f:
+        json.dump({"train": metrics_log, "score": score_log}, f, indent=2)
+    log.info("SR metrics -> %s", metrics_path)
+
+    elapsed_total = time.monotonic() - train_start
+    log.info("SR done: steps=%d elapsed=%.1f s", final_step, elapsed_total)
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -805,6 +1163,13 @@ def main(argv: list[str] | None = None) -> int:
             args.max_time_seconds,
             args.max_time_seconds / 3600.0,
         )
+
+    # ---------------------------------------------------------------------------
+    # SR-track dispatch (2026-05-02 pivot).  The Gaussian path below is
+    # bit-identical to the pre-pivot behavior when model_kind == "gaussian".
+    # ---------------------------------------------------------------------------
+    if args.model_kind in ("sr_cnn", "sr_rrdb"):
+        return _main_sr(args)
 
     net, head, bank, residual_head = build_model(args)
     net.to(args.device)

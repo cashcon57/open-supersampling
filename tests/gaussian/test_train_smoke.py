@@ -113,6 +113,8 @@ def _minimal_args(tmp_path: Path, **overrides: Any) -> TrainArgs:
         score_every=0,
         max_time_seconds=None,
         smoke_test=False,
+        model_kind="gaussian",
+        sr_backbone="simple",
     )
     defaults.update(overrides)
     return TrainArgs(**defaults)
