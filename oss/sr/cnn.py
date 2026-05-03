@@ -110,10 +110,14 @@ class SRCNNSimple(nn.Module):
 
         # Upsample tail: map to scale^2 * 3 channels, then PixelShuffle.
         self.upsample_conv = nn.Conv2d(hidden, 3 * scale * scale, 3, padding=1)
-        nn.init.kaiming_normal_(self.upsample_conv.weight, nonlinearity="relu")
-        # Zero-init bias only: ensures the mean residual starts near zero so the
-        # network output is biased toward bicubic at step 0.  Full zero-init of the
-        # weight would block gradient flow into the body via the chain rule.
+        # Small-magnitude weight init (NOT zero — gradient must flow into the body
+        # via the chain rule). Zero-init bias. Kaiming-normal would give residual
+        # std ~0.5 which, combined with `clamp(0, 1)` on the final output downstream,
+        # zeroes ~half the output (negative bicubic+residual clips to 0). Clamp
+        # gradients are zero where clipped, so the network couldn't escape. With
+        # std=0.01 the residual at init is ≈ ±0.01, leaving the output essentially
+        # equal to bicubic at step 0 and unblocking gradient flow.
+        nn.init.normal_(self.upsample_conv.weight, mean=0.0, std=0.01)
         nn.init.zeros_(self.upsample_conv.bias)
 
         self.pixel_shuffle = nn.PixelShuffle(scale)
