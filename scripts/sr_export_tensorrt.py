@@ -29,6 +29,11 @@ import time
 from pathlib import Path
 
 # ORT CUDA + TRT DLL fix (Windows only) -- must run before importing onnxruntime.
+# Importing tensorrt first triggers its __init__.py which calls
+# os.add_dll_directory on the right paths. Order matters: ORT's
+# TensorrtExecutionProvider loads its DLL on first use, and that DLL
+# transitively depends on nvinfer_10.dll; if tensorrt was never imported in
+# this process, Windows can't find it even with PATH set.
 if sys.platform == "win32":
     import torch as _torch_tmp
     _torch_lib = Path(_torch_tmp.__file__).parent / "lib"
@@ -39,11 +44,10 @@ if sys.platform == "win32":
     _conda_bin = Path(sys.executable).parent.parent / "bin"
     if _conda_bin.exists():
         os.environ["PATH"] = str(_conda_bin) + os.pathsep + os.environ.get("PATH", "")
-    _trt_libs = Path(sys.executable).parent.parent / "Lib" / "site-packages" / "tensorrt_libs"
-    if _trt_libs.exists():
-        os.environ["PATH"] = str(_trt_libs) + os.pathsep + os.environ.get("PATH", "")
-        try: os.add_dll_directory(str(_trt_libs))
-        except (OSError, AttributeError): pass
+    try:
+        import tensorrt as _trt_warmup  # noqa: F401 — side-effect: registers DLLs
+    except ImportError:
+        pass
 
 import numpy as np
 import onnxruntime as ort
