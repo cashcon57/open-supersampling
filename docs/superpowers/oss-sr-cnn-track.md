@@ -56,9 +56,21 @@ The current V0.5 implementation is essentially this with extra steps. Cleanup st
 
 ## V1 candidates (post-MVP)
 
-- **ESRGAN-style residual backbone** for higher-quality SR with the same G-buffer inputs.
+- **Temporal accumulation** — wire warped previous-frame HR output into the
+  `canvas_hint` channel. Architecture is already 90% there: the 12-ch input
+  layout reserves channels 9–12 for canvas_hint and we feed zeros today. One
+  data-adapter change (return consecutive frame pairs) + one training-loop
+  change (warp prev output → feed as canvas_hint) unlocks DLSS-style temporal
+  accumulation. Expected lift: +2–5 dB based on DLSS 2 Quality vs bicubic
+  numbers, which use the same trick. Same `warp(state, motion, α)` primitive
+  used by the temporal-Gaussian track — see `oss-gaussian-temporal-track.md`
+  §"Design constraint — interpolation-readiness". Order this AFTER the
+  per-frame multi-day baseline so we can isolate the temporal contribution.
+- **ESRGAN-style residual backbone** for higher-quality SR with the same
+  G-buffer inputs.
 - **Multi-scale training** (2× and 4×).
-- **Cyberpunk capture** via OSSContribute once we have a deployed v0 model to feed it.
+- **Cyberpunk capture** via OSSContribute once we have a deployed v0 model to
+  feed it.
 
 ## OSS-Gaussian-RR (parallel track)
 
