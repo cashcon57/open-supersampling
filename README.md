@@ -31,7 +31,8 @@ The Gaussian track adds **3D-aware temporal accumulation** to the project. A per
 |-------|--------|-----|
 | **OSS-SR (CNN)** | ✓ V0.5 beats bicubic +0.84–2.08 dB on 56/56 held-out samples; ready to clean up and ship | [oss-sr-cnn-track.md](docs/superpowers/oss-sr-cnn-track.md) |
 | **OSS-Gaussian-RR (denoising)** | ⏳ Architecture ready; D1 result positive; production blocked on NoiseBase download | [oss-gaussian-rr-track.md](docs/superpowers/oss-gaussian-rr-track.md) |
-| **OSS-Gaussian SR** | ❌ FALSIFIED 2026-05-02 — splats cannot do single-image SR at our budget | [splats-cannot-SR-definitive.md](docs/superpowers/experiments/2026-05-02-splats-cannot-SR-definitive.md) |
+| **OSS-Gaussian SR (RGB)** | ❌ FALSIFIED 2026-05-02 — Gaussians-as-RGB cannot do single-image SR at our budget | [splats-cannot-SR-definitive.md](docs/superpowers/experiments/2026-05-02-splats-cannot-SR-definitive.md) |
+| **OSS-Gaussian SR (features → CNN)** | ❓ Untested — literature shows it succeeds; v2 stretch | [splats-SR-literature-delta.md](docs/superpowers/experiments/2026-05-02-splats-SR-literature-delta.md) |
 
 The Gaussian splat representation succeeded for denoising and failed for super-resolution. We forked OSS-SR off the Gaussian track to a pure CNN architecture and repurposed the Sprint 4 splat infrastructure for OSS-Gaussian-RR.
 

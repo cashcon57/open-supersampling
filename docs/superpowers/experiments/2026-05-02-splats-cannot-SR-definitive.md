@@ -84,15 +84,23 @@ Five independent paths, all consistent:
 
 **The 2D Gaussian splat representation in our pipeline cannot do single-image super-resolution against engine-aliased LR competitively, regardless of implementation choices we have explored.** The only architecture that beats bicubic is one where a CNN learned to completely ignore the splat path.
 
-The implementation is not the limiting factor. The representation is. This matches what the literature implies — papers that succeed at Gaussian SR (GSASR, GS-STVSR) do not use a fixed-bank softmax-weighted set of 1K–10K Gaussians produced by a small CNN. They use thousands more Gaussians, fully-learned per-Gaussian covariance, multi-scale features, and a learned final stage that is itself substantial CNN work.
+> **2026-05-02 follow-up: this finding is implementation-specific, not a general claim about Gaussian SR.**
+>
+> A literature delta against GSASR / GS-STVSR / GaussianSR (see `docs/superpowers/experiments/2026-05-02-splats-SR-literature-delta.md`) identified the most likely architectural unlock: published Gaussian-SR successes do not have Gaussians produce RGB directly. They have Gaussians produce HR feature maps (e.g. 8 channels), and a mandatory CNN decoder converts those features to RGB. Our V0.5 residual head is conceptually doing this — but it receives wrong RGB from the splat raster instead of HR features to complete. The "splats are decorative" finding is then explained: the residual head learned to set splat-input weights to ≈0 because it had to overcome wrong RGB.
+>
+> The original strong claim above remains correct as scoped (our pipeline, our resource budget). The general claim — that no Gaussian-based SR architecture can beat bicubic — is *not* supported by our data once we account for the "Gaussians as features, not RGB" thesis. We have not yet tested that thesis.
+
+This still matches the empirical literature picture — papers that succeed at Gaussian SR (GSASR, GS-STVSR) do not use a fixed-bank softmax-weighted set of 1K–10K Gaussians-as-RGB produced by a small CNN. They use feature-space Gaussians, mandatory CNN decoders, attention backbones at 1.5M–30M params, and 20–250× more Gaussians.
 
 ## Decisions
 
-1. **The Gaussian-temporal-canvas-as-SR thesis at our resource budget is dead.** No further engineering on splat-side SR. Accepting this is the rational move; insisting otherwise burns time on a known-bad regime.
-2. **V0.5 ships as a CNN super-resolver with G-buffer inputs** if we want a deliverable. It works (+1.3 dB above bicubic, 56/56 held-out beats). It is not novel, but it solves the user's problem (a Wine/CrossOver-friendly open SR for game upscaling) with a 12K-param model.
-3. **Sprint 5 (persistent canvas) loses its motivation in the SR context.** A canvas warps splats across frames — but if the splats encode no useful image content at any single frame, warping them across frames warps noise. Sprint 5 is not technically wrong, but its product value evaporates without a working splat-side signal.
-4. **OSS-Gaussian-RR (denoising track) remains promising.** The D1 result (`2026-05-01-gaussian-denoising-naive-test.md`) showed Image-GS at n=1000 beats OIDN on PSNR. Denoising is a different problem — it only requires the Gaussians to encode a smooth approximation of a noisy target, which is what they are good at. **Reorient the Gaussian work toward denoising, not SR.**
-5. **For super-resolution, fork OSS-SR off the Gaussian track.** Build it as a normal CNN-based SR pipeline with G-buffer conditioning. The Sprint 4 trainer + dataset adapters + bicubic comparison + held-out probe carry over verbatim — only the model architecture changes. This is a 1–2 week pivot that produces a shippable v0 SR model.
+1. **The Gaussians-as-RGB thesis at our resource budget is dead.** No further engineering on the current splat-side SR architecture. The "Gaussians-as-features → CNN decoder" thesis (per literature delta) is *not* falsified — but pursuing it is a 1–4 week research effort, not a tuning iteration.
+2. **V0.5 ships as a CNN super-resolver with G-buffer inputs** if we want a deliverable now. It works (+1.3 dB above bicubic, 56/56 held-out beats). It is not novel, but it solves the user's problem (a Wine/CrossOver-friendly open SR for game upscaling) with a 12K-param model.
+3. **Sprint 5 (persistent canvas) loses its motivation in the SR-as-RGB context.** It revives in (a) the Gaussian-RR denoising context, or (b) a hypothetical OSS-Gaussian-SR-V2 that adopts the feature-space thesis.
+4. **OSS-Gaussian-RR (denoising track) remains promising.** D1 showed Image-GS at n=1000 beats OIDN on PSNR. Denoising only requires Gaussians to encode a smooth approximation, which is what they are good at. **Reorient the Gaussian-as-RGB work toward denoising, where the representation matches the task.**
+5. **For super-resolution, ship V0.5 (CNN) as the v0 deliverable.** Document the feature-space Gaussian-SR thesis as v2 stretch.
+
+**Optional v2 stretch (not blocking the v0 SR ship):** validate the feature-space thesis by running the released GSASR code on our engine-aliased LR. If GSASR also plateaus below bicubic on engine-aliased LR, the LR domain is the binding constraint. If GSASR beats bicubic, we have empirical justification to reimplement Gaussians-as-features. ~2–5 days of setup. See `docs/superpowers/experiments/2026-05-02-splats-SR-literature-delta.md`.
 
 ## Open questions (real, not exhaustive)
 
