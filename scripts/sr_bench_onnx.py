@@ -131,9 +131,23 @@ def _bench_pytorch(
     return {"ms": elapsed * 1000, "fps": 1.0 / elapsed, "peak_mib": peak_mib, "label": "PyTorch FP32"}
 
 
-def _ort_providers() -> list[str]:
+def _ort_providers(use_trt: bool = False, fp16: bool = False, cache_dir: Path | None = None) -> list:
+    """Build the ORT provider list.
+
+    When ``use_trt`` and the TensorrtExecutionProvider is available, prepends
+    a configured TRT provider.  ``fp16`` enables FP16 inference within TRT.
+    ``cache_dir`` enables persistent engine caching (avoids the 1-5 min build
+    on every run).
+    """
     available = ort.get_available_providers()
-    providers: list[str] = []
+    providers: list = []
+    if use_trt and "TensorrtExecutionProvider" in available:
+        trt_options: dict = {"trt_fp16_enable": fp16}
+        if cache_dir is not None:
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            trt_options["trt_engine_cache_enable"] = True
+            trt_options["trt_engine_cache_path"] = str(cache_dir)
+        providers.append(("TensorrtExecutionProvider", trt_options))
     if "CUDAExecutionProvider" in available:
         providers.append("CUDAExecutionProvider")
     providers.append("CPUExecutionProvider")
@@ -146,11 +160,14 @@ def _bench_ort(
     h: int,
     w: int,
     label: str,
+    use_trt: bool = False,
+    trt_fp16: bool = False,
 ) -> dict:
     """Benchmark ONNX Runtime. Returns stats dict."""
     _free_vram()
 
-    providers = _ort_providers()
+    cache_dir = onnx_path.parent / (onnx_path.stem + ".trt-cache") if use_trt else None
+    providers = _ort_providers(use_trt=use_trt, fp16=trt_fp16, cache_dir=cache_dir)
     session = ort.InferenceSession(str(onnx_path), providers=providers)
     inp_name = session.get_inputs()[0].name
 
@@ -293,6 +310,18 @@ def main() -> int:
         except Exception as exc:
             rows.append({"label": "ONNX-RT FP16", "ms": float("nan"), "fps": 0.0, "peak_mib": float("nan"), "size_mb": fp16_mb})
             print(f"  ONNX-RT FP16 @ {h}x{w}: {exc}")
+
+        # TensorRT FP16 (if provider is available — first build can take 1-5 min per shape).
+        if "TensorrtExecutionProvider" in ort.get_available_providers():
+            try:
+                r = _bench_ort(fp16_onnx, args.device, h, w, label="TRT FP16",
+                               use_trt=True, trt_fp16=True)
+                r["size_mb"] = fp16_mb
+                rows.append(r)
+            except Exception as exc:
+                rows.append({"label": "TRT FP16", "ms": float("nan"), "fps": 0.0,
+                             "peak_mib": float("nan"), "size_mb": fp16_mb})
+                print(f"  TRT FP16 @ {h}x{w}: {exc}")
 
         _print_table(rows, res_label)
         all_tables.append((res_label, h, w, rows))
