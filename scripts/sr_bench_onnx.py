@@ -19,8 +19,26 @@ from __future__ import annotations
 
 import argparse
 import gc
+import os
+import sys
 import time
 from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# ORT CUDA DLL fix (Windows only)
+# On Windows, onnxruntime-gpu requires cuBLAS/cuDNN DLLs on the PATH before
+# the ORT CUDA provider DLL is loaded. PyTorch bundles these in its lib dir;
+# we add them here so ORT can find them.  On Linux/macOS this is a no-op.
+# ---------------------------------------------------------------------------
+if sys.platform == "win32":
+    import torch as _torch_tmp
+    _torch_lib = Path(_torch_tmp.__file__).parent / "lib"
+    if _torch_lib.exists():
+        os.environ["PATH"] = str(_torch_lib) + os.pathsep + os.environ.get("PATH", "")
+    # Also add conda env bin dir if present (contains cudart64_12.dll etc.)
+    _conda_bin = Path(sys.executable).parent.parent / "bin"
+    if _conda_bin.exists():
+        os.environ["PATH"] = str(_conda_bin) + os.pathsep + os.environ.get("PATH", "")
 
 import numpy as np
 import torch

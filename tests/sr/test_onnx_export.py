@@ -14,6 +14,7 @@ Coverage:
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 import tempfile
@@ -22,6 +23,17 @@ import numpy as np
 import pytest
 import torch
 import torch.nn.functional as F
+
+# ORT CUDA DLL fix (Windows only) -- must run before importing onnxruntime.
+# Tests run on CPU so CUDA is not required, but the import still fails without
+# these DLLs on Windows. We add them preemptively.
+if sys.platform == "win32":
+    _torch_lib = Path(torch.__file__).parent / "lib"
+    if _torch_lib.exists():
+        os.environ["PATH"] = str(_torch_lib) + os.pathsep + os.environ.get("PATH", "")
+    _conda_bin = Path(sys.executable).parent.parent / "bin"
+    if _conda_bin.exists():
+        os.environ["PATH"] = str(_conda_bin) + os.pathsep + os.environ.get("PATH", "")
 
 # Skip entire module if onnxruntime is not installed.
 ort = pytest.importorskip("onnxruntime", reason="onnxruntime not installed")

@@ -34,6 +34,7 @@ Auto-curated index of `docs/superpowers/experiments/*.md`. Update on every new m
 |------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | 2026-05-01 | baseline-bench-floor, gaussian-upscaling-naive-test, pretrained-gaussian-sr-eval, naive-canvas-temporal-stability, gaussian-denoising-naive-test, validation-decision-memo  |
 | 2026-05-02 | sprint4-smoke-findings, pico-lite-aggressive-srgd, output-head-dead-init, v05-pixel-residual-success, splats-cannot-SR-definitive, splats-SR-literature-delta, gsasr-on-engine-aliased-lr, srcnn-beats-v05-and-gsasr |
+| 2026-05-03 | onnx-export-and-bench                                                                                                                                                       |
 
 ## What goes in a memo
 

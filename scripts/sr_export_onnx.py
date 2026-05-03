@@ -26,7 +26,23 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
+import sys
 from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# ORT CUDA DLL fix (Windows only) -- must happen before importing onnxruntime.
+# onnxruntime-gpu requires cuBLAS/cuDNN DLLs on the Windows DLL search PATH.
+# PyTorch bundles these in its lib directory, which we prepend here.
+# ---------------------------------------------------------------------------
+if sys.platform == "win32":
+    import torch as _torch_tmp
+    _torch_lib = Path(_torch_tmp.__file__).parent / "lib"
+    if _torch_lib.exists():
+        os.environ["PATH"] = str(_torch_lib) + os.pathsep + os.environ.get("PATH", "")
+    _conda_bin = Path(sys.executable).parent.parent / "bin"
+    if _conda_bin.exists():
+        os.environ["PATH"] = str(_conda_bin) + os.pathsep + os.environ.get("PATH", "")
 
 import numpy as np
 import onnx
@@ -127,10 +143,16 @@ def _export_onnx(
     out_path: Path,
     opset: int,
 ) -> None:
-    """Export model to ONNX with dynamic spatial axes."""
+    """Export model to ONNX with dynamic spatial axes.
+
+    Input and output spatial dims use DISTINCT param names (h_in/h_out,
+    w_in/w_out). This prevents onnxconverter_common's FP16 conversion from
+    collapsing both into a single dim_param, which causes an ORT shape
+    mismatch in the Add node (bicubic_skip + residual) at runtime.
+    """
     dynamic_axes = {
-        "input":  {0: "batch", 2: "h", 3: "w"},
-        "output": {0: "batch", 2: "h", 3: "w"},
+        "input":  {0: "batch", 2: "h_in",  3: "w_in"},
+        "output": {0: "batch", 2: "h_out", 3: "w_out"},
     }
     torch.onnx.export(
         wrapper,
@@ -210,9 +232,11 @@ def _verify_vs_pytorch(
     w: int,
     label: str,
     atol: float,
+    is_fp16: bool = False,
 ) -> float:
     """Compare ONNX output to PyTorch FP32 reference. Returns max abs diff."""
-    x_torch = torch.zeros(1, 12, h, w, device=device)
+    h_v, w_v = h, w
+    x_torch = torch.zeros(1, 12, h_v, w_v, device=device)
 
     # Determine which skip mode was used (try antialias, fall back if needed).
     wrapper = SRCNNExportWrapper(sr_model, use_bilinear_fallback=False)
@@ -234,6 +258,7 @@ def _verify_vs_pytorch(
     mean_diff = float(np.abs(ref_torch.astype(np.float32) - ort_out.astype(np.float32)).mean())
     status = "PASS" if max_diff <= atol else "WARN (exceeds tolerance)"
     print(f"  [{label}]")
+    print(f"    input  = {h_v}x{w_v} LR  output = {h_v*2}x{w_v*2} HR")
     print(f"    max|diff|  = {max_diff:.3e}")
     print(f"    mean|diff| = {mean_diff:.3e}")
     print(f"    tolerance  = {atol:.0e}  -> {status}")
