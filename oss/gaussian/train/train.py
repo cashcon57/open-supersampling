@@ -469,16 +469,60 @@ def _sr_diagnostics(sr_model: "torch.nn.Module", out: torch.Tensor) -> dict[str,
     return result
 
 
+_LPIPS_FN = None
+_LPIPS_TRIED = False
+
+
+def _get_lpips_fn(device: str):
+    """Lazy-load the LPIPS-VGG perceptual metric.
+
+    Returns the cached `lpips.LPIPS(net='vgg')` instance, or None when the
+    package isn't importable (CI). Lower LPIPS = better perceptual quality.
+    """
+    global _LPIPS_FN, _LPIPS_TRIED
+    if _LPIPS_TRIED:
+        return _LPIPS_FN
+    _LPIPS_TRIED = True
+    try:
+        import lpips  # type: ignore[import-not-found]
+        _LPIPS_FN = lpips.LPIPS(net="vgg", verbose=False).to(device).eval()
+        for p in _LPIPS_FN.parameters():
+            p.requires_grad_(False)
+    except ImportError:
+        _LPIPS_FN = None
+    return _LPIPS_FN
+
+
+def _lpips(pred: torch.Tensor, target: torch.Tensor, device: str) -> float | None:
+    """Compute LPIPS-VGG between two HR images in [0, 1].
+
+    Returns None when the lpips package isn't installed.
+    Inputs are expected (3, H, W) or (1, 3, H, W) in [0, 1].
+    """
+    fn = _get_lpips_fn(device)
+    if fn is None:
+        return None
+    p = pred if pred.dim() == 4 else pred.unsqueeze(0)
+    t = target if target.dim() == 4 else target.unsqueeze(0)
+    # LPIPS expects inputs scaled to [-1, 1].
+    p = (p.clamp(0.0, 1.0) * 2 - 1).to(device)
+    t = (t.clamp(0.0, 1.0) * 2 - 1).to(device)
+    with torch.no_grad():
+        return float(fn(p, t).mean().item())
+
+
 def evaluate_against_bicubic_sr(
     sr_model: "torch.nn.Module",
     dataloader,  # type: ignore[type-arg]
     device: str,
     n_samples: int = 8,
 ) -> dict:
-    """Compare SR model PSNR against bicubic baseline on held-out examples.
+    """Compare SR model PSNR + LPIPS against bicubic baseline on held-out
+    examples.
 
     Same return-dict schema as ``evaluate_against_bicubic`` (Gaussian path)
-    for consistent logging.
+    for consistent logging, plus optional LPIPS fields when ``lpips`` is
+    importable.
 
     Args:
         sr_model:   Trained SR model (SRCNNSimple or SRRRDB).
@@ -488,11 +532,16 @@ def evaluate_against_bicubic_sr(
 
     Returns dict with keys:
         model_psnr_mean, bicubic_psnr_mean, model_psnr_per_sample,
-        bicubic_psnr_per_sample, model_beats_bicubic_count.
+        bicubic_psnr_per_sample, model_beats_bicubic_count,
+        model_lpips_mean (or None), bicubic_lpips_mean (or None),
+        model_beats_bicubic_lpips_count (or None).
     """
     sr_model.train(False)
     model_psnrs: list[float] = []
     bicubic_psnrs: list[float] = []
+    model_lpips: list[float] = []
+    bicubic_lpips: list[float] = []
+    has_lpips = _get_lpips_fn(device) is not None
 
     with torch.no_grad():
         for batch in dataloader:
@@ -520,6 +569,12 @@ def evaluate_against_bicubic_sr(
                     break
                 model_psnrs.append(_psnr(final[b_idx], gt_hr[b_idx]))
                 bicubic_psnrs.append(_psnr(bicubic_hr[b_idx], gt_hr[b_idx]))
+                if has_lpips:
+                    m = _lpips(final[b_idx], gt_hr[b_idx], device)
+                    b = _lpips(bicubic_hr[b_idx], gt_hr[b_idx], device)
+                    if m is not None and b is not None:
+                        model_lpips.append(m)
+                        bicubic_lpips.append(b)
 
     sr_model.train(True)
 
@@ -531,13 +586,23 @@ def evaluate_against_bicubic_sr(
         model_mean = float("nan")
         bicubic_mean = float("nan")
 
-    return {
+    result: dict = {
         "model_psnr_mean": model_mean,
         "bicubic_psnr_mean": bicubic_mean,
         "model_psnr_per_sample": model_psnrs,
         "bicubic_psnr_per_sample": bicubic_psnrs,
         "model_beats_bicubic_count": beats_count,
     }
+    if model_lpips:
+        result["model_lpips_mean"] = float(sum(model_lpips) / len(model_lpips))
+        result["bicubic_lpips_mean"] = float(sum(bicubic_lpips) / len(bicubic_lpips))
+        result["model_lpips_per_sample"] = model_lpips
+        result["bicubic_lpips_per_sample"] = bicubic_lpips
+        # Lower LPIPS is better, so model "beats" bicubic when its LPIPS is lower.
+        result["model_beats_bicubic_lpips_count"] = sum(
+            1 for m, b in zip(model_lpips, bicubic_lpips) if m < b
+        )
+    return result
 
 
 @torch.no_grad()
@@ -1142,14 +1207,28 @@ def _main_sr(args: TrainArgs) -> int:
                 _score_path = args.output_dir / "score_log.json"
                 with _score_path.open("w") as _f:
                     json.dump(score_log, _f, indent=2)
-                log.info(
-                    "SR step=%d model_psnr=%.2f dB  bicubic_psnr=%.2f dB  "
-                    "beats_bicubic=%d/8",
-                    step,
-                    result["model_psnr_mean"],
-                    result["bicubic_psnr_mean"],
-                    result["model_beats_bicubic_count"],
-                )
+                if "model_lpips_mean" in result:
+                    log.info(
+                        "SR step=%d model_psnr=%.2f dB  bicubic_psnr=%.2f dB  "
+                        "beats_bicubic=%d/8  "
+                        "model_lpips=%.4f bicubic_lpips=%.4f beats_lpips=%d/8",
+                        step,
+                        result["model_psnr_mean"],
+                        result["bicubic_psnr_mean"],
+                        result["model_beats_bicubic_count"],
+                        result["model_lpips_mean"],
+                        result["bicubic_lpips_mean"],
+                        result["model_beats_bicubic_lpips_count"],
+                    )
+                else:
+                    log.info(
+                        "SR step=%d model_psnr=%.2f dB  bicubic_psnr=%.2f dB  "
+                        "beats_bicubic=%d/8",
+                        step,
+                        result["model_psnr_mean"],
+                        result["bicubic_psnr_mean"],
+                        result["model_beats_bicubic_count"],
+                    )
 
         # Final checkpoint + comparison.
         _save_checkpoint(

@@ -128,20 +128,43 @@ HTML = """<!DOCTYPE html>
         <div class="val" id="stat-bicubic-psnr">–</div>
       </div>
       <div class="stat">
-        <div class="lbl">margin</div>
+        <div class="lbl">PSNR margin</div>
         <div class="val" id="stat-margin">–</div>
       </div>
       <div class="stat">
-        <div class="lbl">beats / 8</div>
+        <div class="lbl">PSNR beats / 8</div>
         <div class="val" id="stat-beats">–</div>
+      </div>
+    </div>
+    <div class="stat-row">
+      <div class="stat">
+        <div class="lbl">model LPIPS ↓</div>
+        <div class="val" id="stat-model-lpips">–</div>
+      </div>
+      <div class="stat">
+        <div class="lbl">bicubic LPIPS ↓</div>
+        <div class="val" id="stat-bicubic-lpips">–</div>
+      </div>
+      <div class="stat">
+        <div class="lbl">LPIPS margin (↓ better)</div>
+        <div class="val" id="stat-lpips-margin">–</div>
+      </div>
+      <div class="stat">
+        <div class="lbl">LPIPS beats / 8</div>
+        <div class="val" id="stat-lpips-beats">–</div>
       </div>
     </div>
     <div class="sub" id="eval-step-text">–</div>
   </div>
 
-  <div class="panel full">
+  <div class="panel">
     <h2>PSNR vs bicubic over training</h2>
     <canvas id="chart-psnr"></canvas>
+  </div>
+
+  <div class="panel">
+    <h2>LPIPS vs bicubic ↓ better</h2>
+    <canvas id="chart-lpips"></canvas>
   </div>
 
   <div class="panel">
@@ -239,6 +262,7 @@ function setChart(chart, datasets) {
 
 function buildCharts() {
   charts.psnr = lineChart('chart-psnr', 'PSNR (dB)', null, { yLabel: 'PSNR (dB)' });
+  charts.lpips = lineChart('chart-lpips', 'LPIPS', null, { yLabel: 'LPIPS (lower=better)', yMin: 0 });
   charts.loss = lineChart('chart-loss', 'loss');
   charts.ssim = lineChart('chart-ssim', 'SSIM', null, { yLabel: 'SSIM', yMin: 0, yMax: 1 });
   charts.out = lineChart('chart-out', 'output');
@@ -348,6 +372,26 @@ async function refresh() {
       marginEl.textContent = (margin >= 0 ? '+' : '') + fmt.num(margin) + ' dB';
       marginEl.className = 'val ' + (margin > 0.5 ? 'good' : margin > -0.1 ? 'warn' : 'bad');
       document.getElementById('stat-beats').textContent = String(beats);
+
+      // LPIPS card (lower=better; 'beats' means model LPIPS < bicubic LPIPS).
+      if (lastEval.model_lpips_mean !== undefined && lastEval.model_lpips_mean !== null) {
+        const lm = lastEval.model_lpips_mean;
+        const lb = lastEval.bicubic_lpips_mean;
+        const lbeats = lastEval.model_beats_bicubic_lpips_count;
+        const lmargin = lb - lm; // positive = model better
+        document.getElementById('stat-model-lpips').textContent = fmt.num(lm, 4);
+        document.getElementById('stat-bicubic-lpips').textContent = fmt.num(lb, 4);
+        const lmEl = document.getElementById('stat-lpips-margin');
+        lmEl.textContent = (lmargin >= 0 ? '−' : '+') + fmt.num(Math.abs(lmargin), 4);
+        lmEl.className = 'val ' + (lmargin > 0.005 ? 'good' : lmargin > -0.001 ? 'warn' : 'bad');
+        document.getElementById('stat-lpips-beats').textContent = String(lbeats);
+      } else {
+        document.getElementById('stat-model-lpips').textContent = '–';
+        document.getElementById('stat-bicubic-lpips').textContent = '–';
+        document.getElementById('stat-lpips-margin').textContent = '–';
+        document.getElementById('stat-lpips-beats').textContent = '–';
+      }
+
       document.getElementById('eval-step-text').textContent =
         'evaluated at step ' + lastEval.step.toLocaleString();
     } else {
@@ -381,10 +425,16 @@ async function refresh() {
       { label: 'upsample conv', data: trainXY('sr_upsample_conv_grad_norm'), borderColor: '#d29922', tension: 0, pointRadius: 0 },
     ]);
 
-    const evalXY = (key) => scoreRows.map(r => ({ x: r.step, y: r[key] }));
+    const evalXY = (key) => scoreRows
+      .map(r => ({ x: r.step, y: r[key] }))
+      .filter(p => p.y !== undefined && p.y !== null);
     setChart(charts.psnr, [
       { label: 'model', data: evalXY('model_psnr_mean'), borderColor: '#3fb950', backgroundColor: '#3fb950', tension: 0, pointRadius: 3 },
       { label: 'bicubic', data: evalXY('bicubic_psnr_mean'), borderColor: '#8b949e', backgroundColor: '#8b949e', tension: 0, pointRadius: 3, borderDash: [4, 4] },
+    ]);
+    setChart(charts.lpips, [
+      { label: 'model', data: evalXY('model_lpips_mean'), borderColor: '#3fb950', backgroundColor: '#3fb950', tension: 0, pointRadius: 3 },
+      { label: 'bicubic', data: evalXY('bicubic_lpips_mean'), borderColor: '#8b949e', backgroundColor: '#8b949e', tension: 0, pointRadius: 3, borderDash: [4, 4] },
     ]);
 
     // ---- Log tail (textContent — safe) ----
