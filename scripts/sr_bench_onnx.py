@@ -35,10 +35,19 @@ if sys.platform == "win32":
     _torch_lib = Path(_torch_tmp.__file__).parent / "lib"
     if _torch_lib.exists():
         os.environ["PATH"] = str(_torch_lib) + os.pathsep + os.environ.get("PATH", "")
+        try: os.add_dll_directory(str(_torch_lib))
+        except (OSError, AttributeError): pass
     # Also add conda env bin dir if present (contains cudart64_12.dll etc.)
     _conda_bin = Path(sys.executable).parent.parent / "bin"
     if _conda_bin.exists():
         os.environ["PATH"] = str(_conda_bin) + os.pathsep + os.environ.get("PATH", "")
+    # TensorRT DLLs (nvinfer_10.dll etc.) live in tensorrt_libs alongside the
+    # python bindings — add them so ORT's TensorrtExecutionProvider can load.
+    _trt_libs = Path(sys.executable).parent.parent / "Lib" / "site-packages" / "tensorrt_libs"
+    if _trt_libs.exists():
+        os.environ["PATH"] = str(_trt_libs) + os.pathsep + os.environ.get("PATH", "")
+        try: os.add_dll_directory(str(_trt_libs))
+        except (OSError, AttributeError): pass
 
 import numpy as np
 import torch
