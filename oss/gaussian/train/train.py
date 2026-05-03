@@ -84,6 +84,7 @@ class TrainArgs:
     lr_synth_blur_sigma: float
     lr_synth_jpeg: bool
     lr_synth_jpeg_quality: int
+    lpips_loss_weight: float
     enable_pixel_residual: bool
     pixel_residual_hidden: int
     score_every: int         # run bicubic-vs-model comparison every N steps
@@ -194,6 +195,17 @@ class TrainArgs:
             type=int,
             default=85,
             help="JPEG quality for --lr-synth-jpeg (1-95).",
+        )
+        p.add_argument(
+            "--lpips-loss-weight",
+            type=float,
+            default=0.0,
+            help=(
+                "When > 0, add w_lpips * LPIPS-VGG to the composite loss "
+                "(Real-ESRGAN-style perceptual training). Typical: 0.1. "
+                "Costs ~1.5-2x training speed but pushes perceptual quality "
+                "(LPIPS metric) significantly. Default 0 = disabled."
+            ),
         )
         p.add_argument(
             "--enable-pixel-residual",
@@ -318,6 +330,7 @@ class TrainArgs:
             lr_synth_blur_sigma=lr_synth_blur_sigma,
             lr_synth_jpeg=lr_synth_jpeg,
             lr_synth_jpeg_quality=lr_synth_jpeg_quality,
+            lpips_loss_weight=a.lpips_loss_weight,
             enable_pixel_residual=enable_pixel_residual,
             pixel_residual_hidden=a.pixel_residual_hidden,
             score_every=score_every,
@@ -357,9 +370,17 @@ def composite_loss(
     *,
     w_l1: float = 1.0,
     w_ssim: float = 0.1,
+    w_lpips: float = 0.0,
+    lpips_device: str | None = None,
 ) -> tuple[torch.Tensor, dict[str, float]]:
-    """L1 + (1 - SSIM) when pytorch_msssim is installed; otherwise a pooled-L1
-    fallback that has the same shape but is *not* SSIM (use with care).
+    """L1 + (1 - SSIM) [+ LPIPS-VGG] composite loss.
+
+    When ``w_lpips > 0`` and the lpips package is importable, adds a
+    LPIPS-VGG perceptual loss term (Real-ESRGAN-style). LPIPS-VGG runs
+    a VGG-16 forward+backward on each step, so per-step compute is
+    ~1.5-2x slower than L1+SSIM alone — but the perceptual quality
+    lift is meaningful (drops LPIPS from ~0.39 to ~0.25 in published
+    benchmarks).
 
     Returns the scalar loss + a dict of components for logging.
     """
@@ -375,17 +396,30 @@ def composite_loss(
             size_average=True,
         )
         loss = w_l1 * l1 + w_ssim * (1.0 - ssim_val)
-        return loss, {"l1": float(l1.item()), "ssim": float(ssim_val.item())}
+        parts: dict[str, float] = {"l1": float(l1.item()), "ssim": float(ssim_val.item())}
+    else:
+        # Fallback: pooled-L1 of luminance — mathematically distinct from
+        # SSIM, but cheap and dependency-free for CI.
+        rendered_lum = rendered.mean(dim=1, keepdim=True)
+        target_lum = target.mean(dim=1, keepdim=True)
+        mu_r = F.avg_pool2d(rendered_lum, 8, 8)
+        mu_t = F.avg_pool2d(target_lum, 8, 8)
+        pooled_l1 = F.l1_loss(mu_r, mu_t)
+        loss = w_l1 * l1 + w_ssim * pooled_l1
+        parts = {"l1": float(l1.item()), "pooled_l1": float(pooled_l1.item())}
 
-    # Fallback: pooled-L1 of luminance — mathematically distinct from SSIM,
-    # but cheap and dependency-free for CI.
-    rendered_lum = rendered.mean(dim=1, keepdim=True)
-    target_lum = target.mean(dim=1, keepdim=True)
-    mu_r = F.avg_pool2d(rendered_lum, 8, 8)
-    mu_t = F.avg_pool2d(target_lum, 8, 8)
-    pooled_l1 = F.l1_loss(mu_r, mu_t)
-    loss = w_l1 * l1 + w_ssim * pooled_l1
-    return loss, {"l1": float(l1.item()), "pooled_l1": float(pooled_l1.item())}
+    if w_lpips > 0:
+        device = lpips_device or str(rendered.device)
+        lpips_fn = _get_lpips_fn(device)
+        if lpips_fn is not None:
+            # LPIPS expects inputs scaled to [-1, 1].
+            p = (rendered.clamp(0.0, 1.0) * 2 - 1)
+            t = (target.clamp(0.0, 1.0) * 2 - 1)
+            lpips_val = lpips_fn(p, t).mean()
+            loss = loss + w_lpips * lpips_val
+            parts["lpips"] = float(lpips_val.item())
+
+    return loss, parts
 
 
 # ---------------------------------------------------------------------------
@@ -1099,7 +1133,11 @@ def _main_sr(args: TrainArgs) -> int:
             # standard tier on multi-scene data even with depth-aware init.
             # Loss naturally penalises out-of-range output via L1.
             final = sr_model(x)
-            loss, parts = composite_loss(final, target)
+            loss, parts = composite_loss(
+                final, target,
+                w_lpips=args.lpips_loss_weight,
+                lpips_device=args.device,
+            )
             loss.backward()
             torch.nn.utils.clip_grad_norm_(sr_model.parameters(), max_norm=1.0)
             optim.step()
@@ -1168,7 +1206,11 @@ def _main_sr(args: TrainArgs) -> int:
             optim.zero_grad()
             # No clamp during training (see synth-batch path for rationale).
             final = sr_model(x)
-            loss, parts = composite_loss(final, gt_hr)
+            loss, parts = composite_loss(
+                final, gt_hr,
+                w_lpips=args.lpips_loss_weight,
+                lpips_device=args.device,
+            )
             loss.backward()
             torch.nn.utils.clip_grad_norm_(sr_model.parameters(), max_norm=1.0)
             optim.step()
@@ -1451,7 +1493,11 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 final = rendered
 
-            loss, parts = composite_loss(final, gt_hr)
+            loss, parts = composite_loss(
+                final, gt_hr,
+                w_lpips=args.lpips_loss_weight,
+                lpips_device=args.device,
+            )
             loss.backward()
             clip_params = list(net.parameters()) + list(bank.parameters())
             if residual_head is not None:
