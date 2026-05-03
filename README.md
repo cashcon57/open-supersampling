@@ -25,21 +25,29 @@ The Gaussian track adds **3D-aware temporal accumulation** to the project. A per
 
 **Compatibility:** the interception DLL implements the universal NGX DLSS API surface (10 `NVSDK_NGX_D3D12_*` exports + DXGI proxy via game-local DLL search). It targets **any DX12 game shipping DLSS** — Cyberpunk 2077 is the primary validation target (no anti-cheat, ships native DLSS 2/3, well-documented hook patterns). Post-v1 expansion: Hogwarts Legacy, Portal RTX, Alan Wake 2, and any other DLSS-using title without a kernel-level anti-cheat.
 
-Component map:
+## Track status (2026-05-02 pivot)
+
+| Track | Status | Doc |
+|-------|--------|-----|
+| **OSS-SR (CNN)** | ✓ V0.5 beats bicubic +0.84–2.08 dB on 56/56 held-out samples; ready to clean up and ship | [oss-sr-cnn-track.md](docs/superpowers/oss-sr-cnn-track.md) |
+| **OSS-Gaussian-RR (denoising)** | ⏳ Architecture ready; D1 result positive; production blocked on NoiseBase download | [oss-gaussian-rr-track.md](docs/superpowers/oss-gaussian-rr-track.md) |
+| **OSS-Gaussian SR** | ❌ FALSIFIED 2026-05-02 — splats cannot do single-image SR at our budget | [splats-cannot-SR-definitive.md](docs/superpowers/experiments/2026-05-02-splats-cannot-SR-definitive.md) |
+
+The Gaussian splat representation succeeded for denoising and failed for super-resolution. We forked OSS-SR off the Gaussian track to a pure CNN architecture and repurposed the Sprint 4 splat infrastructure for OSS-Gaussian-RR.
+
+## Component map (Gaussian track — RR-bound)
 
 | Sprint | Module | Status |
 |---|---|---|
 | 1 | `oss/gaussian/renderer/` (CUDA tile-based rasterizer, vendored Image-GS) | ✓ scaffolded, tests pass |
 | 2 | `oss/gaussian/interception/` (D3D12/DXGI hook, NGX shim) | ✓ scaffolded |
 | 3 | `oss/gaussian/classifier/` (16×16 tile complex/simple mask) | ✓ scaffolded, tests pass |
-| 4 | `oss/gaussian/network/` + `oss/gaussian/data/` (param net + datasets) | ✓ scaffolded; trainer wired to real data; engine-aliased LR + anisotropic G-buffer covariance landed; live training on 3080 Ti uncovering hyperparameter issues (see [smoke findings](docs/superpowers/experiments/2026-05-02-sprint4-smoke-findings.md)) |
-| 5 | `oss/gaussian/canvas/` (persistent canvas + warp + prune/spawn) | ✓ scaffolded, tests pass |
-| 6 | `oss/gaussian/extrapolation/` (α-conditioned warp) | ✓ scaffolded, tests pass |
+| 4 | `oss/gaussian/network/` + `oss/gaussian/data/` (param net + datasets) | ✓ trainer wired, init bugs fixed, diagnostic instrumentation; **SR target falsified — repurposing for RR** |
+| 5 | `oss/gaussian/canvas/` (persistent canvas + warp + prune/spawn) | ✓ scaffolded; suspended in SR context, revives in RR context |
+| 6 | `oss/gaussian/extrapolation/` (α-conditioned warp) | ✓ scaffolded; suspended in SR context |
 | 7 | `oss/gaussian/ports/{metal,vulkan_ncnn}/` (M3 Max + Steam Deck) | ✓ scaffolded |
 
-The Gaussian track sits alongside the pixel-based modules until the [graduation criterion](docs/superpowers/specs/2026-05-01-gaussian-temporal-canvas-design.md#5-graduation-criterion-gaussian--primary) is met (PSNR + SSIM beats OSSPico AND temporal stability ≥ baseline AND user-approved AND latency ≤ 110% of baseline).
-
-See [research synthesis](docs/superpowers/research-synthesis-2026-05-01.md) for concurrent work (GaussianSR / GSASR / GS-STVSR / arXiv 2503.14171) and the [design spec](docs/superpowers/specs/2026-05-01-gaussian-temporal-canvas-design.md) for architecture detail.
+See [research synthesis](docs/superpowers/research-synthesis-2026-05-01.md) for concurrent work (GaussianSR / GSASR / GS-STVSR / arXiv 2503.14171) and the [design spec](docs/superpowers/specs/2026-05-01-gaussian-temporal-canvas-design.md) for the architecture as originally proposed (now superseded by the two track docs above for the SR/RR split).
 
 ---
 

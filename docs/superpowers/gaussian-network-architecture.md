@@ -1,9 +1,9 @@
 # OSS-Gaussian — Network Architecture
 
-**Sprint:** 4. **Status:** design + skeleton landed; trainer wired end-to-end on RTX 3080 Ti; training **load-bearing on local hardware** (Lambda H100 spend out of budget for v0). **Trainability gate:** Lite or Standard tier must beat bicubic on the aggressive engine-aliased LR setup before community-capture or temporal-canvas work expands.
-**Spec:** `docs/superpowers/specs/2026-05-01-gaussian-temporal-canvas-design.md`.
+**Sprint:** 4 (pivoted 2026-05-02). **Status:** **NOT a path to single-image SR.** The 2D Gaussian splat representation cannot beat bicubic on single-image SR at our resource budget — verified across five independent paths in `docs/superpowers/experiments/2026-05-02-splats-cannot-SR-definitive.md`. OSS-SR has forked to a CNN-based pipeline (see `docs/superpowers/oss-sr-cnn-track.md` once it lands). This document remains the reference for the Gaussian track, which is being repurposed for **OSS-Gaussian-RR (denoising / DLSS-RR replacement)** where Image-GS already beat OIDN on PSNR (D1 memo).
+**Spec:** `docs/superpowers/specs/2026-05-01-gaussian-temporal-canvas-design.md` (SR claims now stale — RR repurposing pending).
 **Plan:** `docs/superpowers/plans/2026-05-01-gaussian-sprint-4-plan.md`.
-**Live findings:** `docs/superpowers/experiments/2026-05-02-sprint4-smoke-findings.md`.
+**Live findings:** `docs/superpowers/experiments/2026-05-02-splats-cannot-SR-definitive.md`.
 
 This document covers the param-network half of OSS-Gaussian: the small CNN
 that turns LR + G-buffers into per-tile Gaussian parameters that the Sprint 1

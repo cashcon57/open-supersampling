@@ -63,9 +63,15 @@ A vector-based real-time game upscaler. Where DLSS and FSR work in pixels, OSS-G
 
 - **T2.3 ✓** — DXGI export forwarder (19 exports) + game-agnostic positioning. First build hit MSVC C2375 redefinition errors (system `<dxgi.h>` already declares CreateDXGIFactory etc. as `dllimport`); resolved with `.def` file rename pattern (internal C++ uses `OssgCreateDXGIFactory` etc.; `.def` aliases to public DXGI names). Build clean, dxgi.dll exports all 19 DXGI + 10 NGX + 3 PIX symbols verified via `dumpbin /exports`.
 
-### Sprint 4 — In Progress (post-validation-memo)
+### Sprint 4 — TRACK PIVOTED (2026-05-02)
 
-Triggered by the 5-test pre-training validation suite (`docs/superpowers/experiments/2026-05-01-validation-decision-memo.md`). Three architectural prerequisites landed before any cloud-GPU spend; live training on the 3080 Ti is uncovering hyperparameter / data issues that would have been masked at scale.
+> **Result of Sprint 4:** the 2D Gaussian splat representation cannot do single-image super-resolution competitively against bicubic at our resource budget. This was triple-checked across five independent paths (see `docs/superpowers/experiments/2026-05-02-splats-cannot-SR-definitive.md`). The implementation is correct; the representation is the limit.
+>
+> **Pivot:** OSS-SR forks off the Gaussian track as a CNN-based super-resolver (V0.5 architecture, drop the splat dead-code). The Gaussian track redirects to OSS-Gaussian-RR (denoising / DLSS-RR replacement) where Image-GS at n=1000 already beat OIDN on PSNR per the D1 memo (`docs/superpowers/experiments/2026-05-01-gaussian-denoising-naive-test.md`). Sprint 5 (persistent canvas) is suspended until the RR track produces a usable per-frame splat signal.
+>
+> **What survives:** every piece of Sprint 4 infrastructure that isn't splat-specific — `oss/gaussian/data/` (lr_synthesis, dataset adapters), `oss/gaussian/train/train.py` (DataLoader path, bicubic comparison, checkpointing, diagnostic instrumentation), `scripts/held_out_scene_probe.py`, and the lab notebook discipline. The trainer just gets a different model wired into it.
+
+Triggered by the 5-test pre-training validation suite (`docs/superpowers/experiments/2026-05-01-validation-decision-memo.md`). Three architectural prerequisites landed before any cloud-GPU spend; live training on the 3080 Ti uncovered hyperparameter issues that, when fixed, exposed the underlying representational limit.
 
 - **Engine-aliased LR synthesis pipeline ✓** — `oss/gaussian/data/lr_synthesis.py`. Halton(2,3) subpixel jitter (idx+1 per Unreal/DLSS convention), area-filter downsample, configurable TAA Gaussian blur (σ=0.5 mild → σ=1.5 aggressive, kernel size auto-fits 3σ), optional JPEG q≥85. `EngineAliasedLRSynth` dataclass orchestrator threaded through all four dataset adapters (sintel/tartanair/hypersim/srgd) via opt-in `lr_synth=` parameter. Default behaviour preserved (backward compat for fixtures). 28 new tests in `test_lr_synthesis.py` including directional assertions that catch sign-flips and row/col swaps; `test_apply_jitter_direction_x_axis` was self-corrected after an inverted assertion.
 
