@@ -14,6 +14,7 @@ Auto-curated index of `docs/superpowers/experiments/*.md`. Update on every new m
 | 2026-05-02 | [output-head-dead-init](../superpowers/experiments/2026-05-02-output-head-dead-init.md) | Diagnostic root-cause: V0 output head was zero-init, K Gaussians per tile started identical, gradient symmetry never broke. Smoking gun #2: gsplat 1.4.0 backward returns silent zero when Gaussians too small to hit tiles. Fixes (`6900300` + `6c02cc8`) unstick diagnostics but model still plateaus at 12 dB → V0.5 needed. |
 | 2026-05-02 | [v05-pixel-residual-success](../superpowers/experiments/2026-05-02-v05-pixel-residual-success.md) | **V0.5 BICUBIC GATE CLEARED.** Trained on ActionRPG, beats bicubic by +1.47 dB (8/8). Held-out CitySample +1.26, StylizedRendering +0.84, ArchVizInterior +2.08 — all 16/16. Splat-only ablation: 12 dB. **Residual CNN does all the work; splat path is decorative.** Multi-day production unblocked. |
 | 2026-05-02 | [splats-cannot-SR-definitive](../superpowers/experiments/2026-05-02-splats-cannot-SR-definitive.md) | **Triple-checked: 2D Gaussian splats CANNOT do single-image SR competitively, regardless of implementation.** 5 independent paths converge: (1) direct 50K-Gaussian Image-GS optim −3.59 dB; (2) lite splat-only at multiple lrs −17 dB; (3) lr=1e-1 extreme params −17.47 dB; (4) standard tier −17 dB; (5) `zero+residual` bit-identical to `splat+residual`. Renderer + grad flow audited clean. Pivot recommended: ship V0.5 as a CNN super-resolver OR reorient Gaussian track to denoising (where D1 showed positive). |
+| 2026-05-02 | [splats-SR-literature-delta](../superpowers/experiments/2026-05-02-splats-SR-literature-delta.md) | **Literature delta vs. GSASR / GS-STVSR / GaussianSR.** Verdict: we falsified our specific implementation (Gaussians-direct-to-RGB), not the general possibility. Published successes use Gaussians as HR feature extractors (not RGB generators) with mandatory CNN decoders, 20–250× more Gaussians, and attention-based backbones. Our direct-fit test at 50K Gaussians is within the papers' density range yet still loses — density alone is not the unlock. Most likely unlock: redesign Gaussian feat path to be feature-space → CNN decoder (GaussianSR thesis). Recommended first experiment: run released GSASR on our engine-aliased LR to test whether the degradation domain or the architecture gap is the binding constraint. |
 
 ### Naive baseline floors (no training)
 
@@ -27,10 +28,10 @@ Auto-curated index of `docs/superpowers/experiments/*.md`. Update on every new m
 
 ## By date
 
-| Date | Memos |
-|------|-------|
-| 2026-05-01 | baseline-bench-floor, gaussian-upscaling-naive-test, pretrained-gaussian-sr-eval, naive-canvas-temporal-stability, gaussian-denoising-naive-test, validation-decision-memo |
-| 2026-05-02 | sprint4-smoke-findings, pico-lite-aggressive-srgd |
+| Date       | Memos                                                                                                                                                                       |
+|------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| 2026-05-01 | baseline-bench-floor, gaussian-upscaling-naive-test, pretrained-gaussian-sr-eval, naive-canvas-temporal-stability, gaussian-denoising-naive-test, validation-decision-memo  |
+| 2026-05-02 | sprint4-smoke-findings, pico-lite-aggressive-srgd, output-head-dead-init, v05-pixel-residual-success, splats-cannot-SR-definitive, splats-SR-literature-delta               |
 
 ## What goes in a memo
 
