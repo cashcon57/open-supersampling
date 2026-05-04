@@ -150,7 +150,7 @@ Interpretation:
 
 - No sustained >2x loss spike relative to the pre-transition band. Step `10040` is above 2x the final Phase-1 row, but within the recent Phase-1 variance envelope and settles immediately.
 - Throughput dropped from roughly 290 steps/min near step 10000 to roughly 55-65 steps/min in early Phase 2. GPU was at 100% utilization, so this looks compute-bound from LPIPS + unfrozen backbone rather than DataLoader starvation.
-- The text log does not print LPIPS component values; Codex filed this as a low-severity logging finding in the rolling review.
+- The running process's text log does not print LPIPS component values because it loaded the pre-fix trainer code. The repository fix landed in `d5a8c55`, so future Phase-2/3 runs print `t_lpips` and `tp1_lpips` when present.
 
 ## Kill switches (unchanged from r1)
 

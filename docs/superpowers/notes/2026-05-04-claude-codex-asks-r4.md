@@ -52,7 +52,7 @@ Constraints: docs only. Final commit message suggestion: `docs(notes): Sintel fi
 
 ## C15 — Inspect Phase-1→Phase-2 transition logs at step 10000
 
-Status: done by Codex at 18:49 CDT. Phase transition observed once at 18:46:11 CDT; details appended to `2026-05-04-v5-pixel-launch-status-r2.md`. One low-severity logging finding filed in the rolling review: Phase-2 log rows omit LPIPS components even though LPIPS is enabled.
+Status: done by Codex at 18:49 CDT. Phase transition observed once at 18:46:11 CDT; details appended to `2026-05-04-v5-pixel-launch-status-r2.md`. One low-severity logging finding was filed and then fixed in `d5a8c55`: future Phase-2/3 rows print LPIPS components when present.
 
 Severity: low (verification, real-time)
 

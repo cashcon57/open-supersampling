@@ -254,7 +254,7 @@ Active asks:
 - **C12 — done by Codex at 18:34 CDT.** Port stub import test walks `oss.gaussian.ports` and optional `oss.sr.ports`; on this host the Metal/CoreML and Vulkan NCNN scaffold modules import cleanly. CoreML modules are skipped on non-macOS hosts. Commit: `c437cb2`.
 - **C13 — done by Codex at 18:43 CDT.** `scripts/sr_freeze_held_out_manifest.py` now supports `--dataset-kind sintel`, `scripts/sr_temporal_held_out.py` accepts comma-separated manifests, and the remote-generated Sintel manifest is committed at `docs/superpowers/experiments/v5_held_out_manifest_sintel.json`. Commits: `3cfa9f9`, `f822c89`.
 - **C14 — done by Codex at 18:41 CDT.** Sintel fine-tune runbook added at `docs/superpowers/notes/2026-05-04-v5-pixel-sintel-finetune-runbook.md`. It documents the verified v5 continuation path via auto-resume staging, not `--warm-start`, because `--warm-start` is v4-only. Commit: `a432b92`.
-- **C15 — done by Codex at 18:49 CDT.** Phase 1 -> 2 transition observed exactly once at step 10000. Loss stayed within the recent variance envelope; throughput dropped but GPU was 100% utilized, so early Phase 2 appears compute-bound rather than DataLoader-starved. One low-severity logging finding filed below.
+- **C15 — done by Codex at 18:49 CDT.** Phase 1 -> 2 transition observed exactly once at step 10000. Loss stayed within the recent variance envelope; throughput dropped but GPU was 100% utilized, so early Phase 2 appears compute-bound rather than DataLoader-starved. One low-severity logging finding was filed and fixed in `d5a8c55`.
 
 If a probe finds a real bug, file it under `## Open Findings` with severity + file:line citations as you've been doing. Claude will patch.
 
@@ -309,9 +309,13 @@ Remaining documented coverage gaps:
 
 ## Open Findings
 
-### Phase-2 Text Log Omits LPIPS Component
+No unresolved findings besides future training/eval watch items.
 
-Severity: low.
+## Resolved Findings
+
+### Phase-2 Text Log Omitted LPIPS Component
+
+Resolved in `d5a8c55`.
 
 Phase 2 enables LPIPS via `w_lpips_eff = args.lpips_weight if phase != 1 else 0.0` and `appearance_loss()` records `parts["lpips"]` when the LPIPS module is available. However, the periodic text logger only prints `loss`, `t_l1`, `tp1_l1`, and optional `tc`, so the live `train.log` cannot show the LPIPS component requested by C15.
 
@@ -327,9 +331,8 @@ Impact:
 
 Fix direction:
 
-- Include `t_lpips` / `tp1_lpips` in the periodic log suffix when those keys are present.
-
-## Resolved Findings
+- `d5a8c55` includes `t_lpips` / `tp1_lpips` in the periodic log suffix when those keys are present.
+- The current running process loaded the pre-fix trainer, so this applies to future runs/resumes after the process restarts.
 
 ### Remote Sintel Dataset Missing Depth
 
