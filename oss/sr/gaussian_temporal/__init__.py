@@ -4,6 +4,7 @@ from oss.sr.gaussian_temporal.g_buffer_encoder import GBufferEncoder
 from oss.sr.gaussian_temporal.transformer import GaussianMultiFrameTransformer
 from oss.sr.gaussian_temporal.densification import densify
 from oss.sr.gaussian_temporal.pruning import prune
+from oss.sr.gaussian_temporal.rasterizer import render_field
 
 __all__ = [
     "GaussianField",
@@ -13,4 +14,5 @@ __all__ = [
     "GaussianMultiFrameTransformer",
     "densify",
     "prune",
+    "render_field",
 ]
