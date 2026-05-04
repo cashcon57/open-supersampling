@@ -58,15 +58,25 @@ class SequentialPairDataset(Dataset):
         return len(self._pair_indices)
 
     def __getitem__(self, idx: int) -> Mapping[str, Any]:
-        i = self._pair_indices[idx]
-        prev_key = self.base.trajectory_key(i - 1) if i > 0 else None
-        cur_key = self.base.trajectory_key(i)
-        is_first_in_seq = (prev_key != cur_key)
-        return {
-            "t": self.base[i],
-            "t_plus_1": self.base[i + self.pair_stride],
-            "is_first_in_seq": bool(is_first_in_seq),
-        }
+        last_error: Exception | None = None
+        for offset in range(len(self._pair_indices)):
+            i = self._pair_indices[(idx + offset) % len(self._pair_indices)]
+            prev_key = self.base.trajectory_key(i - 1) if i > 0 else None
+            cur_key = self.base.trajectory_key(i)
+            is_first_in_seq = (prev_key != cur_key)
+            try:
+                return {
+                    "t": self.base[i],
+                    "t_plus_1": self.base[i + self.pair_stride],
+                    "is_first_in_seq": bool(is_first_in_seq),
+                }
+            except (OSError, ValueError, RuntimeError) as e:
+                # Real extracted datasets can contain an occasional corrupt
+                # npy/png. Skip the bad pair lazily rather than pre-scanning
+                # every frame at startup.
+                last_error = e
+                continue
+        raise RuntimeError("no readable sequential pair found") from last_error
 
 
 def _field(item: Any, field: str) -> Any:

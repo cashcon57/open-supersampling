@@ -66,21 +66,6 @@ def _load_npy_chw(path: Path, channels: int) -> torch.Tensor:
     return t.contiguous()
 
 
-def _npy_has_channels(path: Path, channels: int) -> bool:
-    """Cheap header/readability check used to skip corrupt extracted files."""
-    try:
-        arr = np.load(path, mmap_mode="r")
-    except Exception:
-        return False
-    if arr.ndim == 2:
-        return channels == 1
-    if arr.ndim != 3:
-        return False
-    if arr.shape[0] in (1, 2, 3) and arr.shape[-1] not in (1, 2, 3):
-        return arr.shape[0] == channels
-    return arr.shape[-1] == channels
-
-
 def _normalize_depth_metres(depth: torch.Tensor) -> torch.Tensor:
     d = depth.clamp(min=0.0)
     p99 = torch.quantile(d.flatten(), 0.99).clamp(min=1e-6)
@@ -129,11 +114,6 @@ class TartanAirGaussianDataset(GaussianDataset):
                 depth_path = depth_dir / f"{idx}_left_depth.npy"
                 flow_path = flow_dir / f"{idx}_{next_idx}_flow.npy"
                 if not (depth_path.exists() and flow_path.exists()):
-                    continue
-                if not (
-                    _npy_has_channels(depth_path, channels=1)
-                    and _npy_has_channels(flow_path, channels=2)
-                ):
                     continue
                 self._items.append((frame, depth_path, flow_path))
 

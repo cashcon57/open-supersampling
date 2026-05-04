@@ -114,3 +114,18 @@ def test_pair_stride_invalid_raises() -> None:
         assert "pair_stride" in str(e)
     else:
         raise AssertionError("expected ValueError on pair_stride=0")
+
+
+def test_pair_dataset_skips_unreadable_pairs() -> None:
+    class _OneBadBase(_FakeBase):
+        def __getitem__(self, idx: int):
+            if idx == 1:
+                raise ValueError("corrupt sample")
+            return super().__getitem__(idx)
+
+    ds = SequentialPairDataset(_OneBadBase())
+    pair = ds[0]
+    # Pair (0,1) is unreadable because frame 1 raises, so ds[0] advances to
+    # the next readable sequential pair.
+    assert pair["t"]["lr_frame"][0, 0, 0].item() == 2.0
+    assert pair["t_plus_1"]["lr_frame"][0, 0, 0].item() == 3.0

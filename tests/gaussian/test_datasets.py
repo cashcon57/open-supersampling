@@ -258,7 +258,7 @@ def test_tartanair_loader_smoke(tartanair_root: Path) -> None:
     assert e.metadata["source"] == "tartanair"
 
 
-def test_tartanair_loader_skips_corrupt_flow_file(tartanair_root: Path) -> None:
+def test_tartanair_loader_reports_corrupt_flow_path(tartanair_root: Path) -> None:
     bad_flow = (
         tartanair_root
         / "abandonedfactory"
@@ -269,10 +269,8 @@ def test_tartanair_loader_skips_corrupt_flow_file(tartanair_root: Path) -> None:
     )
     bad_flow.write_bytes(b"not a valid npy")
     ds = TartanAirGaussianDataset(root=tartanair_root, scale=SCALE)
-    assert len(ds) == 1
-    assert "000001_left.png" in str(ds._items[0][0])
-    e = ds[0]
-    _check_example_shapes(e, lr_h=HR_H // int(SCALE), lr_w=HR_W // int(SCALE), hr_h=HR_H, hr_w=HR_W)
+    with pytest.raises(ValueError, match="000000_000001_flow.npy"):
+        ds[0]
 
 
 def test_hypersim_loader_smoke(hypersim_root: Path) -> None:
