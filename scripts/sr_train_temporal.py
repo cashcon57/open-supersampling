@@ -670,14 +670,21 @@ def main(argv: list[str] | None = None) -> int:
             )
 
         # Periodic checkpoint + rolling metrics dump.
+        # Dashboard schema (scripts/training_dashboard.py): each score_log
+        # entry must expose ``model_psnr_mean`` and ``model_lpips_mean`` so
+        # the chart panels render. Bicubic fields are optional; the dashboard
+        # falls back to 0 via ``r.bicubic_psnr_mean ?? 0``. Real bicubic +
+        # held-out metrics are produced by ``scripts/sr_temporal_held_out.py``.
         if step % args.ckpt_every == 0 or step == args.max_steps or args.smoke:
             save_checkpoint(args.output_dir, step, model, optim, args)
             score_log.append({
                 "step": step,
                 "loss": float(parts["loss"]),
                 "phase": int(cur_phase),
-                "psnr": _approx_psnr_from_l1(parts.get("t_l1", parts["loss"])),
-                "lpips": parts.get("t_lpips"),
+                "model_psnr_mean": _approx_psnr_from_l1(parts.get("t_l1", parts["loss"])),
+                "bicubic_psnr_mean": None,
+                "model_lpips_mean": parts.get("t_lpips"),
+                "bicubic_lpips_mean": None,
             })
             dump_metrics(args.output_dir, metrics_log, score_log)
 
@@ -689,10 +696,12 @@ def main(argv: list[str] | None = None) -> int:
                 "step": final_step,
                 "loss": float(parts.get("loss", float("nan"))),
                 "phase": int(cur_phase),
-                "psnr": _approx_psnr_from_l1(
+                "model_psnr_mean": _approx_psnr_from_l1(
                     parts.get("t_l1", parts.get("loss", 1.0))
                 ),
-                "lpips": parts.get("t_lpips"),
+                "bicubic_psnr_mean": None,
+                "model_lpips_mean": parts.get("t_lpips"),
+                "bicubic_lpips_mean": None,
             })
         dump_metrics(args.output_dir, metrics_log, score_log)
 

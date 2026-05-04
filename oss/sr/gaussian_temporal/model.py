@@ -128,7 +128,23 @@ class GaussianTemporalSRModel(nn.Module):
             warped, opacity_threshold=self.opacity_threshold, max_count=self.max_count
         )
 
-        debug = {"count_alive": int(new_field.count_alive())}
+        # ---- Populate history -------------------------------------------------
+        # The transformer attends over up to ``history_len`` prior frames; the
+        # caller carries ``new_field`` to the next forward call as ``prev_field``,
+        # so the history must contain a snapshot of the prior fields.
+        # ``push_history`` appendleft-s, so the newest snapshot must be pushed
+        # LAST. We push older snapshots first (in reverse so the iteration
+        # order matches deque newest-first when pushed), then push prev_field.
+        # The deque's ``maxlen=HISTORY_LEN`` truncates oldest if overflowed.
+        if prev_field is not None:
+            for older in reversed(prev_field.history):
+                new_field.push_history(older)
+            new_field.push_history(prev_field.clone())
+
+        debug = {
+            "count_alive": int(new_field.count_alive()),
+            "history_len": len(new_field.history),
+        }
         return rendered_hr, new_field, debug
 
 

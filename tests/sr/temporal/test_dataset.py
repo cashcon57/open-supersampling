@@ -65,3 +65,28 @@ def test_collate_pair() -> None:
     assert batch["tp1_lr"].shape == (3, 3, 8, 8)
     assert batch["t_gt_hr"].shape == (3, 3, 16, 16)
     assert batch["is_first_in_seq"].shape == (3,)
+
+
+def test_pair_stride_two() -> None:
+    """Codex MEDIUM finding: API gap on pair_stride. Default=1; larger
+    strides skip ``pair_stride-1`` intermediate frames per pair, and pairs
+    that would cross trajectory boundaries are excluded."""
+    base = _FakeBase()
+    ds = SequentialPairDataset(base, pair_stride=2)
+    # Seq A (5 frames): pairs (0,2), (1,3), (2,4) = 3.
+    # Seq B (3 frames): pairs (5,7) = 1.
+    # Total = 4.
+    assert len(ds) == 4
+    pair = ds[0]
+    assert pair["t"]["lr_frame"][0, 0, 0].item() == 0.0
+    assert pair["t_plus_1"]["lr_frame"][0, 0, 0].item() == 2.0
+
+
+def test_pair_stride_invalid_raises() -> None:
+    base = _FakeBase()
+    try:
+        SequentialPairDataset(base, pair_stride=0)
+    except ValueError as e:
+        assert "pair_stride" in str(e)
+    else:
+        raise AssertionError("expected ValueError on pair_stride=0")

@@ -19,20 +19,40 @@ from torch.utils.data import Dataset
 
 
 class SequentialPairDataset(Dataset):
-    def __init__(self, base: Any) -> None:
+    """Wraps a base dataset to emit consecutive frame pairs ``(t, t+pair_stride)``.
+
+    ``pair_stride`` controls the frame gap between paired samples:
+    - ``pair_stride=1`` (default): adjacent frames ``(i, i+1)``
+    - ``pair_stride=k``: frames ``(i, i+k)`` from the same trajectory; frames
+      whose trajectory key changes within ``[i, i+k]`` are excluded
+
+    The default of 1 matches the spec; larger strides expose the model to
+    longer-displacement motion during training when the dataset's flow is
+    accumulated forward.
+    """
+
+    def __init__(self, base: Any, pair_stride: int = 1) -> None:
         if not hasattr(base, "trajectory_key"):
             raise TypeError(
                 "Base dataset must expose `trajectory_key(idx) -> hashable`. "
                 "Use adapt_tartanair / adapt_sintel to add it."
             )
+        if pair_stride < 1:
+            raise ValueError(f"pair_stride must be >= 1; got {pair_stride}")
         self.base = base
+        self.pair_stride = int(pair_stride)
         self._pair_indices: List[int] = []
-        prev_key = None
         for i in range(len(base)):
+            j = i + self.pair_stride
+            if j >= len(base):
+                continue
+            # All intermediate frames must share the same trajectory key.
             cur_key = base.trajectory_key(i)
-            if i + 1 < len(base) and base.trajectory_key(i + 1) == cur_key:
+            same_traj = all(
+                base.trajectory_key(k) == cur_key for k in range(i + 1, j + 1)
+            )
+            if same_traj:
                 self._pair_indices.append(i)
-            prev_key = cur_key
 
     def __len__(self) -> int:
         return len(self._pair_indices)
@@ -44,7 +64,7 @@ class SequentialPairDataset(Dataset):
         is_first_in_seq = (prev_key != cur_key)
         return {
             "t": self.base[i],
-            "t_plus_1": self.base[i + 1],
+            "t_plus_1": self.base[i + self.pair_stride],
             "is_first_in_seq": bool(is_first_in_seq),
         }
 

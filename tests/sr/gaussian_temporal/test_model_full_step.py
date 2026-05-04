@@ -167,3 +167,29 @@ def test_export_in_package_namespace() -> None:
     from oss.sr.gaussian_temporal import GaussianTemporalSRModel as M2
 
     assert M2 is GaussianTemporalSRModel
+
+
+def test_history_populates_across_frames() -> None:
+    """Codex HIGH finding: model must populate new_field.history across frames
+    so the multi-frame transformer is actually multi-frame."""
+    model = GaussianTemporalSRModel(in_channels=12, scale=2, max_count=2048)
+    motion_lr = torch.zeros(1, 2, 32, 32)
+
+    # Frame 0: prev_field=None → history should be empty.
+    lr0 = _make_lr_inputs(seed=0)
+    _, field0, dbg0 = model(lr0, motion_lr, prev_field=None)
+    assert dbg0["history_len"] == 0
+
+    # Frame 1: prev_field=field0 → history should now contain 1 snapshot.
+    lr1 = _make_lr_inputs(seed=1)
+    _, field1, dbg1 = model(lr1, motion_lr, prev_field=field0)
+    assert dbg1["history_len"] == 1
+    assert len(field1.history) == 1
+
+    # Frame 2..6: history grows up to HISTORY_LEN=5 then caps.
+    cur = field1
+    for i in range(2, 8):
+        lr_i = _make_lr_inputs(seed=i)
+        _, cur, dbg_i = model(lr_i, motion_lr, prev_field=cur)
+        expected = min(i, 5)
+        assert dbg_i["history_len"] == expected, f"frame {i}: got {dbg_i['history_len']}, expected {expected}"
