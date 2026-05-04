@@ -41,6 +41,11 @@ class GaussianTemporalSRModel(nn.Module):
         self.scale = scale
         self.max_count = max_count
         self.encoder = GBufferEncoder(in_channels=in_channels, feat_dim=128, tile_size=16)
+        # Per-frame fitter used to seed Gaussian colors from encoder features.
+        # This keeps Phase 1 trainable while bypassing temporal attention.
+        self.fitter_rgb_head = nn.Conv2d(128, 3, kernel_size=1)
+        nn.init.normal_(self.fitter_rgb_head.weight, mean=0.0, std=1e-3)
+        nn.init.zeros_(self.fitter_rgb_head.bias)
         self.transformer = GaussianMultiFrameTransformer(
             d_model=128, n_heads=4, n_layers=4, history_len=5,
         )
@@ -55,27 +60,55 @@ class GaussianTemporalSRModel(nn.Module):
         lr_inputs: torch.Tensor,
         motion_lr: torch.Tensor,
         prev_field: Optional[GaussianField],
+        phase: int = 3,
     ) -> tuple[torch.Tensor, GaussianField, dict]:
+        """Run the full Gaussian-temporal pipeline.
+
+        Args:
+            phase: Training-phase isolation gate, per the spec's 4-phase
+                schedule.
+                - ``phase=1``: single-frame fitter only — encoder + density +
+                  raster. Transformer is bypassed entirely. ``prev_field`` and
+                  history are ignored (Phase 1 is per-frame).
+                - ``phase=2``: warped prev-field + 2-effective-layer
+                  transformer warmup. Encoder is meant to be frozen by the
+                  trainer (this method does not enforce that).
+                - ``phase=3`` (default): full 4-layer transformer, full
+                  pipeline.
+                - ``phase=4``: same architecture as Phase 3; reserved for
+                  trainer-side LR scaling on Sintel-only fine-tune.
+        """
         b, _, h_lr, w_lr = lr_inputs.shape
         h_hr, w_hr = h_lr * self.scale, w_lr * self.scale
         if b != 1:
             raise ValueError(f"GaussianTemporalSRModel expects B=1; got {b}.")
+        if phase not in (1, 2, 3, 4):
+            raise ValueError(f"phase must be in {{1,2,3,4}}; got {phase}.")
 
         feats = self.encoder(lr_inputs)               # (1, 128, h/16, w/16)
+        fitter_rgb_hr = F.interpolate(
+            torch.sigmoid(self.fitter_rgb_head(feats)),
+            size=(h_hr, w_hr),
+            mode="bilinear",
+            align_corners=False,
+        )
+
+        # Phase 1 isolates the per-frame fitter — no temporal, no transformer.
+        # Force prev_field=None so the warp+transformer paths cannot run, and
+        # downstream history population becomes a no-op.
+        if phase == 1:
+            prev_field = None
 
         # ---- First-frame seed -------------------------------------------------
         if prev_field is None:
             # Empty field; seed via densification so count_alive > 0 at frame 0.
-            # Target = bilinear-upscale of LR RGB; baseline rendered = zeros.
+            # Target comes from the trainable per-frame fitter; baseline render
+            # is zeros.
             warped = GaussianField(capacity=self.max_count, device=lr_inputs.device)
-            lr_rgb = lr_inputs[:, :3]
-            target_hr = F.interpolate(
-                lr_rgb, size=(h_hr, w_hr), mode="bilinear", align_corners=False
-            )
-            zero_render = torch.zeros_like(target_hr)
+            zero_render = torch.zeros_like(fitter_rgb_hr)
             warped = densify(
                 warped,
-                lr_target=target_hr,
+                lr_target=fitter_rgb_hr,
                 rendered=zero_render,
                 tile_size=self.scale * 16,  # match encoder tile size at HR
                 residual_threshold=0.0,
@@ -87,8 +120,15 @@ class GaussianTemporalSRModel(nn.Module):
             history = prev_field.history
 
         # ---- Transformer update over alive tokens -----------------------------
-        if warped.count_alive() > 0:
-            updates = self.transformer(field_curr=warped, history=history, tile_features=feats)
+        # Phase 1 bypasses the transformer entirely (single-frame fitter).
+        # Phase 2 uses 2 effective layers (transformer warmup).
+        # Phase 3+ uses all layers.
+        if phase != 1 and warped.count_alive() > 0:
+            effective_layers = 2 if phase == 2 else None
+            updates = self.transformer(
+                field_curr=warped, history=history, tile_features=feats,
+                effective_layers=effective_layers,
+            )
             alive_idx = warped.alive.nonzero(as_tuple=True)[0]
             warped.mu = warped.mu.clone()
             warped.log_scale = warped.log_scale.clone()
@@ -106,8 +146,9 @@ class GaussianTemporalSRModel(nn.Module):
         # Match Phase 1+2+3 spec — residual densification active in the model.
         # Train loop can also do an additional pass against GT HR if desired.
         lr_rgb = lr_inputs[:, :3]
-        target_hr = F.interpolate(
-            lr_rgb, size=(h_hr, w_hr), mode="bilinear", align_corners=False
+        target_hr = (
+            fitter_rgb_hr if phase == 1 else
+            F.interpolate(lr_rgb, size=(h_hr, w_hr), mode="bilinear", align_corners=False)
         )
         warped = densify(
             warped,

@@ -169,6 +169,113 @@ def test_export_in_package_namespace() -> None:
     assert M2 is GaussianTemporalSRModel
 
 
+def test_phase1_bypasses_transformer() -> None:
+    """Codex HIGH finding: Phase 1 must isolate the per-frame fitter — the
+    transformer must NOT be called. We monkey-patch the transformer's forward
+    to record calls, then run a 2-frame loop in phase=1 and assert no calls."""
+    model = GaussianTemporalSRModel(in_channels=12, scale=2, max_count=2048)
+    motion_lr = torch.zeros(1, 2, 32, 32)
+
+    call_count = {"n": 0}
+    real_fwd = model.transformer.forward
+
+    def _spy(*a, **k):
+        call_count["n"] += 1
+        return real_fwd(*a, **k)
+
+    model.transformer.forward = _spy  # type: ignore[method-assign]
+    try:
+        lr0 = _make_lr_inputs(seed=0)
+        _, field0, _ = model(lr0, motion_lr, prev_field=None, phase=1)
+        lr1 = _make_lr_inputs(seed=1)
+        _, _, _ = model(lr1, motion_lr, prev_field=field0, phase=1)
+    finally:
+        model.transformer.forward = real_fwd  # type: ignore[method-assign]
+
+    assert call_count["n"] == 0, f"Phase 1 called transformer {call_count['n']} times"
+
+
+def test_phase1_backward_trains_per_frame_fitter() -> None:
+    """Phase 1 bypasses temporal attention but must still have a trainable
+    encoder/fitter path."""
+    torch.manual_seed(3)
+    model = GaussianTemporalSRModel(in_channels=12, scale=2, max_count=2048)
+    motion_lr = torch.zeros(1, 2, 32, 32)
+    lr = _make_lr_inputs(seed=3)
+    out_hr, _, _ = model(lr, motion_lr, prev_field=None, phase=1)
+    gt = torch.nn.functional.interpolate(
+        lr[:, :3], size=(64, 64), mode="bilinear", align_corners=False
+    )
+    loss = (out_hr - gt).abs().mean()
+    assert loss.requires_grad
+    loss.backward()
+
+    assert model.fitter_rgb_head.weight.grad is not None
+    assert torch.isfinite(model.fitter_rgb_head.weight.grad).all()
+    assert model.fitter_rgb_head.weight.grad.abs().sum() > 0
+
+    enc_has_grad = False
+    for p in model.encoder.parameters():
+        if p.grad is not None and p.grad.abs().sum() > 0:
+            enc_has_grad = True
+            break
+    assert enc_has_grad, "Phase 1 produced no non-zero encoder gradients"
+
+
+def test_phase2_uses_two_effective_layers() -> None:
+    """Codex HIGH finding: Phase 2 should use only the first 2 transformer
+    layers (warmup), not all 4. Spy on transformer.forward to capture the
+    effective_layers kwarg."""
+    model = GaussianTemporalSRModel(in_channels=12, scale=2, max_count=2048)
+    motion_lr = torch.zeros(1, 2, 32, 32)
+
+    captured = {"effective_layers": None, "called": 0}
+    real_fwd = model.transformer.forward
+
+    def _spy(*a, **k):
+        captured["effective_layers"] = k.get("effective_layers")
+        captured["called"] += 1
+        return real_fwd(*a, **k)
+
+    model.transformer.forward = _spy  # type: ignore[method-assign]
+    try:
+        lr0 = _make_lr_inputs(seed=0)
+        _, field0, _ = model(lr0, motion_lr, prev_field=None, phase=2)
+        lr1 = _make_lr_inputs(seed=1)
+        _, _, _ = model(lr1, motion_lr, prev_field=field0, phase=2)
+    finally:
+        model.transformer.forward = real_fwd  # type: ignore[method-assign]
+
+    assert captured["called"] >= 1, "Phase 2 should call transformer at least once"
+    assert captured["effective_layers"] == 2, (
+        f"Phase 2 must pass effective_layers=2; got {captured['effective_layers']}"
+    )
+
+
+def test_phase3_uses_all_layers() -> None:
+    """Default Phase 3 uses the full transformer (effective_layers=None)."""
+    model = GaussianTemporalSRModel(in_channels=12, scale=2, max_count=2048)
+    motion_lr = torch.zeros(1, 2, 32, 32)
+
+    captured = {"effective_layers": "<unset>"}
+    real_fwd = model.transformer.forward
+
+    def _spy(*a, **k):
+        captured["effective_layers"] = k.get("effective_layers", "<unset>")
+        return real_fwd(*a, **k)
+
+    model.transformer.forward = _spy  # type: ignore[method-assign]
+    try:
+        lr0 = _make_lr_inputs(seed=0)
+        _, field0, _ = model(lr0, motion_lr, prev_field=None, phase=3)
+        lr1 = _make_lr_inputs(seed=1)
+        _, _, _ = model(lr1, motion_lr, prev_field=field0, phase=3)
+    finally:
+        model.transformer.forward = real_fwd  # type: ignore[method-assign]
+
+    assert captured["effective_layers"] is None
+
+
 def test_history_populates_across_frames() -> None:
     """Codex HIGH finding: model must populate new_field.history across frames
     so the multi-frame transformer is actually multi-frame."""

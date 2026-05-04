@@ -150,10 +150,10 @@ nvidia-smi --query-gpu=memory.used,utilization.gpu,temperature.gpu --format=csv
 Get-Process | Where-Object { $_.ProcessName -eq 'python' -and $_.MainWindowTitle -like '*dashboard*' } | Stop-Process
 
 cd <train-host-data>\oss-gaussian
-<windows-home>\Miniconda3\envs\image-gs\python.exe scripts\sr_dashboard.py --run-dir <train-host-data>\checkpoints\srcnn-v5-gaussian-temporal
+<windows-home>\Miniconda3\envs\image-gs\python.exe scripts\training_dashboard.py --output-dir <train-host-data>\checkpoints\srcnn-v5-gaussian-temporal --log-file <train-host-data>\checkpoints\srcnn-v5-gaussian-temporal\train.log --port 8080 --host 0.0.0.0
 ```
 
-Browse to `http://<train-host>:8080/` (or whatever port the dashboard prints).
+Browse to `http://<tailnet-ip>:8080/` (Tailscale alias of `<train-host>`).
 
 ---
 

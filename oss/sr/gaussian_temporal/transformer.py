@@ -285,7 +285,16 @@ class GaussianMultiFrameTransformer(nn.Module):
         field_curr: GaussianField,
         history: List[GaussianField],
         tile_features: torch.Tensor,
+        effective_layers: int | None = None,
     ) -> dict[str, torch.Tensor]:
+        """Run multi-frame attention over Gaussian + tile tokens.
+
+        Args:
+            effective_layers: If provided, only the first ``effective_layers``
+                blocks are used. Required for the v5 Gaussian Phase-2 schedule
+                ("2-layer transformer warmup"). Default ``None`` uses all
+                ``n_layers`` blocks (Phase 3+ behavior).
+        """
         if tile_features.dim() != 4:
             raise ValueError(
                 f"tile_features must be (B, F, h, w); got shape {tuple(tile_features.shape)}"
@@ -341,7 +350,16 @@ class GaussianMultiFrameTransformer(nn.Module):
         positions = torch.cat(pos_chunks, dim=1)  # (1, T, 2)
 
         # ---- transformer body ----------------------------------------- #
-        for block in self.blocks:
+        if effective_layers is None:
+            n_blocks = self.n_layers
+        else:
+            if not (1 <= effective_layers <= self.n_layers):
+                raise ValueError(
+                    f"effective_layers={effective_layers} out of range "
+                    f"[1, {self.n_layers}]"
+                )
+            n_blocks = int(effective_layers)
+        for block in self.blocks[:n_blocks]:
             x = block(x, positions)
         x = self.norm_out(x)
 

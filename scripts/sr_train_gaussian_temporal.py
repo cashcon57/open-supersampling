@@ -406,8 +406,13 @@ def train_step(
         )
 
         feed_prev = prev_field if phase >= 2 else None
+        # Pass phase to the model so it can isolate its forward path:
+        #   phase=1 → bypass transformer entirely (single-frame fitter)
+        #   phase=2 → use 2 effective transformer layers (warmup)
+        #   phase>=3 → full architecture
         out_hr, new_field, _dbg = model(
             lr_inputs=x12, motion_lr=motion_for_model, prev_field=feed_prev,
+            phase=phase,
         )
 
         # Appearance loss on every frame.
@@ -718,40 +723,20 @@ def main(argv: list[str] | None = None) -> int:
             )
 
         # Periodic checkpoint + rolling metrics dump.
-        # Dashboard schema (scripts/training_dashboard.py): score_log entries
-        # must expose ``model_psnr_mean``, ``bicubic_psnr_mean``,
-        # ``model_lpips_mean``, ``bicubic_lpips_mean``. Bicubic fields are
-        # None at training time; the held-out script writes real values.
+        # Per Codex finding: do NOT append synthetic eval rows to score_log
+        # during training. Dashboard's eval cards / margin lines treat any
+        # row in score_log as a real held-out eval — emitting train-loss-derived
+        # rows with bicubic=None makes JS coerce null→0, showing a misleading
+        # positive PSNR margin before the held-out script runs. Training
+        # progress lives in metrics.json train rows; score_log.json stays
+        # empty until scripts/sr_gaussian_temporal_held_out.py populates it.
         if step % args.ckpt_every == 0 or step == args.max_steps or args.smoke:
             save_checkpoint(args.output_dir, step, model, optim, args)
-            score_log.append({
-                "step": step,
-                "loss": float(parts["loss"]),
-                "phase": int(cur_phase),
-                "model_psnr_mean": _approx_psnr_from_l1(
-                    parts.get("f0_l1", parts["loss"])
-                ),
-                "bicubic_psnr_mean": None,
-                "model_lpips_mean": None,
-                "bicubic_lpips_mean": None,
-            })
             dump_metrics(args.output_dir, metrics_log, score_log)
 
     # Final dump (idempotent).
     if final_step > 0:
         save_checkpoint(args.output_dir, final_step, model, optim, args)
-        if not score_log or score_log[-1]["step"] != final_step:
-            score_log.append({
-                "step": final_step,
-                "loss": float(parts.get("loss", float("nan"))),
-                "phase": int(cur_phase),
-                "model_psnr_mean": _approx_psnr_from_l1(
-                    parts.get("f0_l1", parts.get("loss", 1.0))
-                ),
-                "bicubic_psnr_mean": None,
-                "model_lpips_mean": None,
-                "bicubic_lpips_mean": None,
-            })
         dump_metrics(args.output_dir, metrics_log, score_log)
 
     elapsed = time.monotonic() - train_start
