@@ -78,7 +78,7 @@ def _render_iteration(
     import torch
     import torch.nn.functional as F
 
-    from oss.gaussian.data import EngineAliasedLRSynth, TartanAirGaussianDataset
+    from oss.gaussian.data import TartanAirGaussianDataset
     from oss.sr.temporal import (
         SequentialPairDataset, TemporalSRModel,
         adapt_tartanair, make_first_frame_prev_hr,
@@ -110,10 +110,12 @@ def _render_iteration(
         model.backbone.load_state_dict(ck["sr_model"])
     model.train(False)
 
-    # Load manifest + dataset.
+    # Load manifest + dataset. The dataset's __getitem__ already produces an
+    # LR frame box-downsampled from HR, which is enough for an in-flight
+    # visual sanity check (the engine-aliased LR-synth path used in training
+    # is more realistic but not needed for "is the model improving" eyeballing).
     manifest = load_manifest(manifest_path)
     pairs_meta = manifest["pairs"][:n_pairs]
-    lr_synth = EngineAliasedLRSynth(**manifest.get("lr_synth_args", {}))
     base = adapt_tartanair(TartanAirGaussianDataset(root=tartanair_root, scale=manifest["lr_scale"]))
     pair_ds = SequentialPairDataset(base)
 
@@ -136,8 +138,8 @@ def _render_iteration(
         if base_idx_t is None:
             continue
         ex_t = base[base_idx_t]
-        # Synth LR from HR.
-        lr_t = lr_synth(ex_t.gt_hr_frame.unsqueeze(0)).squeeze(0)
+        # Use the dataset's already-prepared LR frame (box-downsampled HR).
+        lr_t = ex_t.lr_frame
         depth = ex_t.depth.to(device)
         motion = ex_t.motion.to(device)
         normals = (ex_t.normals if ex_t.normals is not None else
