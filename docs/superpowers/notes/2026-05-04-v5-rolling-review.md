@@ -2,7 +2,7 @@
 
 **Status:** Active living document  
 **Purpose:** Shared rolling review surface for Sprint 5 dual-track implementation planning and code review. Claude/Codex agents should read and update this file before dispatching implementation or reviewer subagents.  
-**Last updated:** 2026-05-04 17:37 CDT
+**Last updated:** 2026-05-04 17:47 CDT
 
 **Watcher:** Codex (review) / Claude (implementer-controller)
 
@@ -30,7 +30,7 @@ Sprint 5 planning artifacts created during this watch:
 
 Claude/Codex launch-status note:
 
-- `docs/superpowers/notes/2026-05-04-v5-pixel-launch-status.md` is tracked. It records the failed early launch attempts and the active TartanAir-only relaunch on `<train-host>`: python PID `2360`, parent `cmd.exe` PID `15652`, dashboard PID `14952`. Latest Codex check at 17:35 CDT: PID `2360` alive and log reached step `1820` with finite Phase-1 losses.
+- `docs/superpowers/notes/2026-05-04-v5-pixel-launch-status.md` is tracked. It records the failed early launch attempts and the active TartanAir-only relaunch on `<train-host>`: python PID `2360`, parent `cmd.exe` PID `15652`, dashboard PID `14952`. Latest Codex check at 17:46 CDT: PID `2360` alive and log reached step `2620` with finite Phase-1 losses. First checkpoint `step-00002000.pt` is verified.
 
 Latest observed hashes for active Sprint 5 files:
 
@@ -168,6 +168,11 @@ Results:
 Verification caveat: default `python3` and `.venv/bin/python` do not have `torch` or `pytest`; `venv/bin/python` has `pytest` but not `torch`. Use `venv-py312/bin/python` for local CPU tests. For CUDA/PyTorch-heavy verification, Cash notes that PyTorch is also available on at least one Tailnet machine plus the RunPod and Lambda instances used by the project.
 
 Observed commits on `v0.2-dev`:
+- `ab08f73` sprint5(sr): pre-stage deterministic held-out manifest for v5 eval
+- `24d7fbf` sprint5(runbooks): guard missing Sintel depth
+- `9f8d3ac` sprint5(plans): sync task sidecar statuses
+- `475f27f` sprint5(notes): update live pixel status
+- `e790dde` sprint5(notes): record gaussian C4 review
 - `d6bc655` v5-gaussian(sr): warp field in HR coordinates
 - `2e4f43a` sprint5(notes): update pixel launch recovery
 - `10e75df` v5-pixel(sr): skip unreadable frame pairs lazily
@@ -211,7 +216,7 @@ Observed commits on `v0.2-dev`:
 - `2d315e1` v5-pixel(sr): add motion-vec upsample + backward HR warp helpers
 - `0820439` v5-gaussian(sr): add GaussianField SoA + history container
 
-Tracked pixel Task 8 and Gaussian Tasks 8-12 are committed. The prior high pixel flow-direction finding is fixed in `38cf507`. The three later implementation findings are fixed in `c1bad69`, with score-log documentation aligned in `bd1f77a`. C3 found and fixed one pixel inference checkpoint-loader bug in `4ed319a`, then expanded Task 7 train schedule/resume coverage in `b185df6`. C4 found and fixed one Gaussian model coordinate-space bug in `d6bc655`. Plan task sidecars were status-synced at 17:32 CDT.
+Tracked pixel Task 8 and Gaussian Tasks 8-12 are committed. The prior high pixel flow-direction finding is fixed in `38cf507`. The three later implementation findings are fixed in `c1bad69`, with score-log documentation aligned in `bd1f77a`. C3 found and fixed one pixel inference checkpoint-loader bug in `4ed319a`, then expanded Task 7 train schedule/resume coverage in `b185df6`. C4 found and fixed one Gaussian model coordinate-space bug in `d6bc655`. Plan task sidecars were status-synced at 17:32 CDT. Deterministic held-out manifest scaffolding landed in `ab08f73`.
 
 ## Tasks for Codex
 
@@ -223,6 +228,7 @@ Active asks:
 - **C2 — done by Codex at 16:40 CDT.** Synthetic held-out probe used `t_motion=+1` and `tp1_motion=-2`; fake temporal model saw motion calls `[1.0, 1.0]`, and `tstab_temporal` was exactly `0.0`, which would not hold if `tp1_motion` were used for the second render or stability warp.
 - **C3 — done by Codex at 17:02 CDT.** Pixel Tasks 0-9 reviewed against `docs/superpowers/plans/2026-05-04-v5-pixel-temporal-plan.md`. One real bug fixed (`TemporalSRInferenceEngine.from_checkpoint` now honors saved `backbone_kind`), and Pixel Task 7 gained schedule, score-log, and auto-resume tests. Remaining gaps are documented below under "C3 Pixel Spec Compliance Review"; none currently block the launched pixel run.
 - **C4 — done by Codex at 17:28 CDT.** Gaussian Tasks 0-9 reviewed against `docs/superpowers/plans/2026-05-04-v5-gaussian-temporal-plan.md`. One real bug fixed: `GaussianTemporalSRModel` now lifts LR motion into HR field coordinates before warping persistent Gaussians (`d6bc655`). Full Gaussian-temporal suite passed 59/59 after the fix.
+- **C7 — done by Codex at 17:47 CDT.** README S5 status updated: implementation complete, pixel training in flight, Gaussian queued, Sintel Depth missing, and no v5 ship decision claimed.
 
 If a probe finds a real bug, file it under `## Open Findings` with severity + file:line citations as you've been doing. Claude will patch.
 
@@ -780,6 +786,19 @@ C4 Gaussian spec-compliance pass and live monitor:
 - Remote pixel training PID `2360` still alive at 17:35 CDT; latest observed log reached step `1820`.
 - Plan task sidecars status-synced: pixel Tasks 0-9 completed / Task 10 pending; Gaussian Tasks 0-13 completed / Task 14 pending. The source `.md` plans remain authoritative for task details.
 - Pixel and Gaussian remote runbooks now treat missing `<train-host-data>\datasets\sintel\training\depth` as "Sintel unavailable" and omit `--sintel-root` from copy-paste launch/eval commands until the depth package exists.
+
+### 17:37-17:47 CDT
+
+Network changed and recovered:
+
+- SSH to `<train-host>` and GitHub access both worked after the network change.
+- Remote pixel training PID `2360` remained alive; latest observed log reached step `2620` at 17:46 CDT with finite Phase-1 losses.
+- First pixel checkpoint verified: `<train-host-data>\checkpoints\srcnn-v5-pixel-temporal\step-00002000.pt`, size `2,706,462` bytes, `metrics.json` through step 2000, `"score": []`.
+- `ab08f73` landed deterministic held-out manifest scaffolding: `oss/sr/temporal/held_out_manifest.py`, `scripts/sr_freeze_held_out_manifest.py`, and `tests/sr/temporal/test_held_out_manifest.py`.
+- An untracked stateless-export test appeared; Codex added `oss/sr/temporal/stateless_export.py` and exported `TemporalSRModelStateless`.
+- Verification: `venv-py312/bin/python -m pytest tests/sr/temporal/test_stateless_export.py tests/sr/temporal/test_held_out_manifest.py tests/sr/temporal/test_train_smoke.py -v` → 14 passed.
+- Full local SR verification after stateless-export wrapper: `venv-py312/bin/python -m pytest tests/sr -v` → 124 passed, 1 skipped, 14 warnings.
+- C7 README update completed: Sprint 5 now shows implementation complete, pixel training in flight, Gaussian queued, Sintel Depth missing, and no v5 ship decision claimed.
 
 ## Suggested Monitor Command
 

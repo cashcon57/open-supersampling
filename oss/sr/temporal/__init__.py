@@ -6,6 +6,7 @@ from oss.sr.temporal.dataset import (
 )
 from oss.sr.temporal.disocclusion import DisocclusionGate
 from oss.sr.temporal.model import TemporalSRModel, make_first_frame_prev_hr
+from oss.sr.temporal.stateless_export import TemporalSRModelStateless
 from oss.sr.temporal.temporal_head import TemporalHead
 from oss.sr.temporal.warp import upsample_motion_to_hr, warp_prev_hr
 
@@ -14,6 +15,7 @@ __all__ = [
     "SequentialPairDataset",
     "TemporalHead",
     "TemporalSRModel",
+    "TemporalSRModelStateless",
     "adapt_sintel",
     "adapt_tartanair",
     "default_collate_pair",

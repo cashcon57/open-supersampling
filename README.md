@@ -2,7 +2,7 @@
 
 > Vendor-agnostic open-source real-time game super-resolution and frame extrapolation.
 
-**Status:** Pre-alpha / active research. Single-frame upscaler trained and exported. Temporal track in design. Not yet suitable for production use.
+**Status:** Pre-alpha / active research. Single-frame upscaler trained and exported. Sprint 5 temporal implementation is in flight: pixel-temporal training is running, Gaussian-temporal is queued for the same GPU. Not yet suitable for production use.
 
 ---
 
@@ -65,7 +65,7 @@ These numbers are honest and current. **The deliberate comparison is FSR 2/3 at 
 |---|---|---|---|
 | **S1–S3** | Renderer scaffolding, hooks, tile classifier | ✓ done | components scaffolded + tests pass |
 | **S4** | Single-frame SR-CNN trained, ONNX/TRT export | ✓ done (v3 + v4 shipped, A/B confirms v4 real) | v4 beats v3 on fixed-batch held-out |
-| **S5** | **v5 dual-track temporal** (current sprint) | ⏳ design committed, impl pending | one track meets success criteria, ships as v5 |
+| **S5** | **v5 dual-track temporal** (current sprint) | ⏳ implementation complete; pixel training in flight, Gaussian queued | one track meets success criteria, ships as v5 |
 | **S6** | Performance pass: distill, custom CUDA mega-kernel, vendor ports | ❌ not started | TRT FP16 latency cut ≥3× |
 | **S7** | Game integration: DXGI hook + NGX shim + Vulkan layer + OSS-FX | ❌ not started | runtime swap working in one DX12 title |
 
@@ -75,21 +75,23 @@ The current v4 is the strong single-frame baseline. Quality is now bottlenecked 
 
 **Phase 0 (done 2026-05-04):**
 - Fixed-batch A/B v3 vs v4 on CitySample held-out — v4 wins LPIPS 64/64 (-22%), PSNR tied. v4 is a real perceptual improvement.
-- TartanAir extraction kicked off (72 zips, ~600 GB extracted, primary temporal training data)
+- TartanAir extraction completed on the remote 3080 Ti host (72 zips, ~600 GB extracted, primary temporal training data)
 - v5-pixel-temporal + v5-gaussian-temporal design specs written: [pixel](docs/superpowers/specs/2026-05-04-v5-pixel-temporal-design.md) | [Gaussian](docs/superpowers/specs/2026-05-04-v5-gaussian-temporal-design.md)
 
-**Phase 1 (next): implementation plans + per-track scaffolding**
-- Implementation plan per spec via `superpowers-extended-cc:writing-plans`
-- New modules: `oss/sr/temporal/` (pixel) and `oss/sr/gaussian_temporal/` (Gaussian)
-- Sequential frame pair / multi-frame window dataset loaders for TartanAir + Sintel
-- Tests land before any train step runs (TDD)
+**Phase 1 (done 2026-05-04): implementation plans + per-track scaffolding**
+- Implementation plans landed under `docs/superpowers/plans/`
+- Pixel modules landed under `oss/sr/temporal/`; Gaussian modules landed under `oss/sr/gaussian_temporal/`
+- Sequential frame pair / multi-frame window dataset loaders landed for TartanAir/Sintel-shaped data
+- Local SR test suite is green after Codex review fixes (`113 passed, 1 skipped` as of 2026-05-04)
 
-**Phase 2: training**
-- v5-pixel-temporal: ~12–16 h on RTX 3080 Ti, warm-start from v4 step-385K
-- v5-gaussian-temporal: ~24–48 h, cold-start from V0.5 splat infrastructure
+**Phase 2 (in progress): training**
+- v5-pixel-temporal launched 2026-05-04 17:20 CDT on `<train-host>` (python PID 2360), warm-started from v4 step-385K
+- Pixel run is currently TartanAir-only because the remote Sintel tree is missing the separate `training/depth` package required by `SintelGaussianDataset`
+- Gaussian training is queued until the pixel run completes, per the sequential-GPU directive for the shared RTX 3080 Ti
+- Checkpoints and metrics are rolling under `<train-host-data>/checkpoints/srcnn-v5-pixel-temporal/`; held-out results are pending
 
 **Phase 3: comparison + ship decision**
-- Same fixed held-out batch (Sintel + TartanAir held-out trajectory)
+- Same fixed held-out batch (TartanAir now; Sintel after the Depth subset is fetched or a tested no-depth fallback exists)
 - Success criteria gates per spec (PSNR, LPIPS, temporal stability, latency)
 - Whichever wins ships as v5; the other becomes v6+ research input
 
@@ -103,7 +105,7 @@ The current v4 is the strong single-frame baseline. Quality is now bottlenecked 
 - Disocclusion mask: depth disparity + motion-vec magnitude
 - Loss: `L1 + 0.1·SSIM + 0.1·LPIPS-VGG + λ·temporal-consistency` (warp t→t+1, penalize delta)
 - Init: warm-start from v4 step-385K weights, freeze first N steps to stabilize the warp head
-- Dataset mix: TartanAir Easy (~600 GB extracted, real flow + depth) + Sintel (real flow + depth, validation/fine-tune)
+- Dataset mix: TartanAir Easy (~600 GB extracted, real flow + depth) now; Sintel validation/fine-tune after Sintel Depth is fetched
 - Training time: ~12–16 hours on RTX 3080 Ti
 - Expected uplift (per FSR 2 / DLSS 2 literature): +2–4 dB PSNR, −30 to −50% LPIPS
 
@@ -121,7 +123,7 @@ The current v4 is the strong single-frame baseline. Quality is now bottlenecked 
 
 **Pivotal point:** the V0.5 single-frame Gaussian SR experiment failed because Gaussians' unique advantages (analytical warping, sub-pixel persistence, densification under occlusion change) require multi-frame context to express. The single-frame negative result is not direct evidence against temporal Gaussians — they're testing different hypotheses.
 
-Both tracks train on the same dataset mix and evaluate on the same fixed held-out batch. **Whichever wins ships as v5. The other becomes parallel research input for v6.**
+Both tracks train on the same dataset mix and evaluate on the same fixed held-out batch once datasets are complete. **Whichever wins ships as v5. The other becomes parallel research input for v6.** Current status: training in flight, results pending — no v5 ship decision has been made.
 
 ### Mid-term: performance pass
 
@@ -166,8 +168,8 @@ Three options ordered by engineering cost and performance ceiling:
 | Component | Path | Status |
 |---|---|---|
 | **OSS-SR pixel upscaler** (CNN backbone) | `oss/sr/cnn.py`, `oss/sr/inference.py` | ✓ v4 trained, ONNX + TRT FP16 exported |
-| **OSS-SR-temporal-pixel** (v5 control track) | `oss/sr/temporal/` | ⏳ design phase |
-| **OSS-Gaussian-temporal** (v5 research track) | `oss/gaussian/canvas/`, `oss/gaussian/network/` | ⏳ design phase, V0.5 splat infrastructure available |
+| **OSS-SR-temporal-pixel** (v5 control track) | `oss/sr/temporal/` | ⏳ implemented; training in flight on `<train-host>` |
+| **OSS-Gaussian-temporal** (v5 research track) | `oss/sr/gaussian_temporal/`, `oss/gaussian/canvas/`, `oss/gaussian/network/` | ⏳ implemented; training queued after pixel |
 | **OSS-RG ray-reconstruction denoiser** | `oss/regen/` | 🔬 architecture validated, training blocked on NoiseBase data download |
 | **Engine-aliased LR synthesis** | `oss/gaussian/data/lr_synthesis.py` | ✓ jitter + TAA blur + JPEG validated |
 | **Training dashboard** | `scripts/training_dashboard.py` | ✓ live, polled remote runs |

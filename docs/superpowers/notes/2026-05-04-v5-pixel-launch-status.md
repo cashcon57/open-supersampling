@@ -51,19 +51,23 @@ step=320 phase=1 loss=1.1641 t_l1=0.4901 tp1_l1=0.5080
 step=340 phase=1 loss=0.8655 t_l1=0.3410 tp1_l1=0.3555
 ```
 
-Latest live snapshot (verified 17:35 CDT):
+Latest live snapshot (verified 17:46 CDT):
 
 ```
-python PID 2360 alive; CPU=271.703125; StartTime=5/4/2026 5:20:42 PM
-step=1680 phase=1 loss=1.2627 t_l1=0.5337 tp1_l1=0.5646
-step=1700 phase=1 loss=1.6662 t_l1=0.7122 tp1_l1=0.7753
-step=1720 phase=1 loss=0.9053 t_l1=0.3508 tp1_l1=0.3793
-step=1740 phase=1 loss=0.7940 t_l1=0.2951 tp1_l1=0.3397
-step=1760 phase=1 loss=0.9259 t_l1=0.3707 tp1_l1=0.3798
-step=1780 phase=1 loss=0.9011 t_l1=0.3374 tp1_l1=0.3940
-step=1800 phase=1 loss=0.5728 t_l1=0.2107 tp1_l1=0.2321
-step=1820 phase=1 loss=0.8555 t_l1=0.3281 tp1_l1=0.3742
+python PID 2360 alive; CPU=377.6875; StartTime=5/4/2026 5:20:42 PM
+step=2520 phase=1 loss=0.9675 t_l1=0.3764 tp1_l1=0.4232
+step=2540 phase=1 loss=0.5529 t_l1=0.1862 tp1_l1=0.2177
+step=2560 phase=1 loss=0.4502 t_l1=0.1471 tp1_l1=0.1455
+step=2580 phase=1 loss=1.4516 t_l1=0.6342 tp1_l1=0.6429
+step=2600 phase=1 loss=0.9596 t_l1=0.3753 tp1_l1=0.4154
+step=2620 phase=1 loss=0.9641 t_l1=0.3616 tp1_l1=0.4428
 ```
+
+Checkpoint milestone verified 17:37 CDT:
+
+- `<train-host-data>\checkpoints\srcnn-v5-pixel-temporal\step-00002000.pt` exists.
+- Size: `2,706,462` bytes.
+- `metrics.json` contains train rows through step 2000 and `"score": []`.
 
 Loss bouncing around 1–10 — expected for Phase 1 with backbone frozen + temporal head warming up on TartanAir HR distribution (different from SRGD that v4 trained on). Should stabilize as Phase 1 progresses; Phase 2 (10K steps in) unfreezes backbone and adds temporal-consistency loss.
 

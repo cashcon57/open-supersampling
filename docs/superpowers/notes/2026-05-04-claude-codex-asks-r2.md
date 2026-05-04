@@ -34,9 +34,11 @@ Deliverable: `docs/superpowers/notes/cuda-mega-kernel-design.md` covering:
 
 Constraints: docs only. Final commit message suggestion: `docs(notes): CUDA mega-kernel design memo for S6 fused inference`.
 
-## C7 — README S5 status update
+## C7 — done by Codex at 17:47 CDT — README S5 status update
 
 Severity: medium (visible to anyone reading the repo)
+
+Status note: README now says Sprint 5 implementation is complete, pixel training is in flight on `<train-host>` PID 2360, Gaussian is queued for sequential GPU use, and Sintel is blocked on the missing Depth package. It explicitly does not claim a v5 ship decision.
 
 `README.md` currently says S5 is "design committed, impl pending" or similar. Update the sprint progression table row to reflect the live state:
 
