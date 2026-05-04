@@ -1,0 +1,110 @@
+{
+  "planPath": "docs/superpowers/plans/2026-05-04-v5-gaussian-temporal-plan.md",
+  "tasks": [
+    {
+      "id": 0,
+      "subject": "Task 0: Module scaffold + GaussianField container",
+      "status": "pending",
+      "description": "**Goal:** SoA Gaussian state container + 5-frame history.\n\n```json:metadata\n{\"files\": [\"oss/sr/gaussian_temporal/__init__.py\", \"oss/sr/gaussian_temporal/gaussian_field.py\", \"tests/sr/gaussian_temporal/__init__.py\", \"tests/sr/gaussian_temporal/test_gaussian_field.py\"], \"verifyCommand\": \"pytest tests/sr/gaussian_temporal/test_gaussian_field.py -v\", \"acceptanceCriteria\": [\"SoA shapes\", \"history capped at 5\", \"to(device) moves all\", \"clone is deep\"]}\n```"
+    },
+    {
+      "id": 1,
+      "subject": "Task 1: Analytical warp (mu shift + covariance Jacobian)",
+      "status": "pending",
+      "blockedBy": [0],
+      "description": "**Goal:** warp_field reuses canvas.warp.warp_positions for mu, applies Sigma' = J Sigma J^T via 2x2 SVD.\n\n```json:metadata\n{\"files\": [\"oss/sr/gaussian_temporal/analytical_warp.py\", \"tests/sr/gaussian_temporal/test_analytical_warp.py\"], \"verifyCommand\": \"pytest tests/sr/gaussian_temporal/test_analytical_warp.py -v\", \"acceptanceCriteria\": [\"identity flow unchanged\", \"translation preserves cov\", \"Jacobian matches numerical\", \"out-of-frame marked dead\"]}\n```"
+    },
+    {
+      "id": 2,
+      "subject": "Task 2: G-buffer encoder",
+      "status": "pending",
+      "blockedBy": [1],
+      "description": "**Goal:** Tile-level encoder (12->64, downsample by tile_size, <=120K params).\n\n```json:metadata\n{\"files\": [\"oss/sr/gaussian_temporal/g_buffer_encoder.py\", \"tests/sr/gaussian_temporal/test_g_buffer_encoder.py\"], \"verifyCommand\": \"pytest tests/sr/gaussian_temporal/test_g_buffer_encoder.py -v\", \"acceptanceCriteria\": [\"<=120K params\", \"forward shape\", \"grad flow\"]}\n```"
+    },
+    {
+      "id": 3,
+      "subject": "Task 3: Multi-frame transformer over Gaussian tokens",
+      "status": "pending",
+      "blockedBy": [2],
+      "description": "**Goal:** RoPE-positioned transformer producing per-Gaussian (dmu, dlog_scale, drot, dcolor).\n\n```json:metadata\n{\"files\": [\"oss/sr/gaussian_temporal/transformer.py\", \"tests/sr/gaussian_temporal/test_transformer.py\"], \"verifyCommand\": \"pytest tests/sr/gaussian_temporal/test_transformer.py -v\", \"acceptanceCriteria\": [\"400K-600K params\", \"forward keys + shapes\", \"permutation equivariance\"]}\n```"
+    },
+    {
+      "id": 4,
+      "subject": "Task 4: Densification (residual-driven heuristic)",
+      "status": "pending",
+      "blockedBy": [3],
+      "description": "**Goal:** Spawn new Gaussians at high-residual tiles (heuristic 3DGS-style).\n\n```json:metadata\n{\"files\": [\"oss/sr/gaussian_temporal/densification.py\", \"tests/sr/gaussian_temporal/test_densification.py\"], \"verifyCommand\": \"pytest tests/sr/gaussian_temporal/test_densification.py -v\", \"acceptanceCriteria\": [\"no spawn below threshold\", \"spawn inserts into free slots\", \"color grad flows\"]}\n```"
+    },
+    {
+      "id": 5,
+      "subject": "Task 5: Pruning",
+      "status": "pending",
+      "blockedBy": [4],
+      "description": "**Goal:** Opacity threshold + count cap pruning (non-differentiable).\n\n```json:metadata\n{\"files\": [\"oss/sr/gaussian_temporal/pruning.py\", \"tests/sr/gaussian_temporal/test_pruning.py\"], \"verifyCommand\": \"pytest tests/sr/gaussian_temporal/test_pruning.py -v\", \"acceptanceCriteria\": [\"low opacity removed\", \"count cap enforced lowest-first\"]}\n```"
+    },
+    {
+      "id": 6,
+      "subject": "Task 6: Rasterizer wrapper",
+      "status": "pending",
+      "blockedBy": [5],
+      "description": "**Goal:** Thin wrapper turning GaussianField + alive mask into a render call on existing Rasterizer.\n\n```json:metadata\n{\"files\": [\"oss/sr/gaussian_temporal/rasterizer.py\", \"tests/sr/gaussian_temporal/test_rasterizer_wrapper.py\"], \"verifyCommand\": \"pytest tests/sr/gaussian_temporal/test_rasterizer_wrapper.py -v\", \"acceptanceCriteria\": [\"shape parity\", \"only alive contribute\", \"grad flows through color\"]}\n```"
+    },
+    {
+      "id": 7,
+      "subject": "Task 7: Regularization losses (drift + area + count)",
+      "status": "pending",
+      "blockedBy": [6],
+      "description": "**Goal:** L_gaussian_reg = w_pos*drift + w_cov*hinge(area) + w_count*hinge(count).\n\n```json:metadata\n{\"files\": [\"oss/sr/gaussian_temporal/regularization.py\", \"tests/sr/gaussian_temporal/test_regularization.py\"], \"verifyCommand\": \"pytest tests/sr/gaussian_temporal/test_regularization.py -v\", \"acceptanceCriteria\": [\"zero on steady-state field\", \"hinged terms\", \"prev field detached\"]}\n```"
+    },
+    {
+      "id": 8,
+      "subject": "Task 8: GaussianTemporalSRModel full pipeline",
+      "status": "pending",
+      "blockedBy": [7],
+      "description": "**Goal:** encoder + analytical warp + transformer + densify + prune + raster wired into one nn.Module.\n\n```json:metadata\n{\"files\": [\"oss/sr/gaussian_temporal/model.py\", \"tests/sr/gaussian_temporal/test_model_full_step.py\"], \"verifyCommand\": \"pytest tests/sr/gaussian_temporal/test_model_full_step.py -v\", \"acceptanceCriteria\": [\"forward signature\", \"prev_field=None case\", \"finite grads on synthetic moving rect\"]}\n```"
+    },
+    {
+      "id": 9,
+      "subject": "Task 9: Trajectory window dataset",
+      "status": "pending",
+      "blockedBy": [8],
+      "description": "**Goal:** TrajectoryWindowDataset returning N=5 consecutive frames; reject windows crossing boundaries.\n\n```json:metadata\n{\"files\": [\"oss/sr/gaussian_temporal/dataset.py\", \"tests/sr/gaussian_temporal/test_dataset.py\"], \"verifyCommand\": \"pytest tests/sr/gaussian_temporal/test_dataset.py -v\", \"acceptanceCriteria\": [\"window count correct\", \"all frames same trajectory\", \"collate stacks fields\"]}\n```"
+    },
+    {
+      "id": 10,
+      "subject": "Task 10: Stateful inference engine",
+      "status": "pending",
+      "blockedBy": [9],
+      "description": "**Goal:** GaussianTemporalSRInferenceEngine carries GaussianField + scene-cut reset.\n\n```json:metadata\n{\"files\": [\"oss/sr/inference.py\", \"tests/sr/gaussian_temporal/test_inference_state.py\"], \"verifyCommand\": \"pytest tests/sr/gaussian_temporal/test_inference_state.py -v\", \"acceptanceCriteria\": [\"state carries\", \"reset clears\", \"scene-cut threshold\"]}\n```"
+    },
+    {
+      "id": 11,
+      "subject": "Task 11: Training script (4-phase + smoke)",
+      "status": "pending",
+      "blockedBy": [10],
+      "description": "**Goal:** scripts/sr_train_gaussian_temporal.py with 4 phases (single-fitter, temporal warmup, joint, sintel-finetune).\n\n```json:metadata\n{\"files\": [\"scripts/sr_train_gaussian_temporal.py\", \"tests/sr/gaussian_temporal/test_train_smoke.py\"], \"verifyCommand\": \"pytest tests/sr/gaussian_temporal/test_train_smoke.py -v\", \"acceptanceCriteria\": [\"smoke exits 0\", \"checkpoint + metrics written\", \"BPTT detach across frames\"]}\n```"
+    },
+    {
+      "id": 12,
+      "subject": "Task 12: Held-out eval + memo template",
+      "status": "pending",
+      "blockedBy": [11],
+      "description": "**Goal:** scripts/sr_gaussian_temporal_held_out.py + 3-way comparison memo template.\n\n```json:metadata\n{\"files\": [\"scripts/sr_gaussian_temporal_held_out.py\", \"docs/superpowers/experiments/2026-XX-XX-v5-gaussian-temporal-held-out-template.md\"], \"verifyCommand\": \"python scripts/sr_gaussian_temporal_held_out.py --help\", \"acceptanceCriteria\": [\"3-way PSNR/LPIPS/temporal report\", \"per-sample win counts\", \"race-rule note in template\"]}\n```"
+    },
+    {
+      "id": 13,
+      "subject": "Task 13: Lab-notebook memo + remote runbook",
+      "status": "pending",
+      "blockedBy": [12],
+      "description": "**Goal:** Pre-train memo (lab-notebook) + 3080ti orphan-spawn runbook with GPU-share schedule.\n\n```json:metadata\n{\"files\": [\"docs/superpowers/experiments/2026-05-04-v5-gaussian-temporal-train-start.md\", \"docs/superpowers/notes/2026-05-04-v5-gaussian-temporal-runbook.md\"], \"verifyCommand\": \"\", \"acceptanceCriteria\": [\"memo records hypothesis + criteria\", \"runbook copy-pasteable\", \"GPU-share schedule explicit\"]}\n```"
+    },
+    {
+      "id": 14,
+      "subject": "Task 14: Sprint-5 closeout + ship decision",
+      "status": "pending",
+      "blockedBy": [13],
+      "description": "**Goal:** Comparison memo (pixel vs Gaussian vs baseline) + ship decision per spec race rules.\n\n```json:metadata\n{\"files\": [\"docs/superpowers/experiments/2026-XX-XX-v5-pixel-vs-gaussian-comparison.md\", \"README.md\"], \"verifyCommand\": \"\", \"acceptanceCriteria\": [\"both result tables side by side\", \"explicit ship decision\", \"race rule applied (Gaussian must beat, tie != win)\"]}\n```"
+    }
+  ],
+  "lastUpdated": "2026-05-04"
+}

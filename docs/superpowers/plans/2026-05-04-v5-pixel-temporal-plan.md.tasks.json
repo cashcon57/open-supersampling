@@ -1,0 +1,82 @@
+{
+  "planPath": "docs/superpowers/plans/2026-05-04-v5-pixel-temporal-plan.md",
+  "tasks": [
+    {
+      "id": 0,
+      "subject": "Task 0: Module scaffold + warp module + warp tests",
+      "status": "pending",
+      "description": "**Goal:** Create oss/sr/temporal/ skeleton + LR->HR motion upsample + backward grid_sample warp.\n\n```json:metadata\n{\"files\": [\"oss/sr/temporal/__init__.py\", \"oss/sr/temporal/warp.py\", \"tests/sr/temporal/__init__.py\", \"tests/sr/temporal/test_warp.py\"], \"verifyCommand\": \"pytest tests/sr/temporal/test_warp.py -v\", \"acceptanceCriteria\": [\"upsample_motion_to_hr scales LR->HR by scale and rescales magnitudes\", \"zero motion is identity warp\", \"translation flow shifts content correctly\"]}\n```"
+    },
+    {
+      "id": 1,
+      "subject": "Task 1: Disocclusion gate module",
+      "status": "pending",
+      "blockedBy": [0],
+      "description": "**Goal:** DisocclusionGate(nn.Module) with learnable alpha/beta/gamma producing HR mask in [0,1].\n\n```json:metadata\n{\"files\": [\"oss/sr/temporal/disocclusion.py\", \"tests/sr/temporal/test_disocclusion.py\"], \"verifyCommand\": \"pytest tests/sr/temporal/test_disocclusion.py -v\", \"acceptanceCriteria\": [\"3 scalar params\", \"output in [0,1]\", \"static frame -> low mask\", \"big depth disparity -> high mask\", \"grad flow to alpha/beta/gamma\"]}\n```"
+    },
+    {
+      "id": 2,
+      "subject": "Task 2: Temporal head module",
+      "status": "pending",
+      "blockedBy": [1],
+      "description": "**Goal:** TemporalHead conv stack 8->32->32->32->3 (~28K params), near-identity init.\n\n```json:metadata\n{\"files\": [\"oss/sr/temporal/temporal_head.py\", \"tests/sr/temporal/test_temporal_head.py\"], \"verifyCommand\": \"pytest tests/sr/temporal/test_temporal_head.py -v\", \"acceptanceCriteria\": [\"<=60K params\", \"correct fwd shape\", \"initial residual <0.1 from current_sr\", \"grad flow\"]}\n```"
+    },
+    {
+      "id": 3,
+      "subject": "Task 3: TemporalSRModel + v4 warm-start",
+      "status": "pending",
+      "blockedBy": [2],
+      "description": "**Goal:** Wrap v4 backbone + warp + DisocclusionGate + TemporalHead. load_v4_warm_start + freeze_backbone toggle.\n\n```json:metadata\n{\"files\": [\"oss/sr/temporal/model.py\", \"tests/sr/temporal/test_model.py\"], \"verifyCommand\": \"pytest tests/sr/temporal/test_model.py -v\", \"acceptanceCriteria\": [\"forward shape\", \"first-frame init helper\", \"freeze backbone toggle\", \"warm-start loads v4 ckpt\", \"grad flow with frozen backbone\"]}\n```"
+    },
+    {
+      "id": 4,
+      "subject": "Task 4: SequentialPairDataset",
+      "status": "pending",
+      "blockedBy": [3],
+      "description": "**Goal:** Wrap TartanAir + Sintel base datasets to emit consecutive frame pairs with trajectory boundary handling.\n\n```json:metadata\n{\"files\": [\"oss/sr/temporal/dataset.py\", \"tests/sr/temporal/test_dataset.py\"], \"verifyCommand\": \"pytest tests/sr/temporal/test_dataset.py -v\", \"acceptanceCriteria\": [\"pair count excludes boundaries\", \"returns consecutive frames\", \"is_first_in_seq flag\", \"default_collate_pair stacks fields\"]}\n```"
+    },
+    {
+      "id": 5,
+      "subject": "Task 5: End-to-end loss pipeline test",
+      "status": "pending",
+      "blockedBy": [4],
+      "description": "**Goal:** Integration test verifying full loss assembly with finite gradients on head + gate + backbone.\n\n```json:metadata\n{\"files\": [\"tests/sr/temporal/test_loss_pipeline.py\"], \"verifyCommand\": \"pytest tests/sr/temporal/test_loss_pipeline.py -v\", \"acceptanceCriteria\": [\"finite scalar loss\", \"finite grads on all groups\"]}\n```"
+    },
+    {
+      "id": 6,
+      "subject": "Task 6: Stateful inference engine + scene-cut reset",
+      "status": "pending",
+      "blockedBy": [5],
+      "description": "**Goal:** TemporalSRInferenceEngine carrying prev_hr_output across calls + auto scene-cut reset on motion threshold.\n\n```json:metadata\n{\"files\": [\"oss/sr/inference.py\", \"tests/sr/temporal/test_inference_state.py\"], \"verifyCommand\": \"pytest tests/sr/temporal/test_inference_state.py -v && pytest tests/sr/ -v\", \"acceptanceCriteria\": [\"first call uses bilinear init\", \"reset clears state\", \"scene-cut auto-reset triggers\", \"no regression in single-frame engine\"]}\n```"
+    },
+    {
+      "id": 7,
+      "subject": "Task 7: Training script (3-phase schedule + smoke)",
+      "status": "pending",
+      "blockedBy": [6],
+      "description": "**Goal:** scripts/sr_train_temporal.py with phases (warmup-frozen, joint, sintel-finetune), auto-resume, dashboard metrics.\n\n```json:metadata\n{\"files\": [\"scripts/sr_train_temporal.py\", \"tests/sr/temporal/test_train_smoke.py\"], \"verifyCommand\": \"pytest tests/sr/temporal/test_train_smoke.py -v\", \"acceptanceCriteria\": [\"smoke run exits 0\", \"metrics.json + score_log.json written\", \"checkpoint written\"]}\n```"
+    },
+    {
+      "id": 8,
+      "subject": "Task 8: Held-out eval script + memo template",
+      "status": "pending",
+      "blockedBy": [7],
+      "description": "**Goal:** scripts/sr_temporal_held_out.py + memo template with success-criteria checklist.\n\n```json:metadata\n{\"files\": [\"scripts/sr_temporal_held_out.py\", \"docs/superpowers/experiments/2026-XX-XX-v5-pixel-temporal-held-out-template.md\"], \"verifyCommand\": \"python scripts/sr_temporal_held_out.py --help\", \"acceptanceCriteria\": [\"argparse help exits 0\", \"reports PSNR + LPIPS + temporal stability\", \"memo template lists 4 success-criteria gates\"]}\n```"
+    },
+    {
+      "id": 9,
+      "subject": "Task 9: Lab-notebook memo + remote runbook",
+      "status": "pending",
+      "blockedBy": [8],
+      "description": "**Goal:** Pre-train memo + <train-host> orphan-spawn runbook.\n\n```json:metadata\n{\"files\": [\"docs/superpowers/experiments/2026-05-04-v5-pixel-temporal-train-start.md\", \"docs/superpowers/notes/2026-05-04-v5-pixel-temporal-runbook.md\"], \"verifyCommand\": \"\", \"acceptanceCriteria\": [\"memo records hypothesis + criteria + launch cmd\", \"runbook is copy-pasteable\"]}\n```"
+    },
+    {
+      "id": 10,
+      "subject": "Task 10: Sprint-5 closeout gate (post-train)",
+      "status": "pending",
+      "blockedBy": [9],
+      "description": "**Goal:** Run held-out eval, fill memo, update README sprint table only if gate passes.\n\n```json:metadata\n{\"files\": [\"docs/superpowers/experiments/2026-XX-XX-v5-pixel-temporal-held-out.md\", \"README.md\"], \"verifyCommand\": \"\", \"acceptanceCriteria\": [\"all 4 success-criteria boxes resolved\", \"README updated only on pass\"]}\n```"
+    }
+  ],
+  "lastUpdated": "2026-05-04"
+}
