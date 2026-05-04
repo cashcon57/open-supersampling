@@ -680,11 +680,21 @@ def main(argv: list[str] | None = None) -> int:
         if step % args.log_every == 0 or step == 1 or args.smoke:
             row = {"step": step, **parts}
             metrics_log.append(row)
+            # Codex C15 finding: include LPIPS components when present so
+            # Phase-2/3 log inspection shows the perceptual contribution
+            # (was previously omitted even when --lpips-weight > 0).
+            extras = []
+            if "t_lpips" in row and row["t_lpips"] is not None:
+                extras.append(f" t_lpips={row['t_lpips']:.4f}")
+            if "tp1_lpips" in row and row["tp1_lpips"] is not None:
+                extras.append(f" tp1_lpips={row['tp1_lpips']:.4f}")
+            if "tc" in row:
+                extras.append(f" tc={row['tc']:.4f}")
             log.info(
                 "step=%d phase=%d loss=%.4f t_l1=%.4f tp1_l1=%.4f%s",
                 step, cur_phase, row["loss"], row.get("t_l1", float("nan")),
                 row.get("tp1_l1", float("nan")),
-                f" tc={row['tc']:.4f}" if "tc" in row else "",
+                "".join(extras),
             )
 
         # Periodic checkpoint + rolling metrics dump.
