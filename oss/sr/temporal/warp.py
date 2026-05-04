@@ -38,7 +38,10 @@ def warp_prev_hr(prev_hr: torch.Tensor, motion_lr: torch.Tensor, scale: int) -> 
 
     Args:
         prev_hr:   (B, 3, H_hr, W_hr).
-        motion_lr: (B, 2, H_lr, W_lr) LR-pixel current→previous displacements.
+        motion_lr: (B, 2, H_lr, W_lr) LR-pixel forward flow ``t-1 → t``
+                   (matches dataset adapters: TartanAir flow files + Sintel .flo
+                   are forward flow). At each current pixel ``p`` the prev
+                   location is ``p − motion_hr(p)``.
         scale:     HR / LR ratio.
 
     Returns:
