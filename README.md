@@ -59,9 +59,41 @@ These numbers are honest and current. **The deliberate comparison is FSR 2/3 at 
 
 ## Roadmap
 
-### Near-term: dual-track temporal v5
+### Sprint progression
+
+| Sprint | Theme | Status | Exit gate |
+|---|---|---|---|
+| **S1–S3** | Renderer scaffolding, hooks, tile classifier | ✓ done | components scaffolded + tests pass |
+| **S4** | Single-frame SR-CNN trained, ONNX/TRT export | ✓ done (v3 + v4 shipped, A/B confirms v4 real) | v4 beats v3 on fixed-batch held-out |
+| **S5** | **v5 dual-track temporal** (current sprint) | ⏳ design committed, impl pending | one track meets success criteria, ships as v5 |
+| **S6** | Performance pass: distill, custom CUDA mega-kernel, vendor ports | ❌ not started | TRT FP16 latency cut ≥3× |
+| **S7** | Game integration: DXGI hook + NGX shim + Vulkan layer + OSS-FX | ❌ not started | runtime swap working in one DX12 title |
+
+### Sprint 5 — current sprint
 
 The current v4 is the strong single-frame baseline. Quality is now bottlenecked by missing temporal accumulation. We're racing two architectures so we have a fallback if the experimental path doesn't pan out.
+
+**Phase 0 (done 2026-05-04):**
+- Fixed-batch A/B v3 vs v4 on CitySample held-out — v4 wins LPIPS 64/64 (-22%), PSNR tied. v4 is a real perceptual improvement.
+- TartanAir extraction kicked off (72 zips, ~600 GB extracted, primary temporal training data)
+- v5-pixel-temporal + v5-gaussian-temporal design specs written: [pixel](docs/superpowers/specs/2026-05-04-v5-pixel-temporal-design.md) | [Gaussian](docs/superpowers/specs/2026-05-04-v5-gaussian-temporal-design.md)
+
+**Phase 1 (next): implementation plans + per-track scaffolding**
+- Implementation plan per spec via `superpowers-extended-cc:writing-plans`
+- New modules: `oss/sr/temporal/` (pixel) and `oss/sr/gaussian_temporal/` (Gaussian)
+- Sequential frame pair / multi-frame window dataset loaders for TartanAir + Sintel
+- Tests land before any train step runs (TDD)
+
+**Phase 2: training**
+- v5-pixel-temporal: ~12–16 h on RTX 3080 Ti, warm-start from v4 step-385K
+- v5-gaussian-temporal: ~24–48 h, cold-start from V0.5 splat infrastructure
+
+**Phase 3: comparison + ship decision**
+- Same fixed held-out batch (Sintel + TartanAir held-out trajectory)
+- Success criteria gates per spec (PSNR, LPIPS, temporal stability, latency)
+- Whichever wins ships as v5; the other becomes v6+ research input
+
+### Sprint 5 dual-track details
 
 #### v5-pixel-temporal (control track)
 
