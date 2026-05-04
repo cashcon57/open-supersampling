@@ -95,33 +95,50 @@ def default_collate_pair(samples: List[Mapping[str, Any]]) -> Mapping[str, torch
 # ---------------------------------------------------------------------------
 
 
+class _TartanairTrajectoryKey:
+    """Top-level callable so DataLoader workers can serialize it.
+
+    Closures over local variables cannot be transported to spawn-based
+    DataLoader workers on Windows. A bound method on a top-level class can
+    be transported; the dataset reference is captured as an attribute.
+    """
+
+    __slots__ = ("ds",)
+
+    def __init__(self, ds: Any) -> None:
+        self.ds = ds
+
+    def __call__(self, idx: int) -> str:
+        # .../<env>/<level>/<traj>/image_left/000000_left.png
+        return str(self.ds._items[idx][0].parent.parent)
+
+
+class _SintelTrajectoryKey:
+    """Top-level callable for Sintel; same worker-transport rationale."""
+
+    __slots__ = ("ds",)
+
+    def __init__(self, ds: Any) -> None:
+        self.ds = ds
+
+    def __call__(self, idx: int) -> str:
+        # .../training/clean/<seq>/frame_NNNN.png
+        return str(self.ds._items[idx][0].parent)
+
+
 def adapt_tartanair(ds) -> Any:
     """Add ``trajectory_key`` to a TartanAirGaussianDataset.
 
     TartanAir's ``_items`` contains tuples of ``(image_path, depth_path,
     flow_path)``. The trajectory dir is the parent of ``image_left/``.
     """
-    items = list(ds._items)
-
-    def trajectory_key(idx: int) -> str:
-        img_path = items[idx][0]
-        # .../<env>/<level>/<traj>/image_left/000000_left.png
-        return str(img_path.parent.parent)
-
-    ds.trajectory_key = trajectory_key  # type: ignore[attr-defined]
+    ds.trajectory_key = _TartanairTrajectoryKey(ds)  # type: ignore[attr-defined]
     return ds
 
 
 def adapt_sintel(ds) -> Any:
     """Add ``trajectory_key`` to SintelGaussianDataset (one key per sequence)."""
-    items = list(ds._items)
-
-    def trajectory_key(idx: int) -> str:
-        img_path = items[idx][0]
-        # .../training/clean/<seq>/frame_NNNN.png
-        return str(img_path.parent)
-
-    ds.trajectory_key = trajectory_key  # type: ignore[attr-defined]
+    ds.trajectory_key = _SintelTrajectoryKey(ds)  # type: ignore[attr-defined]
     return ds
 
 
