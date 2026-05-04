@@ -11,16 +11,17 @@
 - CUDA smoke (pixel + Gaussian): both passed in <2s
 - v0.2-dev pulled to remote `<train-host-data>/oss-gaussian` (stash applied; `pre-v5-pull-stash-2026-05-04` saved on remote)
 
-## Launch attempts (4th succeeded)
+## Launch attempts (5th succeeded)
 
 1. PID 16540 — output dir didn't exist → process exited immediately (cmd-line stdout redirect failed). Fixed by `New-Item -Force` on `<train-host-data>\checkpoints\srcnn-v5-pixel-temporal`.
 2. PID 8348 — Sintel dataset crashed: `(frame, depth, flow)` triples missing — standard Sintel download has no `depth/` subdir; that's the separate "Sintel Depth" download. Fixed by dropping `--sintel-root` from launch (Phase 3 falls back to TartanAir; full v5 polish on Sintel deferred until Sintel-Depth is fetched).
 3. PID 21068 — Windows DataLoader spawn worker-transport failure on `adapt_tartanair`'s local closure. Fixed by `96dad76` (top-level callable classes) + Cash's complementary collate fix `4238915` for `GaussianTrainingExample` dataclass items.
-4. **PID 27732 — RUNNING.** Confirmed real training: 180 steps in 2 min, 75% GPU util, 3347 MiB GPU mem, loss decaying.
+4. cmd PID 27732 / python PID 17256 — crashed at step 260 on a corrupt TartanAir flow `.npy` (`cannot reshape array of size 90040 into shape (480,640,2)`). Initial fix `b8b08c5` skipped bad npy triples by pre-scanning headers, but that made startup too slow at full TartanAir scale.
+5. **cmd PID 15652 / python PID 2360 — RUNNING.** Relaunched from `10e75df`, which skips unreadable frame pairs lazily inside `SequentialPairDataset`. Confirmed past the previous crash point: step 340 by 17:23 CDT, loss finite.
 
-## Live training process — PID 27732
+## Live training process — python PID 2360
 
-`scripts/sr_train_temporal.py` orphan-spawned via WMI at 17:08 CDT.
+`scripts/sr_train_temporal.py` orphan-spawned via WMI at 17:20 CDT.
 
 Args (Sintel deliberately omitted; see attempt 2 above):
 
@@ -34,23 +35,20 @@ Args (Sintel deliberately omitted; see attempt 2 above):
 
 Log: `<train-host-data>\checkpoints\srcnn-v5-pixel-temporal\train.log`
 
-Live snapshot (verified 17:10 CDT, 2 min into training):
+Live snapshot (verified 17:23 CDT, past previous crash point):
 
 ```
 v5-pixel-temporal: device=cuda tier=standard steps=80000 batch=4 smoke=False warmup=10000 joint_end=60000 lr=1.00e-04
 warm-start backbone from <train-host-data>\checkpoints\srcnn-prod-v4-lpips\step-00385000.pt
 model params: total=626450
 phase transition: -1 -> 1  (lr=1.00e-04, backbone_frozen=True)
-step=1   phase=1 loss=3.9647  t_l1=1.9150 tp1_l1=1.9067
-step=20  phase=1 loss=10.8056 t_l1=5.2328 tp1_l1=5.4159
-step=40  phase=1 loss=8.9698  t_l1=4.2575 tp1_l1=4.5430
-step=60  phase=1 loss=1.5324  t_l1=0.7016 tp1_l1=0.6934
-step=80  phase=1 loss=4.9873  t_l1=2.2898 tp1_l1=2.5264
-step=100 phase=1 loss=1.7622  t_l1=0.8185 tp1_l1=0.7783
-step=120 phase=1 loss=4.1626  t_l1=1.9906 tp1_l1=2.0090
-step=140 phase=1 loss=0.8750  t_l1=0.3659 tp1_l1=0.3772
-step=160 phase=1 loss=1.5608  t_l1=0.6957 tp1_l1=0.6923
-step=180 phase=1 loss=3.3780  t_l1=1.4120 tp1_l1=1.7778
+step=220 phase=1 loss=0.9963 t_l1=0.4141 tp1_l1=0.4266
+step=240 phase=1 loss=2.9116 t_l1=1.1811 tp1_l1=1.5499
+step=260 phase=1 loss=0.8018 t_l1=0.3072 tp1_l1=0.3337
+step=280 phase=1 loss=1.1680 t_l1=0.4972 tp1_l1=0.4923
+step=300 phase=1 loss=1.1115 t_l1=0.4713 tp1_l1=0.4625
+step=320 phase=1 loss=1.1641 t_l1=0.4901 tp1_l1=0.5080
+step=340 phase=1 loss=0.8655 t_l1=0.3410 tp1_l1=0.3555
 ```
 
 Loss bouncing around 1–10 — expected for Phase 1 with backbone frozen + temporal head warming up on TartanAir HR distribution (different from SRGD that v4 trained on). Should stabilize as Phase 1 progresses; Phase 2 (10K steps in) unfreezes backbone and adds temporal-consistency loss.
@@ -83,16 +81,16 @@ Total expected: 12–16 h on RTX 3080 Ti. Rolling `metrics.json` written every 2
 
 1. Open `http://<tailnet-ip>:8080/` to monitor dashboard.
 2. `ssh <train-host> "Get-Content <train-host-data>/checkpoints/srcnn-v5-pixel-temporal/train.log -Tail 30"` for log tail.
-3. `ssh <train-host> "Get-Process -Id 8348"` to confirm process still alive.
+3. `ssh <train-host> "Get-Process -Id 2360"` to confirm process still alive.
 4. When Phase 1 completes (~10K steps, ~1.5–2 h from launch), check that PSNR is moving + no NaN.
 5. When training completes (~12–16 h):
-   - Run held-out eval: `python scripts/sr_temporal_held_out.py --ckpt-temporal <train-host-data>/checkpoints/srcnn-v5-pixel-temporal/step-00080000.pt --ckpt-baseline <train-host-data>/checkpoints/srcnn-prod-v4-lpips/step-00385000.pt --tartanair-root <train-host-data>/datasets/tartanair_extracted --sintel-root <train-host-data>/datasets/sintel --n-samples 64`
+   - Run held-out eval after Sintel Depth is fetched, or use this TartanAir-only interim command: `python scripts/sr_temporal_held_out.py --ckpt-temporal <train-host-data>/checkpoints/srcnn-v5-pixel-temporal/step-00080000.pt --ckpt-baseline <train-host-data>/checkpoints/srcnn-prod-v4-lpips/step-00385000.pt --tartanair-root <train-host-data>/datasets/tartanair_extracted --n-samples 64`
    - Fill in `docs/superpowers/experiments/2026-XX-XX-v5-pixel-temporal-held-out-template.md` with results, rename to actual date.
    - If success-criteria pass: launch Gaussian training via `docs/superpowers/notes/2026-05-04-v5-gaussian-temporal-runbook.md`.
    - If not: pixel becomes v5; Gaussian becomes v6+ research.
 
 ## Kill switches
 
-- Stop training: `ssh <train-host> "Stop-Process -Id 8348 -Force"`
+- Stop training: `ssh <train-host> "Stop-Process -Id 2360 -Force"`
 - Stop dashboard: `ssh <train-host> "Stop-Process -Id 14952 -Force"`
 - Auto-resume picks up from latest `step-XXXXX.pt` if process dies.
