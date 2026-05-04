@@ -95,6 +95,27 @@ def test_alive_mask_consistent_no_nan() -> None:
     assert torch.isfinite(out_hr).all()
 
 
+def test_temporal_warp_uses_hr_field_coordinates() -> None:
+    """A zero-motion temporal step must not kill HR-space Gaussians whose
+    positions are outside the LR frame bounds but inside the HR output bounds."""
+    torch.manual_seed(4)
+    model = GaussianTemporalSRModel(in_channels=12, scale=2, max_count=4096)
+    # Disable post-warp densification on the second frame so the alive count
+    # reflects only the warp/prune path.
+    model.densify_threshold = 999.0
+
+    h_lr, w_lr = 32, 32
+    motion_lr = torch.zeros(1, 2, h_lr, w_lr)
+    lr0 = _make_lr_inputs(h_lr, w_lr, seed=4)
+    _, field0, _ = model(lr0, motion_lr, prev_field=None)
+    first_count = field0.count_alive()
+    assert first_count > 1
+
+    lr1 = _make_lr_inputs(h_lr, w_lr, seed=5)
+    _, field1, _ = model(lr1, motion_lr, prev_field=field0)
+    assert field1.count_alive() == first_count
+
+
 def test_two_frame_full_loss_backward_finite_grads() -> None:
     """2-frame moving-rectangle: forward both frames, full loss, backward, finite grads."""
     torch.manual_seed(2)

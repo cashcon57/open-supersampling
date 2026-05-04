@@ -116,7 +116,17 @@ class GaussianTemporalSRModel(nn.Module):
             )
             history: list[GaussianField] = []
         else:
-            warped = warp_field(prev_field, motion_lr[0], hw=(h_lr, w_lr))
+            # Field means are stored in HR pixel coordinates because the
+            # rasterizer renders the HR output. The dataset motion field is LR
+            # pixels, so lift both the vector field and its displacement units
+            # into HR space before analytical warping.
+            motion_hr = F.interpolate(
+                motion_lr,
+                size=(h_hr, w_hr),
+                mode="bilinear",
+                align_corners=False,
+            ) * float(self.scale)
+            warped = warp_field(prev_field, motion_hr[0], hw=(h_hr, w_hr))
             history = prev_field.history
 
         # ---- Transformer update over alive tokens -----------------------------
