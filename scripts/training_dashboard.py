@@ -514,9 +514,20 @@ class DashboardHandler(BaseHTTPRequestHandler):
             elif path == "/api/info":
                 self._send_json(self._build_info())
             elif path == "/api/metrics":
-                self._send_json(self._read_json("metrics.json", default=[]))
+                data = self._read_json("metrics.json", default=[])
+                if isinstance(data, dict) and isinstance(data.get("train"), list):
+                    train = data["train"]
+                    cap = 2000
+                    if len(train) > cap:
+                        step = max(1, len(train) // cap)
+                        data = {**data, "train": train[::step][-cap:] + train[-1:]}
+                self._send_json(data)
             elif path == "/api/score":
-                self._send_json(self._read_json("score_log.json", default=[]))
+                data = self._read_json("score_log.json", default=None)
+                if data is None:
+                    metrics = self._read_json("metrics.json", default={})
+                    data = metrics.get("score", []) if isinstance(metrics, dict) else []
+                self._send_json(data)
             elif path == "/api/log":
                 self._send_text(self._read_log_tail(n_lines=200))
             else:
