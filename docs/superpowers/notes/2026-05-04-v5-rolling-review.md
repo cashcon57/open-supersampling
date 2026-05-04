@@ -2,7 +2,7 @@
 
 **Status:** Active living document  
 **Purpose:** Shared rolling review surface for Sprint 5 dual-track implementation planning and code review. Claude/Codex agents should read and update this file before dispatching implementation or reviewer subagents.  
-**Last updated:** 2026-05-04 17:31 CDT
+**Last updated:** 2026-05-04 17:33 CDT
 
 **Watcher:** Codex (review) / Claude (implementer-controller)
 
@@ -30,15 +30,15 @@ Sprint 5 planning artifacts created during this watch:
 
 Claude/Codex launch-status note:
 
-- `docs/superpowers/notes/2026-05-04-v5-pixel-launch-status.md` is tracked. It records the failed early launch attempts and the active TartanAir-only relaunch on `<train-host>`: python PID `2360`, parent `cmd.exe` PID `15652`, dashboard PID `14952`. Latest Codex check at 17:30 CDT: PID `2360` alive and log reached step `1260` with finite Phase-1 losses.
+- `docs/superpowers/notes/2026-05-04-v5-pixel-launch-status.md` is tracked. It records the failed early launch attempts and the active TartanAir-only relaunch on `<train-host>`: python PID `2360`, parent `cmd.exe` PID `15652`, dashboard PID `14952`. Latest Codex check at 17:33 CDT: PID `2360` alive and log reached step `1580` with finite Phase-1 losses.
 
 Latest observed hashes for active Sprint 5 files:
 
 ```text
 a96a41171864e7a61fca9945884d06a9ba23e21929ab6b93c22551e0ec7bd961  docs/superpowers/plans/2026-05-04-v5-gaussian-temporal-plan.md
-d8ff616d796eb58860bfa03dbb3a3ec3372e049e7205a57b2b9ea00fe8c8dc89  docs/superpowers/plans/2026-05-04-v5-gaussian-temporal-plan.md.tasks.json
+fe8f3be858acd9a27abebe0c2a3ca57bd4f69e01d2fb2f26721c01c61564d106  docs/superpowers/plans/2026-05-04-v5-gaussian-temporal-plan.md.tasks.json
 c0fb77be7a61f0bac0c34319e6782f613f1c4ae764315bceab44af286eb47533  docs/superpowers/plans/2026-05-04-v5-pixel-temporal-plan.md
-23005f82f48ea81eb9579dfaeff122514761c323cf784fbda91dda111945d286  docs/superpowers/plans/2026-05-04-v5-pixel-temporal-plan.md.tasks.json
+4184483411e32409daa5b6964fbde971429348a1e77de3995d9d53a69a67d77b  docs/superpowers/plans/2026-05-04-v5-pixel-temporal-plan.md.tasks.json
 d3bdf697fd9adaa479cd87af6b7c18fe0ab0408deb219f300a4d59095a450303  oss/sr/temporal/warp.py
 029945f1d1fb64a1e4d383d16811c52da06be8c2457f7d9d18a861b835763efe  oss/sr/temporal/disocclusion.py
 b30b3cce0bada0f5d9a7053e6aef05456d9db15d82a1af634453b7513afce6a9  oss/sr/temporal/temporal_head.py
@@ -211,7 +211,7 @@ Observed commits on `v0.2-dev`:
 - `2d315e1` v5-pixel(sr): add motion-vec upsample + backward HR warp helpers
 - `0820439` v5-gaussian(sr): add GaussianField SoA + history container
 
-Tracked pixel Task 8 and Gaussian Tasks 8-12 are committed. The prior high pixel flow-direction finding is fixed in `38cf507`. The three later implementation findings are fixed in `c1bad69`, with score-log documentation aligned in `bd1f77a`. C3 found and fixed one pixel inference checkpoint-loader bug in `4ed319a`, then expanded Task 7 train schedule/resume coverage in `b185df6`. C4 found and fixed one Gaussian model coordinate-space bug in `d6bc655`. Remaining open item is the stale plan task sidecars.
+Tracked pixel Task 8 and Gaussian Tasks 8-12 are committed. The prior high pixel flow-direction finding is fixed in `38cf507`. The three later implementation findings are fixed in `c1bad69`, with score-log documentation aligned in `bd1f77a`. C3 found and fixed one pixel inference checkpoint-loader bug in `4ed319a`, then expanded Task 7 train schedule/resume coverage in `b185df6`. C4 found and fixed one Gaussian model coordinate-space bug in `d6bc655`. Plan task sidecars were status-synced at 17:32 CDT.
 
 ## Tasks for Codex
 
@@ -228,13 +228,13 @@ If a probe finds a real bug, file it under `## Open Findings` with severity + fi
 
 ## Review Gate
 
-Do not dispatch implementation workers from stale `.tasks.json` files. Both JSON files were generated before later plan edits and did not update when the source plan docs changed.
+The `.tasks.json` files are now status-synced for completed vs pending work, but the plan `.md` files remain the source of truth for task details and acceptance criteria.
 
 Preferred next step:
 
-1. Clean the remaining plan nits below.
-2. Regenerate both `.tasks.json` files from the corrected plan docs, or explicitly instruct implementers to ignore the JSON and read the plan docs directly.
-3. Begin pixel implementation first unless Cash explicitly chooses parallel track work.
+1. Keep the pixel run alive through Phase 1/2 and checkpoint milestones.
+2. Do not launch Gaussian training on the shared 3080 Ti unless pixel completes or Cash approves an overlap test.
+3. Fetch Sintel Depth or add a tested no-depth fallback before treating Sintel eval/fine-tune as valid.
 
 ## C3 Pixel Spec Compliance Review
 
@@ -293,13 +293,18 @@ Fix direction:
 
 - Fetch/extract the Sintel Depth package into `<train-host-data>/datasets/sintel/training/depth/<seq>/frame_NNNN.dpt`, or explicitly add and test a no-depth fallback before using Sintel for v5 gates.
 
-### Stale .tasks.json sidecars
-
-Severity: low (does not block dispatch — implementer subagents are instructed to read the plan `.md` directly).
-
-Fix: regenerate the task JSON files before any cross-session resume via `/superpowers-extended-cc:executing-plans`.
-
 ## Resolved Findings
+
+### Plan Task Sidecars
+
+Resolved at 17:32 CDT: stale `.tasks.json` statuses.
+
+The sidecars previously marked every task `pending`, even after implementation had landed. Current status:
+
+- Pixel `.tasks.json`: Tasks 0-9 `completed`, Task 10 `pending`.
+- Gaussian `.tasks.json`: Tasks 0-13 `completed`, Task 14 `pending`.
+
+The sidecars should still be treated as progress trackers; the plan `.md` files remain authoritative for implementation details.
 
 ### Sprint 5 Fixes Committed In `c1bad69` / `bd1f77a`
 
@@ -771,7 +776,8 @@ C4 Gaussian spec-compliance pass and live monitor:
 - `d6bc655` pushed to `origin/v0.2-dev` for Claude/remote sync.
 - `e790dde` pushed the rolling-report updates, and remote `<train-host-data>/oss-gaussian` fast-forwarded to `e790dde`. Git Credential Manager printed a Windows credential-store warning, but fetch/pull completed and `git rev-parse --short HEAD` returned `e790dde`.
 - Full local SR verification after the push: `venv-py312/bin/python -m pytest tests/sr -v` → 113 passed, 1 skipped, 14 warnings.
-- Remote pixel training PID `2360` still alive at 17:30 CDT; latest observed log reached step `1260`.
+- Remote pixel training PID `2360` still alive at 17:33 CDT; latest observed log reached step `1580`.
+- Plan task sidecars status-synced: pixel Tasks 0-9 completed / Task 10 pending; Gaussian Tasks 0-13 completed / Task 14 pending. The source `.md` plans remain authoritative for task details.
 
 ## Suggested Monitor Command
 
