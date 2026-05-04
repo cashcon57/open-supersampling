@@ -6,6 +6,7 @@ from oss.sr.gaussian_temporal.densification import densify
 from oss.sr.gaussian_temporal.pruning import prune
 from oss.sr.gaussian_temporal.rasterizer import render_field
 from oss.sr.gaussian_temporal.regularization import gaussian_regularization_loss
+from oss.sr.gaussian_temporal.model import GaussianTemporalSRModel
 
 __all__ = [
     "GaussianField",
@@ -17,4 +18,5 @@ __all__ = [
     "prune",
     "render_field",
     "gaussian_regularization_loss",
+    "GaussianTemporalSRModel",
 ]
