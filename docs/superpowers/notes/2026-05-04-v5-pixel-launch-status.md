@@ -11,33 +11,53 @@
 - CUDA smoke (pixel + Gaussian): both passed in <2s
 - v0.2-dev pulled to remote `<train-host-data>/oss-gaussian` (stash applied; `pre-v5-pull-stash-2026-05-04` saved on remote)
 
-## Active processes on <train-host>
+## Launch attempts (4th succeeded)
 
-### Training PID 8348
+1. PID 16540 — output dir didn't exist → process exited immediately (cmd-line stdout redirect failed). Fixed by `New-Item -Force` on `<train-host-data>\checkpoints\srcnn-v5-pixel-temporal`.
+2. PID 8348 — Sintel dataset crashed: `(frame, depth, flow)` triples missing — standard Sintel download has no `depth/` subdir; that's the separate "Sintel Depth" download. Fixed by dropping `--sintel-root` from launch (Phase 3 falls back to TartanAir; full v5 polish on Sintel deferred until Sintel-Depth is fetched).
+3. PID 21068 — Windows DataLoader spawn worker-transport failure on `adapt_tartanair`'s local closure. Fixed by `96dad76` (top-level callable classes) + Cash's complementary collate fix `4238915` for `GaussianTrainingExample` dataclass items.
+4. **PID 27732 — RUNNING.** Confirmed real training: 180 steps in 2 min, 75% GPU util, 3347 MiB GPU mem, loss decaying.
 
-`scripts/sr_train_temporal.py` orphan-spawned via WMI.
+## Live training process — PID 27732
 
-Args:
+`scripts/sr_train_temporal.py` orphan-spawned via WMI at 17:08 CDT.
+
+Args (Sintel deliberately omitted; see attempt 2 above):
 
 ```
 --output-dir   <train-host-data>\checkpoints\srcnn-v5-pixel-temporal
 --warm-start   <train-host-data>\checkpoints\srcnn-prod-v4-lpips\step-00385000.pt
 --tartanair-root <train-host-data>\datasets\tartanair_extracted
---sintel-root  <train-host-data>\datasets\sintel
 --max-steps    80000
 --device       cuda
 ```
 
 Log: `<train-host-data>\checkpoints\srcnn-v5-pixel-temporal\train.log`
 
-Initial log (verified 16:57:09):
+Live snapshot (verified 17:10 CDT, 2 min into training):
 
 ```
 v5-pixel-temporal: device=cuda tier=standard steps=80000 batch=4 smoke=False warmup=10000 joint_end=60000 lr=1.00e-04
 warm-start backbone from <train-host-data>\checkpoints\srcnn-prod-v4-lpips\step-00385000.pt
 model params: total=626450
 phase transition: -1 -> 1  (lr=1.00e-04, backbone_frozen=True)
+step=1   phase=1 loss=3.9647  t_l1=1.9150 tp1_l1=1.9067
+step=20  phase=1 loss=10.8056 t_l1=5.2328 tp1_l1=5.4159
+step=40  phase=1 loss=8.9698  t_l1=4.2575 tp1_l1=4.5430
+step=60  phase=1 loss=1.5324  t_l1=0.7016 tp1_l1=0.6934
+step=80  phase=1 loss=4.9873  t_l1=2.2898 tp1_l1=2.5264
+step=100 phase=1 loss=1.7622  t_l1=0.8185 tp1_l1=0.7783
+step=120 phase=1 loss=4.1626  t_l1=1.9906 tp1_l1=2.0090
+step=140 phase=1 loss=0.8750  t_l1=0.3659 tp1_l1=0.3772
+step=160 phase=1 loss=1.5608  t_l1=0.6957 tp1_l1=0.6923
+step=180 phase=1 loss=3.3780  t_l1=1.4120 tp1_l1=1.7778
 ```
+
+Loss bouncing around 1–10 — expected for Phase 1 with backbone frozen + temporal head warming up on TartanAir HR distribution (different from SRGD that v4 trained on). Should stabilize as Phase 1 progresses; Phase 2 (10K steps in) unfreezes backbone and adds temporal-consistency loss.
+
+Throughput: ~90 steps/min ≈ 5400 steps/hour. ETA: 80,000 / 5400 ≈ **14.8 hours → finish ~07:54 CDT 2026-05-05**.
+
+GPU utilization: 75%, 3347 MiB / 11244 MiB free. Headroom for the eventual Gaussian run.
 
 ### Dashboard PID 14952
 
