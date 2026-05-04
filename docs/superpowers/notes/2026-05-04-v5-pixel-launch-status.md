@@ -51,6 +51,22 @@ step=320 phase=1 loss=1.1641 t_l1=0.4901 tp1_l1=0.5080
 step=340 phase=1 loss=0.8655 t_l1=0.3410 tp1_l1=0.3555
 ```
 
+Latest live snapshot (verified 17:27 CDT):
+
+```
+python PID 2360 alive; CPU=150.15625; StartTime=5/4/2026 5:20:42 PM
+step=700 phase=1 loss=0.8298 t_l1=0.3288 tp1_l1=0.3683
+step=720 phase=1 loss=1.1572 t_l1=0.4764 tp1_l1=0.4989
+step=740 phase=1 loss=0.9283 t_l1=0.3421 tp1_l1=0.4282
+step=760 phase=1 loss=1.4542 t_l1=0.5835 tp1_l1=0.7322
+step=780 phase=1 loss=1.0044 t_l1=0.3816 tp1_l1=0.4720
+step=800 phase=1 loss=1.5391 t_l1=0.7105 tp1_l1=0.6708
+step=820 phase=1 loss=0.7487 t_l1=0.2869 tp1_l1=0.3236
+step=840 phase=1 loss=1.5974 t_l1=0.6871 tp1_l1=0.7379
+step=860 phase=1 loss=1.7870 t_l1=0.8328 tp1_l1=0.8105
+step=880 phase=1 loss=0.7435 t_l1=0.2859 tp1_l1=0.3077
+```
+
 Loss bouncing around 1–10 — expected for Phase 1 with backbone frozen + temporal head warming up on TartanAir HR distribution (different from SRGD that v4 trained on). Should stabilize as Phase 1 progresses; Phase 2 (10K steps in) unfreezes backbone and adds temporal-consistency loss.
 
 Throughput: ~90 steps/min ≈ 5400 steps/hour. ETA: 80,000 / 5400 ≈ **14.8 hours → finish ~07:54 CDT 2026-05-05**.

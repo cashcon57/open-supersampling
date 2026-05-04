@@ -2,7 +2,7 @@
 
 **Status:** Active living document  
 **Purpose:** Shared rolling review surface for Sprint 5 dual-track implementation planning and code review. Claude/Codex agents should read and update this file before dispatching implementation or reviewer subagents.  
-**Last updated:** 2026-05-04 17:23 CDT
+**Last updated:** 2026-05-04 17:28 CDT
 
 **Watcher:** Codex (review) / Claude (implementer-controller)
 
@@ -30,7 +30,7 @@ Sprint 5 planning artifacts created during this watch:
 
 Claude/Codex launch-status note:
 
-- `docs/superpowers/notes/2026-05-04-v5-pixel-launch-status.md` is tracked. It records the failed early launch attempts and the active TartanAir-only relaunch on `<train-host>`: python PID `2360`, parent `cmd.exe` PID `15652`, dashboard PID `14952`.
+- `docs/superpowers/notes/2026-05-04-v5-pixel-launch-status.md` is tracked. It records the failed early launch attempts and the active TartanAir-only relaunch on `<train-host>`: python PID `2360`, parent `cmd.exe` PID `15652`, dashboard PID `14952`. Latest Codex check at 17:27 CDT: PID `2360` alive and log reached step `880` with finite Phase-1 losses.
 
 Latest observed hashes for active Sprint 5 files:
 
@@ -168,6 +168,8 @@ Results:
 Verification caveat: default `python3` and `.venv/bin/python` do not have `torch` or `pytest`; `venv/bin/python` has `pytest` but not `torch`. Use `venv-py312/bin/python` for local CPU tests. For CUDA/PyTorch-heavy verification, Cash notes that PyTorch is also available on at least one Tailnet machine plus the RunPod and Lambda instances used by the project.
 
 Observed commits on `v0.2-dev`:
+- `d6bc655` v5-gaussian(sr): warp field in HR coordinates
+- `2e4f43a` sprint5(notes): update pixel launch recovery
 - `10e75df` v5-pixel(sr): skip unreadable frame pairs lazily
 - `b8b08c5` data(tartanair): skip corrupt npy triples
 - `7691e5f` sprint5(notes): pixel training confirmed running PID 27732 (ETA ~07:54 tomorrow)
@@ -209,7 +211,7 @@ Observed commits on `v0.2-dev`:
 - `2d315e1` v5-pixel(sr): add motion-vec upsample + backward HR warp helpers
 - `0820439` v5-gaussian(sr): add GaussianField SoA + history container
 
-Tracked pixel Task 8 and Gaussian Tasks 8-12 are committed. The prior high pixel flow-direction finding is fixed in `38cf507`. The three later implementation findings are fixed in `c1bad69`, with score-log documentation aligned in `bd1f77a`. C3 found and fixed one pixel inference checkpoint-loader bug in `4ed319a`, then expanded Task 7 train schedule/resume coverage in `b185df6`. Remaining open item is the stale plan task sidecars.
+Tracked pixel Task 8 and Gaussian Tasks 8-12 are committed. The prior high pixel flow-direction finding is fixed in `38cf507`. The three later implementation findings are fixed in `c1bad69`, with score-log documentation aligned in `bd1f77a`. C3 found and fixed one pixel inference checkpoint-loader bug in `4ed319a`, then expanded Task 7 train schedule/resume coverage in `b185df6`. C4 found and fixed one Gaussian model coordinate-space bug in `d6bc655`. Remaining open item is the stale plan task sidecars.
 
 ## Tasks for Codex
 
@@ -220,7 +222,7 @@ Active asks:
 - **C1 — done by Codex at 16:32 CDT.** History-buffer ordering after frame N≥6 is newest-first. Probe stamped returned fields with frame ids, rolled through frame 7, and observed history color means `[0.6, 0.5, 0.4, 0.3, 0.2]`, matching frames 6, 5, 4, 3, 2. Ref: `oss/sr/gaussian_temporal/model.py:131-145`.
 - **C2 — done by Codex at 16:40 CDT.** Synthetic held-out probe used `t_motion=+1` and `tp1_motion=-2`; fake temporal model saw motion calls `[1.0, 1.0]`, and `tstab_temporal` was exactly `0.0`, which would not hold if `tp1_motion` were used for the second render or stability warp.
 - **C3 — done by Codex at 17:02 CDT.** Pixel Tasks 0-9 reviewed against `docs/superpowers/plans/2026-05-04-v5-pixel-temporal-plan.md`. One real bug fixed (`TemporalSRInferenceEngine.from_checkpoint` now honors saved `backbone_kind`), and Pixel Task 7 gained schedule, score-log, and auto-resume tests. Remaining gaps are documented below under "C3 Pixel Spec Compliance Review"; none currently block the launched pixel run.
-- **C4 — Spec-compliance review of Gaussian Tasks 0–9.** Same protocol as C3 against `docs/superpowers/plans/2026-05-04-v5-gaussian-temporal-plan.md`. Tasks 10–14 are upcoming; skip.
+- **C4 — done by Codex at 17:28 CDT.** Gaussian Tasks 0-9 reviewed against `docs/superpowers/plans/2026-05-04-v5-gaussian-temporal-plan.md`. One real bug fixed: `GaussianTemporalSRModel` now lifts LR motion into HR field coordinates before warping persistent Gaussians (`d6bc655`). Full Gaussian-temporal suite passed 59/59 after the fix.
 
 If a probe finds a real bug, file it under `## Open Findings` with severity + file:line citations as you've been doing. Claude will patch.
 
@@ -254,6 +256,24 @@ Remaining documented coverage gaps:
 - Task 5: the integration test includes L1, SSIM-like proxy, optional LPIPS, temporal consistency, and gradients. The LPIPS path is best-effort (`try/except`) instead of the plan's exact `pytest.importorskip("lpips")` wording, and the SSIM term is a lightweight proxy in the test.
 - Task 8: argparse/import smoke is covered, and C2 independently verified held-out flow direction. Full PSNR/LPIPS/temporal-stability result correctness still depends on a real checkpoint + datasets after training.
 - Task 9: memo/runbook exist and were used for launch; warm-start hash and remote launch state are operationally verified, not unit-tested.
+
+## C4 Gaussian Spec Compliance Review
+
+Scope: Gaussian Tasks 0-9 in `docs/superpowers/plans/2026-05-04-v5-gaussian-temporal-plan.md`, checked against committed tests and implementation.
+
+Result: no Gaussian Task 0-9 blocking finding remains after `d6bc655`.
+
+Fixed during C4:
+
+- Task 8 coordinate-space bug: first-frame densification seeds Gaussian means in HR pixel coordinates, but temporal warp was sampling the LR motion field and using LR frame bounds. That killed valid HR-space Gaussians outside the LR bounds on the next frame. Fixed in `d6bc655`; `oss/sr/gaussian_temporal/model.py:119` upsamples LR motion to HR resolution, scales displacement by `model.scale`, and calls `warp_field(..., hw=(h_hr, w_hr))`. Regression: `tests/sr/gaussian_temporal/test_model_full_step.py:98`.
+
+Remaining documented coverage gaps:
+
+- Task 1: analytical covariance warp is covered for identity, pure translation, and a diagonal smooth-flow Jacobian. There is no direct finite-difference probe for off-diagonal shear/rotation coupling.
+- Task 3: transformer tests cover param budget, shape, permutation equivariance, RoPE-keyed gradient path, and input gradients. There is no direct inspection test proving absence of learned positional embeddings beyond behavior.
+- Task 4: densification is explicitly heuristic and per-sample (`B=1`). The test covers residual selection, free-slot insertion, tile color, and color gradients, but not a soft top-K variant, which is post-v5 by spec.
+- Task 8: full-step synthetic training and phase isolation are covered locally. Real-data Gaussian training remains intentionally queued until the pixel control run completes or Cash approves GPU overlap.
+- Task 9: window-boundary behavior is covered with a fake trajectory-keyed base dataset and collate coverage. Real TartanAir/Sintel adapter behavior shares the pixel-track adapter shims but is not directly unit-tested against real remote dataset trees.
 
 ## Open Findings
 
@@ -340,6 +360,15 @@ The earlier probe showed `SequentialPairDataset(_FakeBase(), pair_stride=2)` rai
 - Verification: `venv-py312/bin/python -m pytest tests/sr/temporal/test_dataset.py -v` is included in the 13-test and 14-test combined passes.
 
 ### Gaussian Implementation
+
+Resolved in `d6bc655`: high severity Task 8 HR/LR coordinate mismatch in temporal Gaussian warp.
+
+The Gaussian field is rendered in HR pixel coordinates, but the model previously passed the LR motion tensor and LR `(h, w)` bounds into `warp_field` for recurrent frames. A zero-motion second frame could mark valid HR-space Gaussians dead simply because `mu.x >= w_lr` or `mu.y >= h_lr`.
+
+- `oss/sr/gaussian_temporal/model.py:119` now upsamples `motion_lr` to `(h_hr, w_hr)`, scales displacement by `model.scale`, and warps against HR bounds.
+- `tests/sr/gaussian_temporal/test_model_full_step.py:98` adds `test_temporal_warp_uses_hr_field_coordinates`.
+- Verification: `venv-py312/bin/python -m pytest tests/sr/gaussian_temporal/test_model_full_step.py -v` → 11 passed in 0.70s.
+- Verification: `venv-py312/bin/python -m pytest tests/sr/gaussian_temporal -v` → 59 passed in 2.77s.
 
 Resolved: high severity Task 1 analytical-warp identity preservation.
 
@@ -728,6 +757,17 @@ Remote launch recovery:
 - Verification after `10e75df`: `venv-py312/bin/python -m pytest tests/gaussian/test_datasets.py tests/sr -v` → 128 passed, 1 skipped, 15 warnings.
 - Relaunched long pixel training as TartanAir-only at 17:20 CDT. Active process: python PID `2360`, parent cmd PID `15652`; latest observed log reached step 340 with finite loss, past the previous crash point.
 - `docs/superpowers/notes/2026-05-04-v5-pixel-launch-status.md` is tracked in `913cc9f` and was updated locally with the active PID and TartanAir-only caveat.
+
+### 17:24-17:28 CDT
+
+C4 Gaussian spec-compliance pass and live monitor:
+
+- Remote pixel training PID `2360` remained alive. Latest observed tail reached step `880` at 17:27 CDT with finite Phase-1 losses.
+- C4 review found a high Gaussian Task 8 bug: persistent Gaussian means live in HR coordinates, but recurrent warp used LR motion bounds. This would kill most HR-space Gaussians on the next temporal frame.
+- `d6bc655` fixed the model by lifting LR motion into HR field space before `warp_field`; regression `test_temporal_warp_uses_hr_field_coordinates` added.
+- Verification: `venv-py312/bin/python -m pytest tests/sr/gaussian_temporal/test_model_full_step.py -v` → 11 passed.
+- Verification: `venv-py312/bin/python -m pytest tests/sr/gaussian_temporal -v` → 59 passed.
+- `d6bc655` pushed to `origin/v0.2-dev` for Claude/remote sync.
 
 ## Suggested Monitor Command
 
