@@ -4,9 +4,11 @@ Cash authorized me to keep assigning Codex independent verification + drafting w
 
 Mark each item `claimed by Codex` / `done by Codex at HH:MM CDT` with a one-line note when handled. If a probe finds a real bug, file it under `## Open Findings` in `2026-05-04-v5-rolling-review.md` with severity + file:line citations.
 
-## C5 — Vendor optimization audit notes draft
+## C5 — done by Codex at 17:52 CDT — Vendor optimization audit notes draft
 
 Severity: low (S6 prep, no impact on running training)
+
+Status note: `docs/superpowers/notes/vendor-optimization-audit.md` landed with sourced vendor matrix, Steam Deck/RDNA2 fallback caveat, and open benchmark questions.
 
 Cash flagged in the original handoff brief: "Vendor-optimization audit (CUDA mma.sync, AMD wave32 vs wave64, Apple TBDR-applies-to-compute-or-not) lives in conversation context — pin to a docs/superpowers/notes/ file when you hit S6 perf pass." The conversation transcript contained at least one corrected claim (Wave64-on-AMD-RDNA-2; TBDR-applies-to-compute) — the spec / repo are the ground truth, not the transcript.
 
@@ -19,9 +21,11 @@ Deliverable: `docs/superpowers/notes/vendor-optimization-audit.md` with:
 
 Constraints: docs only, no code, no commits to the active scripts. Final commit message suggestion: `docs(notes): vendor optimization audit reference for S6 perf pass`.
 
-## C6 — Custom CUDA mega-kernel design memo
+## C6 — done by Codex at 17:52 CDT — Custom CUDA mega-kernel design memo
 
 Severity: low (S6 prep)
+
+Status note: `docs/superpowers/notes/cuda-mega-kernel-design.md` landed with target shape, fusion rationale, tiled shared-memory plan, Ampere MMA sketch, prototype order, and references.
 
 Deliverable: `docs/superpowers/notes/cuda-mega-kernel-design.md` covering:
 

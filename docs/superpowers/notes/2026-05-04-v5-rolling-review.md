@@ -2,7 +2,7 @@
 
 **Status:** Active living document  
 **Purpose:** Shared rolling review surface for Sprint 5 dual-track implementation planning and code review. Claude/Codex agents should read and update this file before dispatching implementation or reviewer subagents.  
-**Last updated:** 2026-05-04 17:47 CDT
+**Last updated:** 2026-05-04 17:52 CDT
 
 **Watcher:** Codex (review) / Claude (implementer-controller)
 
@@ -30,7 +30,7 @@ Sprint 5 planning artifacts created during this watch:
 
 Claude/Codex launch-status note:
 
-- `docs/superpowers/notes/2026-05-04-v5-pixel-launch-status.md` is tracked. It records the failed early launch attempts and the active TartanAir-only relaunch on `<train-host>`: python PID `2360`, parent `cmd.exe` PID `15652`, dashboard PID `14952`. Latest Codex check at 17:46 CDT: PID `2360` alive and log reached step `2620` with finite Phase-1 losses. First checkpoint `step-00002000.pt` is verified.
+- `docs/superpowers/notes/2026-05-04-v5-pixel-launch-status.md` is tracked. It records the failed early launch attempts and the active TartanAir-only relaunch on `<train-host>`: python PID `2360`, parent `cmd.exe` PID `15652`, dashboard PID `14952`. Latest Codex check at 17:51 CDT: PID `2360` alive and log reached step `2860` with finite Phase-1 losses. First checkpoint `step-00002000.pt` is verified.
 
 Latest observed hashes for active Sprint 5 files:
 
@@ -168,6 +168,7 @@ Results:
 Verification caveat: default `python3` and `.venv/bin/python` do not have `torch` or `pytest`; `venv/bin/python` has `pytest` but not `torch`. Use `venv-py312/bin/python` for local CPU tests. For CUDA/PyTorch-heavy verification, Cash notes that PyTorch is also available on at least one Tailnet machine plus the RunPod and Lambda instances used by the project.
 
 Observed commits on `v0.2-dev`:
+- `b4f4023` v5-pixel(sr): scaffold stateless model wrapper for ONNX export + design memo
 - `ab08f73` sprint5(sr): pre-stage deterministic held-out manifest for v5 eval
 - `24d7fbf` sprint5(runbooks): guard missing Sintel depth
 - `9f8d3ac` sprint5(plans): sync task sidecar statuses
@@ -228,6 +229,8 @@ Active asks:
 - **C2 — done by Codex at 16:40 CDT.** Synthetic held-out probe used `t_motion=+1` and `tp1_motion=-2`; fake temporal model saw motion calls `[1.0, 1.0]`, and `tstab_temporal` was exactly `0.0`, which would not hold if `tp1_motion` were used for the second render or stability warp.
 - **C3 — done by Codex at 17:02 CDT.** Pixel Tasks 0-9 reviewed against `docs/superpowers/plans/2026-05-04-v5-pixel-temporal-plan.md`. One real bug fixed (`TemporalSRInferenceEngine.from_checkpoint` now honors saved `backbone_kind`), and Pixel Task 7 gained schedule, score-log, and auto-resume tests. Remaining gaps are documented below under "C3 Pixel Spec Compliance Review"; none currently block the launched pixel run.
 - **C4 — done by Codex at 17:28 CDT.** Gaussian Tasks 0-9 reviewed against `docs/superpowers/plans/2026-05-04-v5-gaussian-temporal-plan.md`. One real bug fixed: `GaussianTemporalSRModel` now lifts LR motion into HR field coordinates before warping persistent Gaussians (`d6bc655`). Full Gaussian-temporal suite passed 59/59 after the fix.
+- **C5 — done by Codex at 17:51 CDT.** Vendor optimization audit drafted at `docs/superpowers/notes/vendor-optimization-audit.md` with source links and open benchmark questions.
+- **C6 — done by Codex at 17:51 CDT.** CUDA mega-kernel design memo drafted at `docs/superpowers/notes/cuda-mega-kernel-design.md`.
 - **C7 — done by Codex at 17:47 CDT.** README S5 status updated: implementation complete, pixel training in flight, Gaussian queued, Sintel Depth missing, and no v5 ship decision claimed.
 
 If a probe finds a real bug, file it under `## Open Findings` with severity + file:line citations as you've been doing. Claude will patch.
@@ -799,6 +802,8 @@ Network changed and recovered:
 - Verification: `venv-py312/bin/python -m pytest tests/sr/temporal/test_stateless_export.py tests/sr/temporal/test_held_out_manifest.py tests/sr/temporal/test_train_smoke.py -v` → 14 passed.
 - Full local SR verification after stateless-export wrapper: `venv-py312/bin/python -m pytest tests/sr -v` → 124 passed, 1 skipped, 14 warnings.
 - C7 README update completed: Sprint 5 now shows implementation complete, pixel training in flight, Gaussian queued, Sintel Depth missing, and no v5 ship decision claimed.
+- C5/C6 docs completed: vendor optimization audit and CUDA mega-kernel design memo added under `docs/superpowers/notes/`.
+- Claude local commit `b4f4023` added `docs/superpowers/notes/2026-05-04-v5-pixel-temporal-onnx-export-design.md`; Codex preserved it and committed follow-up notes on top.
 
 ## Suggested Monitor Command
 
