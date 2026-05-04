@@ -7,8 +7,9 @@ Three-phase schedule (default):
        temporal-consistency at lambda=0.05.
     3. Steps 60000..80000 — Sintel-only fine-tune at LR*0.01.
 
-Writes ``metrics.json`` (keyed by step) and ``score_log.json`` (rolling list
-of {step, psnr, lpips, loss}) compatible with ``scripts/training_dashboard.py``.
+Writes ``metrics.json`` (keyed by step) and an initially empty
+``score_log.json``. Training progress lives in ``metrics.json``; real
+held-out eval rows are written later by ``scripts/sr_temporal_held_out.py``.
 Auto-resumes from the latest checkpoint in ``--output-dir`` if any.
 
 Smoke mode (``--smoke``):
@@ -16,7 +17,8 @@ Smoke mode (``--smoke``):
 
 Mirrors ``oss/gaussian/train/train.py`` for auto-resume + metrics-dump
 patterns: rolling write of ``metrics.json`` and ``score_log.json`` at every
-checkpoint; auto-resume picks the latest ``step-XXXXX.pt`` from
+checkpoint; ``score_log.json`` is preserved for held-out eval rows.
+Auto-resume picks the latest ``step-XXXXX.pt`` from
 ``--output-dir`` and rehydrates optimizer state + previously logged metrics.
 """
 from __future__ import annotations

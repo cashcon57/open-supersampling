@@ -7,20 +7,19 @@ Four-phase schedule (default):
                              ``prev_field`` is always None (treats every frame
                              as a first frame). L1 + SSIM appearance loss only.
     2. Steps 20000..50000  — temporal warmup. Warped prev-field carried across
-                             steps; transformer active (2 effective layers per
-                             plan — implemented as full-architecture forward
-                             with the temporal loss/reg DISABLED so only
-                             appearance gradients flow). Encoder frozen.
+                             steps; transformer active with 2 effective layers
+                             and appearance gradients only. Encoder frozen.
     3. Steps 50000..120000 — joint training. Encoder unfrozen, full 4-layer
                              transformer, full loss including temporal-consistency
                              + regularization, densification active.
     4. Steps 120000..140000 — Sintel-only fine-tune at LR*0.01.
 
-Writes ``metrics.json`` (keyed by step) and ``score_log.json`` (rolling list of
-{step, ..., model_psnr_mean, bicubic_psnr_mean, model_lpips_mean, bicubic_lpips_mean})
-compatible with ``scripts/training_dashboard.py``. Auto-resumes from the
-latest checkpoint in ``--output-dir`` if any. Mirrors the auto-resume +
-metrics-dump patterns of ``scripts/sr_train_temporal.py``.
+Writes ``metrics.json`` (keyed by step) and an initially empty
+``score_log.json``. Training progress lives in ``metrics.json``; real
+held-out eval rows are written later by
+``scripts/sr_gaussian_temporal_held_out.py``. Auto-resumes from the latest
+checkpoint in ``--output-dir`` if any. Mirrors the auto-resume + metrics-dump
+patterns of ``scripts/sr_train_temporal.py``.
 
 BPTT detach: each step's ``prev_field`` is detached before being fed to the
 next step (training-graph length = 1 frame). The temporal-consistency loss
