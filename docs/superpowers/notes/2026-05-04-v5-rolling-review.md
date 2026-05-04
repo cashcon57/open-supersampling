@@ -2,7 +2,7 @@
 
 **Status:** Active living document  
 **Purpose:** Shared rolling review surface for Sprint 5 dual-track implementation planning and code review. Claude/Codex agents should read and update this file before dispatching implementation or reviewer subagents.  
-**Last updated:** 2026-05-04 16:27 CDT
+**Last updated:** 2026-05-04 16:58 CDT
 
 **Watcher:** Codex (review) / Claude (implementer-controller)
 
@@ -41,9 +41,11 @@ b30b3cce0bada0f5d9a7053e6aef05456d9db15d82a1af634453b7513afce6a9  oss/sr/tempora
 6cd990a49cfbfa009c2e87df677ad54c25675dd2b3fd8c7eb38ce7f6ebf7f244  oss/sr/temporal/model.py
 554f70dcf2b758643f7eb23d0d7455f2c2098e93591a6e5df330588b49e53c6f  oss/sr/temporal/dataset.py
 1d69b6a82326dda8879194bd5076ea084b8ad18947a4f6fecc40c2ef87f2f9b6  oss/sr/temporal/__init__.py
-eaf65423b82f310ffccf29fa0f56f4f4ed4ac0b171b58cc06341b8e4aaa3fc70  oss/sr/inference.py
-31be748fdbf384205b1c127bd6ae8c555e6b9ba8db689cc4b7c3c385b601b14b  scripts/sr_train_temporal.py
-38ef0d2bdabef9cd178fc3154a7a499165489f7fbdec9c63bd49c6d69b85b37b  scripts/sr_temporal_held_out.py
+d77e103bbd5062babcb991904fc0a7ded3a6f4def5b72af6587bcc2625b70aae  oss/sr/inference.py
+848bb3c2accb797fe46939a23d676fa6a8f57493c60c84ae52631426cbd48fa9  scripts/sr_train_temporal.py
+9c7d33c094387b7e38c0e9ad5826f46f063cf7d2f9f8ced9fcaa19bc1afcf812  scripts/sr_temporal_held_out.py
+2afe6c5aff9ada4b8268ce198282cb3614ac09f9123ec90f0711a5c1fc96143d  scripts/sr_train_gaussian_temporal.py
+fb36d8d2ee1b76937bc2482eeb16ad9b1752c2478b845f44c1128a12e8787c85  scripts/sr_gaussian_temporal_held_out.py
 060a9361ca2be77680baac4e699e0c29514c7eba6d1846672489341f3cb46a9d  oss/sr/gaussian_temporal/analytical_warp.py
 997231cb12f6abaf3f10cf161a182fa551bbca41cd4879458049dc8251585a01  oss/sr/gaussian_temporal/densification.py
 b6887cd0622263778a035ea3f83335fc6babe244fd08ab77b1155a8e01310955  oss/sr/gaussian_temporal/g_buffer_encoder.py
@@ -51,9 +53,10 @@ b6887cd0622263778a035ea3f83335fc6babe244fd08ab77b1155a8e01310955  oss/sr/gaussia
 d4c35220845fc76d024afd7acc8cc132a5b6959de384897625d93c9dfe816057  oss/sr/gaussian_temporal/pruning.py
 d618dddeda39c2d2f625cc02ddebc1fc35e4b3148759e09880923d33cd574a51  oss/sr/gaussian_temporal/rasterizer.py
 42bb0fa6f1119a3155018008340a1d50eeeb3561b1d566ef775d91a50ef4ce9b  oss/sr/gaussian_temporal/regularization.py
-478c4be7f4ba9b9d4a3f3f01f262f7e5767ef7a45648a9894cf9efc27ba36ada  oss/sr/gaussian_temporal/transformer.py
-2b6874b088bd3167c94f644e92a4f4ce2b5b728f1a725dcfa8a90a03254325d3  oss/sr/gaussian_temporal/model.py
-f4d20aac0cf78e734025e284d3546a6b66047ac95abb46d7d78a7f80ff2b0b4b  oss/sr/gaussian_temporal/__init__.py
+1968722da0aedbcf88aeabe053245d36d9f26548ccea3462c3e3ca0d0cc8aab4  oss/sr/gaussian_temporal/transformer.py
+39421b60b799a52cee9337fa9ebcaf6eb69bfe7ca85f538bbcebf6445e8bfa7a  oss/sr/gaussian_temporal/model.py
+2c99d4b7fd8da2cc65b85625f98f94a469c8937c6654f8001e33d14729593e1b  oss/sr/gaussian_temporal/dataset.py
+cdbc97c1f4c51c1bd380729466784a9354a6b3ff50db2740473576ffb2719ddf  oss/sr/gaussian_temporal/__init__.py
 2534dc26dc5bc507cb815160095aaf67f18c038f4d85348a8f8f676f618d6a50  tests/sr/temporal/test_inference_state.py
 a9cc062811f3b5b6a6e73989c006404ec5b2c20cf5f829249dc0aa56f0b170f5  tests/sr/temporal/test_train_smoke.py
 187f5d09bae23a0ca8625a7240b10c31c1b6125151f548f4f08f7aa639b3a298  tests/sr/temporal/test_held_out_argparse.py
@@ -63,9 +66,18 @@ f0183c261e44355c28498c69ded22cd2e5d0ab0ed659a761afc2e8f79900becb  tests/sr/tempo
 c51c9195ac4494bbc6c5e86836ed924bed160f88c9e51b2c1bfb00d8ad84f54c  tests/sr/gaussian_temporal/test_pruning.py
 150708aaae5f03ba996b7c34f86f1e6f16e5ad599ae8afbf98fd73bae9ee9ebf  tests/sr/gaussian_temporal/test_rasterizer_wrapper.py
 9e0ec8fe2910cd7626d7b8f0f46b4fc1d18f0e077f25213fc163876dcf452694  tests/sr/gaussian_temporal/test_regularization.py
-24d2250c40175832b56e4d8bf963570384c23ad1f4150a0b3ac9641c6f133fc7  tests/sr/gaussian_temporal/test_model_full_step.py
+5267d25231a5787feb853e096036005bd121a018c7ca4a44db3377e7797dba25  tests/sr/gaussian_temporal/test_model_full_step.py
+8c06871e7a010744319fd982575bec00e407d859a4fbb10ceade096fddf5e57e  tests/sr/gaussian_temporal/test_dataset.py
+ae84b9e3cb045ca4a9f9ca6020c5ee7803c43fe6469ac6e1ab3dddd94a3f71af  tests/sr/gaussian_temporal/test_inference_state.py
+d08dbc2191ef4eb5f0943b0117e61242aafbb03c34dff3d9866f36ebbf0a2c5b  tests/sr/gaussian_temporal/test_train_smoke.py
+b61a77b9cca542c738f87b1bd6f7f28a2647bfd7f27ca51c8fd1f4f84842fba9  tests/sr/gaussian_temporal/test_held_out_argparse.py
 e619e9f695e3e21005ea392c5d90f93569fdb7b907d15868ef6e72e95d169efb  tests/sr/gaussian_temporal/test_analytical_warp.py
 3614b8fac4f1a6e597f78197b2fcd06b050eeae01f3124fe9135703f9c782017  tests/sr/gaussian_temporal/test_transformer.py
+e07419e61a91d399a47de2bc504c0ebac3de8562a1424f0de1e22f3c1b3d2b2b  docs/superpowers/experiments/2026-05-04-v5-pixel-temporal-train-start.md
+6d12db027efda9def95d45fb5b3445fcfd2505c31ff6b8d82d35f5c2e4e74e9b  docs/superpowers/notes/2026-05-04-v5-pixel-temporal-runbook.md
+2af29b55221b84623e810bc2b37ab0a3824d2123ab7dff9c77b56f7ad877ba8a  docs/superpowers/experiments/2026-05-04-v5-gaussian-temporal-train-start.md
+9e4c98255cac34d2f3f858ab04287e2ffea2322414dbdcbd5d4aee2437cd90df  docs/superpowers/notes/2026-05-04-v5-gaussian-temporal-runbook.md
+b92dcc1f373c9e492b5d4e09b567b0982675da1ba7910bef927c0e46346dd3ab  docs/superpowers/experiments/2026-XX-XX-v5-gaussian-temporal-held-out-template.md
 ```
 
 Implementation files now present:
@@ -91,7 +103,15 @@ Implementation files now present:
 - Pixel Task 7 committed: `scripts/sr_train_temporal.py`, `tests/sr/temporal/test_train_smoke.py`
 - Pixel Task 8 committed: `scripts/sr_temporal_held_out.py`, `tests/sr/temporal/test_held_out_argparse.py`, `docs/superpowers/experiments/2026-XX-XX-v5-pixel-temporal-held-out-template.md`
 - Gaussian Task 8 committed: `oss/sr/gaussian_temporal/model.py`, `tests/sr/gaussian_temporal/test_model_full_step.py`
-- Working-tree fixes present but not committed: Gaussian Task 8 history-buffer fix; Pixel Task 4 `pair_stride` fix.
+- Pixel train-start lab notebook memo and remote runbook committed: `docs/superpowers/experiments/2026-05-04-v5-pixel-temporal-train-start.md`, `docs/superpowers/notes/2026-05-04-v5-pixel-temporal-runbook.md`
+- Gaussian Task 9 committed: `oss/sr/gaussian_temporal/dataset.py`, `tests/sr/gaussian_temporal/test_dataset.py`
+- Pixel flow-direction fix committed: `scripts/sr_train_temporal.py` and `scripts/sr_temporal_held_out.py` now use `t_motion` for `t -> t+1` alignment.
+- Gaussian Task 10 committed: `oss/sr/inference.py`, `tests/sr/gaussian_temporal/test_inference_state.py`
+- Gaussian Task 11 committed: `scripts/sr_train_gaussian_temporal.py`, `tests/sr/gaussian_temporal/test_train_smoke.py`
+- Gaussian train-start memo/runbook committed: `docs/superpowers/experiments/2026-05-04-v5-gaussian-temporal-train-start.md`, `docs/superpowers/notes/2026-05-04-v5-gaussian-temporal-runbook.md`
+- Gaussian Task 12 committed: `scripts/sr_gaussian_temporal_held_out.py`, `tests/sr/gaussian_temporal/test_held_out_argparse.py`, `docs/superpowers/experiments/2026-XX-XX-v5-gaussian-temporal-held-out-template.md`
+- Sprint 5 review fixes through `c1bad69` are committed: score logs stay empty during training; runbook dashboard commands use `scripts/training_dashboard.py`; Gaussian phase isolation uses a trainable per-frame fitter in Phase 1 and `effective_layers=2` in Phase 2.
+- `bd1f77a` committed trainer docstring cleanup so the pixel and Gaussian training headers now match the held-out-owned `score_log.json` behavior.
 
 Targeted completed-task tests pass under the working local env:
 
@@ -122,13 +142,34 @@ Results:
 - `tests/sr/temporal/test_held_out_argparse.py` → 1 passed in 1.12s
 - `tests/sr/gaussian_temporal/test_model_full_step.py` → 5 passed in 0.55s
 - Combined working-tree fix verification: `tests/sr/gaussian_temporal/test_model_full_step.py tests/sr/temporal/test_dataset.py tests/sr/temporal/test_held_out_argparse.py` → 13 passed in 1.32s
+- Combined post-commit verification: `tests/sr/gaussian_temporal/test_model_full_step.py tests/sr/temporal/test_dataset.py tests/sr/temporal/test_train_smoke.py tests/sr/temporal/test_held_out_argparse.py` → 14 passed in 2.51s
+- Changed-test verification after `38cf507`: `tests/sr/gaussian_temporal/test_dataset.py tests/sr/temporal/test_train_smoke.py tests/sr/temporal/test_held_out_argparse.py` → 7 passed in 2.41s
+- Codex C1 history-order probe: after frame 7, stamped history color means were `[0.6, 0.5, 0.4, 0.3, 0.2]`, confirming `history[0]` is frame 6 and newest-first ordering holds through the cap.
+- `tests/sr/gaussian_temporal/test_inference_state.py` → 3 passed in 0.52s
+- `tests/sr/gaussian_temporal/test_train_smoke.py tests/sr/gaussian_temporal/test_held_out_argparse.py` → 2 passed in 2.19s
+- Codex C2 pixel held-out flow-direction probe passed: synthetic `t_motion=+1`, `tp1_motion=-2` produced temporal model motion calls `[1.0, 1.0]` and `tstab_temporal=[0.0]`, confirming held-out render and stability warp are aligned to `t_motion`.
+- Working-tree fix verification: `tests/sr/temporal/test_train_smoke.py tests/sr/gaussian_temporal/test_train_smoke.py tests/sr/gaussian_temporal/test_model_full_step.py tests/sr/gaussian_temporal/test_transformer.py` → 16 passed in 3.59s.
+- Full local SR verification after `c1bad69`/`bd1f77a`: `venv-py312/bin/python -m pytest tests/sr/temporal tests/sr/gaussian_temporal -v` → 87 passed, 2 torchvision deprecation warnings in 5.83s.
+- Direct score-log behavior check after the fake-eval-row fix: pixel smoke with `--max-steps 2` wrote `/tmp/oss_pixel_scorelog_check/score_log.json` as `[]`; Gaussian smoke with `--max-steps 2` wrote `/tmp/oss_gauss_scorelog_check/score_log.json` as `[]`.
+- `git diff --check` passed at 16:32 CDT.
 - Extra spec probe for Gaussian analytical warp identity preservation now passes and is committed in `0618e46`.
 - Extra spec probe for Gaussian transformer gradient flow now passes and is committed in `0618e46`.
 - Extra spec probe for pixel `SequentialPairDataset(base, pair_stride=2)` is now covered by tests and passes in the working tree.
 
 Verification caveat: default `python3` and `.venv/bin/python` do not have `torch` or `pytest`; `venv/bin/python` has `pytest` but not `torch`. Use `venv-py312/bin/python` for local CPU tests. For CUDA/PyTorch-heavy verification, Cash notes that PyTorch is also available on at least one Tailnet machine plus the RunPod and Lambda instances used by the project.
 
-Commits on `v0.2-dev` (not pushed):
+Observed commits on `v0.2-dev`:
+- `bd1f77a` sprint5(sr): align train score-log docs
+- `c1bad69` sprint5(sr): patch 3 Codex findings — phase isolation, fake eval rows, runbook cmds
+- `15513b4` v5-gaussian(sr): add held-out eval + memo template
+- `5e14312` v5-gaussian(sr): add training entry with 4-phase schedule + smoke test
+- `a1144a0` v5-gaussian(sr): lab-notebook train-start memo + remote runbook
+- `291adb8` v5-gaussian(sr): add stateful GaussianTemporalSRInferenceEngine
+- `415d664` sprint5(notes): add 'Tasks for Codex' section with 4 verification probes
+- `38cf507` v5-pixel(sr): fix HIGH Codex finding — wrong frame's motion vec for t->t+1 warp
+- `ab6c5f9` v5-gaussian(sr): add multi-frame trajectory window dataset
+- `7cb3c44` v5-pixel(sr): lab-notebook train-start memo + remote runbook
+- `8a757f0` sprint5(sr): patch 3 Codex findings — history, pair_stride, score schema
 - `0755e9b` v5-pixel(sr): add held-out eval + memo template
 - `9d66af1` v5-gaussian(sr): wire full GaussianTemporalSRModel pipeline
 - `1557522` v5-pixel(sr): add training entry with 3-phase schedule + smoke test
@@ -151,7 +192,7 @@ Commits on `v0.2-dev` (not pushed):
 - `2d315e1` v5-pixel(sr): add motion-vec upsample + backward HR warp helpers
 - `0820439` v5-gaussian(sr): add GaussianField SoA + history container
 
-Tracked pixel Task 8 and Gaussian Task 8 code are committed. Two earlier review findings are fixed in the working tree but not committed yet: Gaussian Task 8 history population and Pixel Task 4 `pair_stride`. The open implementation findings are the pixel temporal motion-vector off-by-one and pixel Task 7 dashboard score schema mismatch.
+Tracked pixel Task 8 and Gaussian Tasks 8-12 are committed. The prior high pixel flow-direction finding is fixed in `38cf507`. The three later implementation findings are fixed in `c1bad69`, with score-log documentation aligned in `bd1f77a`. Remaining open item is the stale plan task sidecars.
 
 ## Tasks for Codex
 
@@ -159,8 +200,8 @@ Cash authorized Claude (controller) to assign verification work here. Codex pick
 
 Active asks:
 
-- **C1 — Verify history-buffer ordering after frame N≥6.** Claude added `_history.appendleft` ordering so newest is first; ran `test_history_populates_across_frames` covering frames 0..7 (cap at 5). Independent probe wanted: take the field returned at frame 7, render its history into the transformer, and confirm the **newest-first** invariant holds (i.e., `history[0]` is the snapshot from frame 6, `history[1]` is frame 5, etc.). Ref: `oss/sr/gaussian_temporal/model.py:131-145`.
-- **C2 — Audit pixel-temporal flow direction at the held-out level.** Flow fix `38cf507` updated `sr_train_temporal.py` + `sr_temporal_held_out.py` to use `t_motion` for the t→t+1 warp. Independent probe wanted: synthesize a 2-frame pair where `t_motion` and `tp1_motion` differ in sign or magnitude, run `sr_temporal_held_out.py` on a synthetic `TemporalSRModel`, and verify that the temporal-stability metric is consistent with `t_motion`-aligned warping (would diverge if `tp1_motion` were used).
+- **C1 — done by Codex at 16:32 CDT.** History-buffer ordering after frame N≥6 is newest-first. Probe stamped returned fields with frame ids, rolled through frame 7, and observed history color means `[0.6, 0.5, 0.4, 0.3, 0.2]`, matching frames 6, 5, 4, 3, 2. Ref: `oss/sr/gaussian_temporal/model.py:131-145`.
+- **C2 — done by Codex at 16:40 CDT.** Synthetic held-out probe used `t_motion=+1` and `tp1_motion=-2`; fake temporal model saw motion calls `[1.0, 1.0]`, and `tstab_temporal` was exactly `0.0`, which would not hold if `tp1_motion` were used for the second render or stability warp.
 - **C3 — Spec-compliance review of Pixel Tasks 0–9.** Each task in `docs/superpowers/plans/2026-05-04-v5-pixel-temporal-plan.md` has explicit acceptance criteria. Walk through Tasks 0–9 and report: (a) any acceptance criterion not covered by the committed test file, (b) any deviation that's documented but not tested. Pixel Task 10 (closeout) is post-training; skip.
 - **C4 — Spec-compliance review of Gaussian Tasks 0–9.** Same protocol as C3 against `docs/superpowers/plans/2026-05-04-v5-gaussian-temporal-plan.md`. Tasks 10–14 are upcoming; skip.
 
@@ -178,53 +219,6 @@ Preferred next step:
 
 ## Open Findings
 
-### Pixel temporal uses next-frame flow for t→t+1 alignment
-
-Severity: high
-
-The pair dataset returns `t_motion` from frame `t` and `tp1_motion` from frame `t+1`. TartanAir stores `flow/000000_000001_flow.npy` as forward flow to the next frame, and Sintel `.flo` is likewise the flow for the current frame to the next frame. Therefore, for a `(t, t+1)` pair, the flow that aligns `out_t` to `out_{t+1}` is `t_motion`, not `tp1_motion`.
-
-Current affected code:
-
-- `scripts/sr_train_temporal.py:372` builds `x_tp1` with `p_motion`.
-- `scripts/sr_train_temporal.py:376` passes `motion_lr=p_motion` when rendering `out_tp1` from `prev_hr=out_t`.
-- `scripts/sr_train_temporal.py:396` computes `temporal_consistency_loss(out_tp1, out_t, p_motion, ...)`.
-- `scripts/sr_temporal_held_out.py:240` renders temporal `t+1` with `prev_hr=base_out_t.detach()`.
-- `scripts/sr_temporal_held_out.py:252` passes `motion_lr=p_motion` for that render.
-- `scripts/sr_temporal_held_out.py:262`/`:263` warp `out_t` to `out_t+1` using `p_motion`.
-
-Why this matters:
-
-- The v5 pixel spec says the temporal model consumes motion vector `t-1 -> t`.
-- For the current frame `t+1`, that is the pair's `t_motion`.
-- Using `tp1_motion` instead uses `t+1 -> t+2`, corrupting temporal-head alignment, disocclusion input, the temporal-consistency loss, and the held-out temporal-stability metric.
-
-Fix direction:
-
-- For the second frame in a pair, pass `motion_lr=t_motion` to `TemporalSRModel` and `temporal_consistency_loss`.
-- In held-out eval, use `t_motion` for temporal `t+1` render and for `warp_prev_hr(out_t, ...)`.
-- Add a regression test with synthetic pair motion where `t_motion != tp1_motion`, asserting the evaluator/training step uses `t_motion` for `t -> t+1`.
-
-### Pixel Task 7 score_log dashboard schema mismatch
-
-Severity: medium
-
-The committed training script passes the smoke test and writes `metrics.json` plus `score_log.json`, but the `score_log.json` row schema does not match `scripts/training_dashboard.py`.
-
-- `scripts/sr_train_temporal.py:672` writes rows with `step`, `loss`, `phase`, `psnr`, and `lpips`.
-- `scripts/training_dashboard.py:365` reads `model_psnr_mean`, `bicubic_psnr_mean`, and `model_beats_bicubic_count` for the latest eval card.
-- `scripts/training_dashboard.py:431` charts `model_psnr_mean` / `bicubic_psnr_mean`; LPIPS chart similarly expects `model_lpips_mean` / `bicubic_lpips_mean`.
-
-Observed from direct smoke:
-
-- `/tmp/oss_smoke_temporal_review/score_log.json` is non-empty, so the dashboard will enter the "latest eval" path.
-- The expected fields are missing, which will produce undefined/NaN eval-card values and empty PSNR/LPIPS charts.
-
-Fix direction:
-
-- Either leave `score_log.json` empty until Task 8 writes real held-out eval rows, or emit dashboard-compatible placeholder/eval rows with the keys the dashboard actually reads.
-- If Task 7 keeps approximate smoke PSNR, store it in `metrics.json` train rows or add dashboard support for temporal training rows without pretending they are bicubic-vs-model eval rows.
-
 ### Stale .tasks.json sidecars
 
 Severity: low (does not block dispatch — implementer subagents are instructed to read the plan `.md` directly).
@@ -233,24 +227,63 @@ Fix: regenerate the task JSON files before any cross-session resume via `/superp
 
 ## Resolved Findings
 
-### Working-Tree Fixes Pending Commit
+### Sprint 5 Fixes Committed In `c1bad69` / `bd1f77a`
 
-Resolved in working tree, pending commit: high severity Gaussian Task 8 history buffer.
+Resolved in `c1bad69` with docs aligned in `bd1f77a`: medium severity training `score_log` eval-row semantics.
+
+The pixel and Gaussian training scripts no longer append train-loss-derived pseudo-eval rows to `score_log.json`; training progress stays in `metrics.json`, and held-out scripts remain responsible for real eval rows.
+
+- `scripts/sr_train_temporal.py:683-698` now saves checkpoints and dumps metrics without appending to `score_log`.
+- `scripts/sr_train_gaussian_temporal.py:725-740` follows the same rule.
+- Verification: both temporal and Gaussian train smoke tests pass in the 16-test working-tree verification; direct two-step smoke runs wrote `score_log.json` as `[]` for both trainers.
+
+Resolved in `c1bad69`: high severity Gaussian Task 11 phase schedule mismatch.
+
+The model now exposes explicit phase control, Phase 1 bypasses the transformer while retaining a trainable per-frame fitter path, and Phase 2 passes `effective_layers=2` into the transformer.
+
+- `oss/sr/gaussian_temporal/model.py:44-48` adds a small trainable per-frame RGB fitter head off encoder features.
+- `oss/sr/gaussian_temporal/model.py:58-124` accepts `phase`, bypasses transformer in Phase 1, and passes `effective_layers=2` in Phase 2.
+- `oss/sr/gaussian_temporal/transformer.py:285-363` accepts and enforces `effective_layers`.
+- `scripts/sr_train_gaussian_temporal.py:408-416` passes the current phase into the model.
+- `tests/sr/gaussian_temporal/test_model_full_step.py` adds coverage for Phase 1 transformer bypass, Phase 1 encoder/fitter gradients, Phase 2 two-layer warmup, and Phase 3 full-layer behavior.
+- Verification: `tests/sr/gaussian_temporal/test_model_full_step.py tests/sr/gaussian_temporal/test_transformer.py tests/sr/gaussian_temporal/test_train_smoke.py` passed in the 16-test working-tree verification.
+
+Resolved in `c1bad69`: medium severity stale runbook dashboard commands.
+
+Both remote runbooks now call the actual dashboard script with its real CLI:
+
+- `docs/superpowers/notes/2026-05-04-v5-pixel-temporal-runbook.md:117` uses `scripts\training_dashboard.py --output-dir ... --log-file ... --port 8080 --host 0.0.0.0`.
+- `docs/superpowers/notes/2026-05-04-v5-gaussian-temporal-runbook.md:153` uses the same fixed pattern.
+
+### Committed Sprint 5 Fixes
+
+Resolved in `38cf507`: high severity pixel temporal flow-vector off-by-one.
+
+The pair dataset returns `t_motion` from frame `t` and `tp1_motion` from frame `t+1`; TartanAir/Sintel motion is forward flow from the current frame to the next. The training script and held-out eval previously used `tp1_motion` for the `t -> t+1` render and temporal-stability warp. Current code uses `t_motion` in all critical sites:
+
+- `scripts/sr_train_temporal.py:381-385` passes `motion_lr=t_motion` for the `t+1` recurrent render.
+- `scripts/sr_train_temporal.py:405-408` passes `t_motion` into `temporal_consistency_loss`.
+- `scripts/sr_temporal_held_out.py:255-259` passes `motion_lr=t_motion` for temporal `t+1`.
+- `scripts/sr_temporal_held_out.py:269-271` uses `t_motion` for temporal-stability warps.
+- Verification: changed-test slice passed 7/7; Claude-reported full v5 suite passed 78/78 with two warnings.
+
+Resolved in `8a757f0`: high severity Gaussian Task 8 history buffer.
 
 The earlier probe showed recurrent rollouts kept `len(history) == 0`, so the Gaussian transformer never received multi-frame Gaussian context. Current working tree now pushes prior-field snapshots before returning `new_field`:
 
 - `oss/sr/gaussian_temporal/model.py:131` populates history.
 - `tests/sr/gaussian_temporal/test_model_full_step.py` adds `test_history_populates_across_frames`.
-- Verification: `venv-py312/bin/python -m pytest tests/sr/gaussian_temporal/test_model_full_step.py -v` is included in the 13-test combined pass.
+- Verification: `venv-py312/bin/python -m pytest tests/sr/gaussian_temporal/test_model_full_step.py -v` is included in the 13-test and 14-test combined passes.
+- Codex C1 probe confirmed newest-first history ordering after frame 7.
 
-Resolved in working tree, pending commit: medium severity Pixel Task 4 `pair_stride` API gap.
+Resolved in `8a757f0`: medium severity Pixel Task 4 `pair_stride` API gap.
 
 The earlier probe showed `SequentialPairDataset(_FakeBase(), pair_stride=2)` raised `TypeError`. Current working tree now accepts `pair_stride`, validates it, and excludes pairs crossing trajectory boundaries:
 
 - `oss/sr/temporal/dataset.py:34` adds `pair_stride: int = 1`.
 - `oss/sr/temporal/dataset.py:45` builds pairs using `i + pair_stride`.
 - `tests/sr/temporal/test_dataset.py` adds stride-2 and invalid-stride coverage.
-- Verification: `venv-py312/bin/python -m pytest tests/sr/temporal/test_dataset.py -v` is included in the 13-test combined pass.
+- Verification: `venv-py312/bin/python -m pytest tests/sr/temporal/test_dataset.py -v` is included in the 13-test and 14-test combined passes.
 
 ### Gaussian Implementation
 
@@ -533,6 +566,87 @@ Two Codex findings were fixed in the working tree but are not committed yet:
 - Gaussian Task 8 history now populates `new_field.history`; `test_history_populates_across_frames` added.
 - Pixel Task 4 `pair_stride` API now exists with stride-2 and invalid-stride tests.
 - Combined verification: `venv-py312/bin/python -m pytest tests/sr/gaussian_temporal/test_model_full_step.py tests/sr/temporal/test_dataset.py tests/sr/temporal/test_held_out_argparse.py -v` passed 13/13.
+
+### 16:29-16:32 CDT
+
+Follow-up commits landed:
+
+- `8a757f0` committed three Codex findings: Gaussian history population, pixel `pair_stride`, and dashboard-shaped score rows.
+- `7cb3c44` added the pixel temporal train-start memo and remote launch runbook before GPU time, satisfying lab-notebook discipline.
+- `ab6c5f9` added Gaussian Task 9 `TrajectoryWindowDataset` and tests.
+- `38cf507` fixed the high pixel flow-direction bug by using `t_motion` for `t -> t+1` render/consistency/stability.
+
+Verification:
+
+- Combined post-fix suite: `venv-py312/bin/python -m pytest tests/sr/gaussian_temporal/test_model_full_step.py tests/sr/temporal/test_dataset.py tests/sr/temporal/test_train_smoke.py tests/sr/temporal/test_held_out_argparse.py -v` passed 14/14.
+- Changed-test slice after the latest commits passed 7/7.
+- `git diff --check` passed.
+- Codex C1 probe confirmed Gaussian history newest-first ordering after frame 7.
+
+Remaining review findings:
+
+- Pixel training `score_log` rows now have dashboard keys but still represent train approximations as eval rows; latest eval margin can be misleading when bicubic fields are `None`.
+- Pixel runbook dashboard restart command is stale (`scripts\sr_dashboard.py --run-dir` instead of `scripts\training_dashboard.py --output-dir ... --log-file ...`).
+
+### 16:33-16:35 CDT
+
+More Gaussian track progress:
+
+- `415d664` added the `Tasks for Codex` section to this rolling report, assigning C1-C4 verification probes.
+- `291adb8` added `GaussianTemporalSRInferenceEngine` and its state/reset/scene-cut tests.
+- Verification: `venv-py312/bin/python -m pytest tests/sr/gaussian_temporal/test_inference_state.py -v` passed 3/3.
+- Gaussian Task 11 started test-first: `tests/sr/gaussian_temporal/test_train_smoke.py` appeared uncommitted and currently fails because `scripts/sr_train_gaussian_temporal.py` does not exist yet. This is expected-red until the implementation file lands.
+
+### 16:36 CDT
+
+Additional Gaussian test/docs appeared:
+
+- Uncommitted train-start memo/runbook: `docs/superpowers/experiments/2026-05-04-v5-gaussian-temporal-train-start.md`, `docs/superpowers/notes/2026-05-04-v5-gaussian-temporal-runbook.md`.
+- Uncommitted Task 12 argparse smoke test: `tests/sr/gaussian_temporal/test_held_out_argparse.py`.
+- Verification: `venv-py312/bin/python -m pytest tests/sr/gaussian_temporal/test_held_out_argparse.py -v` fails 1/1 because `scripts/sr_gaussian_temporal_held_out.py` does not exist yet. This is expected-red until Task 12 implementation lands.
+- The Gaussian runbook repeats the same stale dashboard command pattern as the pixel runbook; open finding updated to cover both.
+
+### 16:37-16:38 CDT
+
+Gaussian Tasks 11-12 landed:
+
+- `a1144a0` committed the Gaussian train-start memo + remote runbook.
+- `5e14312` committed `scripts/sr_train_gaussian_temporal.py` and the Gaussian train smoke test.
+- `15513b4` committed `scripts/sr_gaussian_temporal_held_out.py`, its argparse smoke test, and the held-out memo template.
+- Verification: `venv-py312/bin/python -m pytest tests/sr/gaussian_temporal/test_train_smoke.py tests/sr/gaussian_temporal/test_held_out_argparse.py -v` passed 2/2.
+
+Review added one high finding:
+
+- Gaussian Task 11's phase schedule is not actually phase-isolated: Phase 1 still calls the model path that invokes the transformer after densification, and Phase 2 does not use a real 2-layer transformer warmup.
+
+### 16:40 CDT
+
+Codex completed C2:
+
+- Synthetic pixel held-out probe used a pair with `t_motion=+1` and `tp1_motion=-2`.
+- Fake temporal model recorded both calls as `+1`, and the temporal-stability metric was exactly `0.0`.
+- This independently verifies `scripts/sr_temporal_held_out.py` is using `t_motion` for both the `t+1` render and the stability warp after `38cf507`.
+
+### 16:45-16:53 CDT
+
+Open findings patched in the working tree:
+
+- Claude started a phase-isolation patch in `oss/sr/gaussian_temporal/model.py` and `transformer.py`; initial targeted verification failed because bypassing the transformer in Phase 1 removed the trainable gradient path.
+- Codex added a small per-frame RGB fitter head off encoder features so Phase 1 remains trainable without invoking temporal attention.
+- Phase controls now flow from `scripts/sr_train_gaussian_temporal.py` into `GaussianTemporalSRModel`; Phase 2 uses `effective_layers=2`; Phase 3+ uses all layers.
+- Pixel and Gaussian trainers now leave `score_log.json` empty during training; held-out eval scripts remain responsible for real score rows.
+- Pixel and Gaussian runbooks now invoke `scripts\training_dashboard.py --output-dir ... --log-file ...` instead of stale `scripts\sr_dashboard.py --run-dir`.
+- Verification: `venv-py312/bin/python -m pytest tests/sr/temporal/test_train_smoke.py tests/sr/gaussian_temporal/test_train_smoke.py tests/sr/gaussian_temporal/test_model_full_step.py tests/sr/gaussian_temporal/test_transformer.py -v` passed 16/16.
+
+### 16:56-16:58 CDT
+
+Claude/Codex follow-up state:
+
+- `c1bad69` committed the three reviewed fixes: phase isolation, fake eval-row removal, and dashboard runbook command correction.
+- Codex committed `bd1f77a`, aligning the pixel and Gaussian trainer docstrings with the new behavior that training keeps `score_log.json` empty and held-out eval owns score rows.
+- Full local SR verification passed: `venv-py312/bin/python -m pytest tests/sr/temporal tests/sr/gaussian_temporal -v` → 87 passed, 2 existing torchvision deprecation warnings.
+- Direct behavior check passed: both two-step CPU smoke runs produced `score_log.json` as `[]` under `/tmp/oss_pixel_scorelog_check` and `/tmp/oss_gauss_scorelog_check`.
+- `git diff --check` passed.
 
 ## Suggested Monitor Command
 
