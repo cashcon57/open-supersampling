@@ -42,7 +42,7 @@ import json
 import math
 import sys
 from pathlib import Path
-from typing import Any, TYPE_CHECKING
+from typing import Any, Mapping, TYPE_CHECKING
 
 # Allow ``python scripts/sr_temporal_held_out.py`` to import ``oss.*`` when
 # the package isn't installed into the active interpreter (e.g. tests invoke
@@ -60,6 +60,16 @@ if TYPE_CHECKING:
     from torch.utils.data import DataLoader  # noqa: F401
 
     from oss.sr.temporal import TemporalSRModel  # noqa: F401
+
+
+DEFAULT_SCALE = 2.0
+DEFAULT_LR_SYNTH_ARGS: dict[str, bool | int | float] = {
+    "enable_jitter": True,
+    "enable_taa_blur": True,
+    "enable_jpeg": False,
+    "jpeg_quality": 85,
+    "blur_sigma": 0.5,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -154,6 +164,115 @@ def _build_pair_loader(kind: str, root: Path, batch_size: int):
     return DataLoader(
         pair, batch_size=batch_size, shuffle=False, num_workers=0,
         collate_fn=default_collate_pair, drop_last=True,
+    )
+
+
+class _ExplicitPairDataset:
+    """Pair dataset whose pair order is pinned by a held-out manifest."""
+
+    def __init__(self, base: Any, pairs: list[tuple[int, int]]) -> None:
+        self.base = base
+        self.pairs = pairs
+
+    def __len__(self) -> int:
+        return len(self.pairs)
+
+    def __getitem__(self, idx: int) -> Mapping[str, Any]:
+        i, j = self.pairs[idx]
+        prev_key = self.base.trajectory_key(i - 1) if i > 0 else None
+        cur_key = self.base.trajectory_key(i)
+        return {
+            "t": self.base[i],
+            "t_plus_1": self.base[j],
+            "is_first_in_seq": bool(prev_key != cur_key),
+        }
+
+
+def _lr_synth_args_from_cli(args: argparse.Namespace) -> dict[str, bool | int | float]:
+    cfg = dict(DEFAULT_LR_SYNTH_ARGS)
+    cfg["enable_jpeg"] = bool(args.enable_jpeg)
+    cfg["jpeg_quality"] = int(args.jpeg_quality)
+    cfg["blur_sigma"] = float(args.blur_sigma)
+    return cfg
+
+
+def _validate_manifest_config(
+    manifest: Mapping[str, Any],
+    *,
+    scale: float,
+    lr_synth_args: Mapping[str, Any],
+) -> None:
+    manifest_scale = float(manifest["lr_scale"])
+    if abs(manifest_scale - float(scale)) > 1e-9:
+        raise ValueError(
+            f"manifest lr_scale mismatch: manifest={manifest_scale}, "
+            f"script --scale={float(scale)}"
+        )
+    manifest_lr = dict(manifest.get("lr_synth_args", {}))
+    expected_lr = dict(lr_synth_args)
+    if manifest_lr != expected_lr:
+        raise ValueError(
+            "manifest lr_synth_args mismatch: "
+            f"manifest={manifest_lr}, script={expected_lr}"
+        )
+
+
+def _build_manifest_base_dataset(
+    kind: str,
+    root: Path,
+    *,
+    scale: float,
+    lr_synth_args: Mapping[str, Any],
+) -> Any:
+    from oss.gaussian.data import (
+        SintelGaussianDataset,
+        TartanAirGaussianDataset,
+    )
+    from oss.gaussian.data.lr_synthesis import EngineAliasedLRSynth
+    from oss.sr.temporal import adapt_sintel, adapt_tartanair
+
+    lr_synth = EngineAliasedLRSynth(scale=scale, **dict(lr_synth_args))
+    if kind == "tartanair":
+        return adapt_tartanair(
+            TartanAirGaussianDataset(root=root, scale=scale, lr_synth=lr_synth)
+        )
+    if kind == "sintel":
+        return adapt_sintel(
+            SintelGaussianDataset(
+                root=root, scale=scale, pass_name="clean", lr_synth=lr_synth
+            )
+        )
+    raise ValueError(f"unknown dataset kind: {kind!r}")
+
+
+def _build_manifest_loader(
+    kind: str,
+    root: Path,
+    manifest_path: Path,
+    batch_size: int,
+    *,
+    scale: float,
+    lr_synth_args: Mapping[str, Any],
+):
+    """Build a loader whose pair order is resolved from a frozen manifest."""
+    from torch.utils.data import DataLoader
+    from oss.sr.temporal import default_collate_pair
+    from oss.sr.temporal.held_out_manifest import load_manifest, manifest_to_pairs
+
+    manifest = load_manifest(manifest_path)
+    _validate_manifest_config(
+        manifest, scale=scale, lr_synth_args=lr_synth_args,
+    )
+    base = _build_manifest_base_dataset(
+        kind, root, scale=scale, lr_synth_args=lr_synth_args,
+    )
+    pairs = manifest_to_pairs(manifest, base)
+    pair_ds = _ExplicitPairDataset(base, pairs)
+    if len(pair_ds) == 0:
+        return None
+    return DataLoader(
+        pair_ds, batch_size=batch_size, shuffle=False, num_workers=0,
+        collate_fn=default_collate_pair, drop_last=False,
     )
 
 
@@ -353,6 +472,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="Total held-out frames to evaluate across both datasets.")
     p.add_argument("--batch-size", type=int, default=4)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--manifest", type=Path, default=None,
+                   help="Frozen held-out manifest JSON. When set, frame pairs "
+                        "are replayed from the manifest instead of discovered "
+                        "from SequentialPairDataset order.")
+    p.add_argument("--scale", type=float, default=DEFAULT_SCALE,
+                   help="HR/LR scale factor for manifest config checks.")
+    p.add_argument("--enable-jpeg", action="store_true",
+                   help="LR synth config flag checked against --manifest.")
+    p.add_argument("--blur-sigma", type=float, default=0.5,
+                   help="LR synth blur sigma checked against --manifest.")
+    p.add_argument("--jpeg-quality", type=int, default=85,
+                   help="LR synth JPEG quality checked against --manifest.")
     return p.parse_args(argv)
 
 
@@ -388,17 +519,32 @@ def main(argv: list[str] | None = None) -> int:
 
     # Build deterministic loaders.
     loaders: list[tuple[str, "DataLoader"]] = []
+    lr_synth_args = _lr_synth_args_from_cli(args)
     if args.tartanair_root is not None:
-        loader = _build_pair_loader(
-            "tartanair", args.tartanair_root, args.batch_size,
-        )
+        if args.manifest is not None:
+            loader = _build_manifest_loader(
+                "tartanair", args.tartanair_root, args.manifest,
+                args.batch_size, scale=args.scale,
+                lr_synth_args=lr_synth_args,
+            )
+        else:
+            loader = _build_pair_loader(
+                "tartanair", args.tartanair_root, args.batch_size,
+            )
         if loader is not None:
             loaders.append(("tartanair", loader))
             print(f"tartanair held-out pairs: {len(loader.dataset)}")
     if args.sintel_root is not None:
-        loader = _build_pair_loader(
-            "sintel", args.sintel_root, args.batch_size,
-        )
+        if args.manifest is not None:
+            loader = _build_manifest_loader(
+                "sintel", args.sintel_root, args.manifest,
+                args.batch_size, scale=args.scale,
+                lr_synth_args=lr_synth_args,
+            )
+        else:
+            loader = _build_pair_loader(
+                "sintel", args.sintel_root, args.batch_size,
+            )
         if loader is not None:
             loaders.append(("sintel", loader))
             print(f"sintel held-out pairs: {len(loader.dataset)}")
