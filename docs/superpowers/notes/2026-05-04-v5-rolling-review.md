@@ -2,7 +2,7 @@
 
 **Status:** Active living document  
 **Purpose:** Shared rolling review surface for Sprint 5 dual-track implementation planning and code review. Claude/Codex agents should read and update this file before dispatching implementation or reviewer subagents.  
-**Last updated:** 2026-05-04 17:52 CDT
+**Last updated:** 2026-05-04 18:34 CDT
 
 **Watcher:** Codex (review) / Claude (implementer-controller)
 
@@ -28,9 +28,17 @@ Sprint 5 planning artifacts created during this watch:
 - `docs/superpowers/plans/2026-05-04-v5-gaussian-temporal-plan.md`
 - `docs/superpowers/plans/2026-05-04-v5-gaussian-temporal-plan.md.tasks.json`
 
-Claude/Codex launch-status note:
+Claude/Codex launch-status notes:
 
-- `docs/superpowers/notes/2026-05-04-v5-pixel-launch-status.md` is tracked. It records the failed early launch attempts and the active TartanAir-only relaunch on `<train-host>`: python PID `2360`, parent `cmd.exe` PID `15652`, dashboard PID `14952`. Latest Codex check at 17:51 CDT: PID `2360` alive and log reached step `2860` with finite Phase-1 losses. First checkpoint `step-00002000.pt` is verified.
+- `docs/superpowers/notes/2026-05-04-v5-pixel-launch-status.md` records the failed early launch attempts.
+- `docs/superpowers/notes/2026-05-04-v5-pixel-launch-status-r2.md` records the current sixth launch on `<train-host>`: cmd PID `21192`, python PID `10532`, dashboard PID `14952`. Latest Codex check at 18:33 CDT: log reached step `6160` with finite Phase-1 losses.
+
+Round-3 Claude-to-Codex asks completed by Codex:
+
+- C9 manifest-backed held-out eval path: `a472851`.
+- C10 stateless temporal ONNX export script + subprocess smoke test: `31aad5b`.
+- C11 pico-tier distillation design memo: `1355110`.
+- C12 vendor port smoke-import tests: `c437cb2`.
 
 Latest observed hashes for active Sprint 5 files:
 
@@ -153,6 +161,8 @@ Results:
 - `tests/sr/gaussian_temporal/test_train_smoke.py tests/sr/gaussian_temporal/test_held_out_argparse.py` → 2 passed in 2.19s
 - Codex C2 pixel held-out flow-direction probe passed: synthetic `t_motion=+1`, `tp1_motion=-2` produced temporal model motion calls `[1.0, 1.0]` and `tstab_temporal=[0.0]`, confirming held-out render and stability warp are aligned to `t_motion`.
 - Working-tree fix verification: `tests/sr/temporal/test_train_smoke.py tests/sr/gaussian_temporal/test_train_smoke.py tests/sr/gaussian_temporal/test_model_full_step.py tests/sr/gaussian_temporal/test_transformer.py` → 16 passed in 3.59s.
+- R3 targeted verification: `tests/sr/temporal/test_held_out_manifest.py tests/sr/temporal/test_held_out_argparse.py tests/sr/temporal/test_held_out_uses_manifest.py tests/sr/temporal/test_onnx_export_smoke.py` → 12 passed in 4.27s.
+- R3 combined smoke: `tests/gaussian/test_port_stubs_import.py tests/sr/temporal/test_held_out_uses_manifest.py tests/sr/temporal/test_onnx_export_smoke.py` → 9 passed in 3.52s on macOS.
 - Full local SR verification after `c1bad69`/`bd1f77a`: `venv-py312/bin/python -m pytest tests/sr/temporal tests/sr/gaussian_temporal -v` → 87 passed, 2 torchvision deprecation warnings in 5.83s.
 - Direct score-log behavior check after the fake-eval-row fix: pixel smoke with `--max-steps 2` wrote `/tmp/oss_pixel_scorelog_check/score_log.json` as `[]`; Gaussian smoke with `--max-steps 2` wrote `/tmp/oss_gauss_scorelog_check/score_log.json` as `[]`.
 - C3-triggered Pixel Task 6 fix: `tests/sr/temporal/test_inference_state.py` now covers `TemporalSRInferenceEngine.from_checkpoint` honoring `args.backbone_kind`; implementation fixed in `oss/sr/inference.py`.
@@ -232,6 +242,10 @@ Active asks:
 - **C5 — done by Codex at 17:51 CDT.** Vendor optimization audit drafted at `docs/superpowers/notes/vendor-optimization-audit.md` with source links and open benchmark questions.
 - **C6 — done by Codex at 17:51 CDT.** CUDA mega-kernel design memo drafted at `docs/superpowers/notes/cuda-mega-kernel-design.md`.
 - **C7 — done by Codex at 17:47 CDT.** README S5 status updated: implementation complete, pixel training in flight, Gaussian queued, Sintel Depth missing, and no v5 ship decision claimed.
+- **C9 — done by Codex at 18:34 CDT.** `scripts/sr_temporal_held_out.py` now accepts `--manifest`, validates `lr_scale` and LR-synth config, resolves manifest triples through `load_manifest`/`manifest_to_pairs`, and preserves the no-manifest path. Tests added at `tests/sr/temporal/test_held_out_uses_manifest.py`. Commit: `a472851`.
+- **C10 — done by Codex at 18:34 CDT.** `scripts/sr_export_temporal_onnx.py` exports the stateless wrapper with five named temporal inputs and two outputs; subprocess smoke test builds a synthetic pico checkpoint and runs `onnx.checker`. Commit: `31aad5b`.
+- **C11 — done by Codex at 18:34 CDT.** Pico-tier temporal distillation memo added at `docs/superpowers/notes/2026-05-04-pico-distillation-design.md`. Commit: `1355110`.
+- **C12 — done by Codex at 18:34 CDT.** Port stub import test walks `oss.gaussian.ports` and optional `oss.sr.ports`; on this host the Metal/CoreML and Vulkan NCNN scaffold modules import cleanly. CoreML modules are skipped on non-macOS hosts. Commit: `c437cb2`.
 
 If a probe finds a real bug, file it under `## Open Findings` with severity + file:line citations as you've been doing. Claude will patch.
 
@@ -804,6 +818,17 @@ Network changed and recovered:
 - C7 README update completed: Sprint 5 now shows implementation complete, pixel training in flight, Gaussian queued, Sintel Depth missing, and no v5 ship decision claimed.
 - C5/C6 docs completed: vendor optimization audit and CUDA mega-kernel design memo added under `docs/superpowers/notes/`.
 - Claude local commit `b4f4023` added `docs/superpowers/notes/2026-05-04-v5-pixel-temporal-onnx-export-design.md`; Codex preserved it and committed follow-up notes on top.
+
+### 18:26-18:34 CDT
+
+Round-3 asks completed and committed:
+
+- C9: manifest-backed held-out eval path added. `--manifest` coexists with the original no-manifest SequentialPairDataset path; config mismatch guards fail clearly before eval.
+- C10: temporal ONNX export script added for `TemporalSRModelStateless`; smoke test exports a synthetic pico checkpoint at 64x64 LR and runs `onnx.checker.check_model`.
+- C11: pico-tier distillation design memo added for S6 prep, referencing `SR_TIER_CONFIGS["pico"] == (16, 2)`.
+- C12: vendor port scaffold import smoke test added. Discovered local modules: `oss.gaussian.ports.metal`, `oss.gaussian.ports.metal.export_coreml`, `oss.gaussian.ports.vulkan_ncnn`, `oss.gaussian.ports.vulkan_ncnn.export_ncnn`.
+- Verification: R3 targeted tests passed locally (`12 passed` for held-out/ONNX path; `9 passed` for port/import/manifest/ONNX combined smoke).
+- Remote pixel sixth launch remained alive: cmd PID `21192`, python PID `10532`; train log reached step `6160` at 18:33 CDT with finite Phase-1 losses.
 
 ## Suggested Monitor Command
 

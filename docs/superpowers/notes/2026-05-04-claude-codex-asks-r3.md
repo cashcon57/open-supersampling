@@ -4,6 +4,8 @@ R1 (C1–C4) and R2 (C5–C8) discharged. R3 below — Cash said "all in paralle
 
 ## C9 — Refactor `sr_temporal_held_out.py` to consume the manifest
 
+Status: done by Codex at 18:34 CDT. Commit: `a472851` (`v5-pixel(sr): held-out eval consumes deterministic manifest`).
+
 Severity: medium (eval reproducibility)
 
 Background: `scripts/sr_freeze_held_out_manifest.py` (`ab08f73`) writes a deterministic manifest of TartanAir frame-pair indices to `docs/superpowers/experiments/v5_held_out_manifest.json`. The companion loader is `oss.sr.temporal.held_out_manifest.load_manifest`. The eval script `scripts/sr_temporal_held_out.py` currently re-picks frames via `shuffle=False` on every run — works in principle but means a re-run on the same dataset on a different machine could pick differently if the trajectory enumeration order changes (Windows vs Linux directory ordering, for instance).
@@ -18,6 +20,8 @@ Constraints: do NOT change the no-manifest default. The running pixel training w
 
 ## C10 — `scripts/sr_export_temporal_onnx.py` scaffold
 
+Status: done by Codex at 18:34 CDT. Commit: `31aad5b` (`v5-pixel(sr): ONNX export script for stateless temporal wrapper + smoke test`).
+
 Severity: low (S6 prep — won't run until v5 ckpt lands)
 
 Background: The stateless wrapper `oss.sr.temporal.stateless_export.TemporalSRModelStateless` (`726b629` + `b4f4023`) is in place. The matching ONNX export script is not. Once the pixel training finishes overnight, we'll want to immediately attempt the ONNX export to catch any opset-17 issues early.
@@ -31,6 +35,8 @@ Deliverable:
 Constraints: do NOT actually try to load `srcnn-prod-v4-lpips` or any real ckpt — synthetic tiny ckpts only for the test. The real export against the v5 ckpt is a manual follow-up by Cash. Final commit message suggestion: `v5-pixel(sr): ONNX export script for stateless temporal wrapper + smoke test`.
 
 ## C11 — Pico-tier distillation design memo (post-v5 perf prep)
+
+Status: done by Codex at 18:34 CDT. Commit: `1355110` (`docs(notes): pico-tier distillation design memo for S6 prep`).
 
 Severity: low (S6 prep)
 
@@ -47,6 +53,8 @@ Deliverable: `docs/superpowers/notes/2026-05-04-pico-distillation-design.md` cov
 Constraints: docs only. Final commit message suggestion: `docs(notes): pico-tier distillation design memo for S6 prep`.
 
 ## C12 — Vendor port stub smoke imports
+
+Status: done by Codex at 18:34 CDT. Commit: `c437cb2` (`tests(ports): smoke-import vendor port scaffolds with platform skips`).
 
 Severity: low (sanity check — won't catch real bugs but will catch broken Python)
 

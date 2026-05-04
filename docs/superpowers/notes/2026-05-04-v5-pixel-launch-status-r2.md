@@ -29,6 +29,12 @@ Verified locally: `pytest tests/sr/temporal/test_train_smoke.py -v` → 3/3 PASS
 | Log | `<train-host-data>\checkpoints\srcnn-v5-pixel-temporal\train.log` |
 | Dashboard | `http://<tailnet-ip>:8080/` (PID 14952) |
 
+Latest Codex process check at 18:33 CDT:
+
+- WMI wrapper/cmd PID `21192` alive.
+- Child `python.exe` PID `10532` alive.
+- Train log reached step `6160` with finite Phase-1 losses.
+
 ## Throughput observations
 
 | Time | Step | Notes |
@@ -77,6 +83,17 @@ Cash's URL `https://files.is.tue.mpg.de/jwulff/sintel/MPI-Sintel-depth-training-
 Generated on remote: `<train-host-data>\checkpoints\v5_held_out_manifest.json` (64 pairs, seed=0, lr_scale=2.0, manifest_version=1).
 
 A few "non-consecutive frame indices" warnings during generation — expected after the corrupt-flow lazy-skip patches dropped some pairs. Manifest is sound; pairs are valid.
+
+Codex C9 landed manifest consumption in `scripts/sr_temporal_held_out.py` (`a472851`). Morning TartanAir eval should use:
+
+```powershell
+python scripts/sr_temporal_held_out.py `
+  --ckpt-temporal <train-host-data>/checkpoints/srcnn-v5-pixel-temporal/step-00080000.pt `
+  --ckpt-baseline <train-host-data>/checkpoints/srcnn-prod-v4-lpips/step-00385000.pt `
+  --tartanair-root <train-host-data>/datasets/tartanair_extracted `
+  --manifest <train-host-data>/checkpoints/v5_held_out_manifest.json `
+  --n-samples 64
+```
 
 ## Kill switches (unchanged from r1)
 
