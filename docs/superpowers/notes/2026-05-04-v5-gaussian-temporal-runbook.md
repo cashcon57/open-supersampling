@@ -37,9 +37,13 @@ Record the commit SHA in the train-start memo if it drifted from local.
 ```powershell
 Test-Path <train-host-data>\datasets\tartanair_extracted
 Test-Path <train-host-data>\datasets\sintel
+Test-Path <train-host-data>\datasets\sintel\training\depth
 ```
 
-Both must return `True`. If either is `False`, stop — do not attempt to launch.
+TartanAir must return `True`. Sintel root may exist while `training\depth` is
+missing; that layout is not usable by `SintelGaussianDataset` and must be
+treated as "Sintel unavailable." Until Sintel Depth is fetched/extracted, launch
+TartanAir-only by omitting `--sintel-root`.
 
 ### 4. GPU-share gate (CRITICAL — pixel run must be done or idle)
 
@@ -101,7 +105,7 @@ This is the production launch. Orphan-spawn via WMI (`Invoke-CimMethod`) is the 
 
 ```powershell
 Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
-  CommandLine='cmd /c cd /d <train-host-data>\oss-gaussian && <windows-home>\Miniconda3\envs\image-gs\python.exe scripts\sr_train_gaussian_temporal.py --output-dir <train-host-data>\checkpoints\srcnn-v5-gaussian-temporal --tartanair-root <train-host-data>\datasets\tartanair_extracted --sintel-root <train-host-data>\datasets\sintel --max-steps 140000 > <train-host-data>\checkpoints\srcnn-v5-gaussian-temporal\train.log 2>&1'
+  CommandLine='cmd /c cd /d <train-host-data>\oss-gaussian && <windows-home>\Miniconda3\envs\image-gs\python.exe scripts\sr_train_gaussian_temporal.py --output-dir <train-host-data>\checkpoints\srcnn-v5-gaussian-temporal --tartanair-root <train-host-data>\datasets\tartanair_extracted --max-steps 140000 > <train-host-data>\checkpoints\srcnn-v5-gaussian-temporal\train.log 2>&1'
 }
 ```
 
@@ -180,8 +184,9 @@ Rename-Item <train-host-data>\checkpoints\srcnn-v5-gaussian-temporal <train-host
        --ckpt-gaussian <train-host-data>\checkpoints\srcnn-v5-gaussian-temporal\step-00140000.pt `
        --ckpt-pixel    <train-host-data>\checkpoints\srcnn-v5-pixel-temporal\step-00080000.pt `
        --tartanair-root <train-host-data>\datasets\tartanair_extracted `
-       --sintel-root <train-host-data>\datasets\sintel `
        --n-samples 64
    ```
+   Add `--sintel-root <train-host-data>\datasets\sintel` only after
+   `<train-host-data>\datasets\sintel\training\depth` exists.
 3. Fill in `docs/superpowers/experiments/2026-XX-XX-v5-gaussian-temporal-held-out.md` with the captured numbers and a written conclusion (pass / fail + reason).
 4. Then proceed to the Sprint-5 closeout (Plan Task 14) — the pixel-vs-Gaussian comparison memo and ship decision. Do **not** edit the README S5 row from this runbook; that change happens only in the closeout, after the comparison memo is signed off.

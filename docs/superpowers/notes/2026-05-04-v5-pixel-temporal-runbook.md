@@ -36,9 +36,13 @@ Record the commit SHA in the train-start memo if it drifted from local.
 ```powershell
 Test-Path <train-host-data>\datasets\tartanair_extracted
 Test-Path <train-host-data>\datasets\sintel
+Test-Path <train-host-data>\datasets\sintel\training\depth
 ```
 
-Both must return `True`. If either is `False`, stop — do not attempt to launch.
+TartanAir must return `True`. Sintel root may exist while `training\depth` is
+missing; that layout is not usable by `SintelGaussianDataset` and must be
+treated as "Sintel unavailable." Until Sintel Depth is fetched/extracted, launch
+TartanAir-only by omitting `--sintel-root`.
 
 ### 4. Verify warm-start checkpoint hash
 
@@ -71,7 +75,7 @@ This is the production launch. Orphan-spawn via WMI (`Invoke-CimMethod`) is the 
 
 ```powershell
 Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
-  CommandLine='cmd /c cd /d <train-host-data>\oss-gaussian && <windows-home>\Miniconda3\envs\image-gs\python.exe scripts\sr_train_temporal.py --output-dir <train-host-data>\checkpoints\srcnn-v5-pixel-temporal --warm-start <train-host-data>\checkpoints\srcnn-prod-v4-lpips\step-00385000.pt --tartanair-root <train-host-data>\datasets\tartanair_extracted --sintel-root <train-host-data>\datasets\sintel --max-steps 80000 > <train-host-data>\checkpoints\srcnn-v5-pixel-temporal\train.log 2>&1'
+  CommandLine='cmd /c cd /d <train-host-data>\oss-gaussian && <windows-home>\Miniconda3\envs\image-gs\python.exe scripts\sr_train_temporal.py --output-dir <train-host-data>\checkpoints\srcnn-v5-pixel-temporal --warm-start <train-host-data>\checkpoints\srcnn-prod-v4-lpips\step-00385000.pt --tartanair-root <train-host-data>\datasets\tartanair_extracted --max-steps 80000 > <train-host-data>\checkpoints\srcnn-v5-pixel-temporal\train.log 2>&1'
 }
 ```
 
@@ -144,8 +148,9 @@ Rename-Item <train-host-data>\checkpoints\srcnn-v5-pixel-temporal <train-host-da
        --ckpt-temporal <train-host-data>\checkpoints\srcnn-v5-pixel-temporal\step-00080000.pt `
        --ckpt-baseline <train-host-data>\checkpoints\srcnn-prod-v4-lpips\step-00385000.pt `
        --tartanair-root <train-host-data>\datasets\tartanair_extracted `
-       --sintel-root <train-host-data>\datasets\sintel `
        --n-samples 64
    ```
+   Add `--sintel-root <train-host-data>\datasets\sintel` only after
+   `<train-host-data>\datasets\sintel\training\depth` exists.
 3. Fill in `docs/superpowers/experiments/2026-XX-XX-v5-pixel-temporal-held-out.md` with the captured numbers and a written conclusion (pass / fail + reason).
 4. If the four success-criteria boxes pass, update the README S5 row per Plan Task 10 Step 3.

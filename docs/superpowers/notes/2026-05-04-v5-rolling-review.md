@@ -2,7 +2,7 @@
 
 **Status:** Active living document  
 **Purpose:** Shared rolling review surface for Sprint 5 dual-track implementation planning and code review. Claude/Codex agents should read and update this file before dispatching implementation or reviewer subagents.  
-**Last updated:** 2026-05-04 17:33 CDT
+**Last updated:** 2026-05-04 17:37 CDT
 
 **Watcher:** Codex (review) / Claude (implementer-controller)
 
@@ -30,7 +30,7 @@ Sprint 5 planning artifacts created during this watch:
 
 Claude/Codex launch-status note:
 
-- `docs/superpowers/notes/2026-05-04-v5-pixel-launch-status.md` is tracked. It records the failed early launch attempts and the active TartanAir-only relaunch on `<train-host>`: python PID `2360`, parent `cmd.exe` PID `15652`, dashboard PID `14952`. Latest Codex check at 17:33 CDT: PID `2360` alive and log reached step `1580` with finite Phase-1 losses.
+- `docs/superpowers/notes/2026-05-04-v5-pixel-launch-status.md` is tracked. It records the failed early launch attempts and the active TartanAir-only relaunch on `<train-host>`: python PID `2360`, parent `cmd.exe` PID `15652`, dashboard PID `14952`. Latest Codex check at 17:35 CDT: PID `2360` alive and log reached step `1820` with finite Phase-1 losses.
 
 Latest observed hashes for active Sprint 5 files:
 
@@ -292,6 +292,7 @@ Impact:
 Fix direction:
 
 - Fetch/extract the Sintel Depth package into `<train-host-data>/datasets/sintel/training/depth/<seq>/frame_NNNN.dpt`, or explicitly add and test a no-depth fallback before using Sintel for v5 gates.
+- Launch runbooks now omit `--sintel-root` by default and instruct agents to add it only after `<train-host-data>/datasets/sintel/training/depth` exists. This avoids another immediate remote launch crash, but does not make Sintel eval valid.
 
 ## Resolved Findings
 
@@ -776,8 +777,9 @@ C4 Gaussian spec-compliance pass and live monitor:
 - `d6bc655` pushed to `origin/v0.2-dev` for Claude/remote sync.
 - `e790dde` pushed the rolling-report updates, and remote `<train-host-data>/oss-gaussian` fast-forwarded to `e790dde`. Git Credential Manager printed a Windows credential-store warning, but fetch/pull completed and `git rev-parse --short HEAD` returned `e790dde`.
 - Full local SR verification after the push: `venv-py312/bin/python -m pytest tests/sr -v` → 113 passed, 1 skipped, 14 warnings.
-- Remote pixel training PID `2360` still alive at 17:33 CDT; latest observed log reached step `1580`.
+- Remote pixel training PID `2360` still alive at 17:35 CDT; latest observed log reached step `1820`.
 - Plan task sidecars status-synced: pixel Tasks 0-9 completed / Task 10 pending; Gaussian Tasks 0-13 completed / Task 14 pending. The source `.md` plans remain authoritative for task details.
+- Pixel and Gaussian remote runbooks now treat missing `<train-host-data>\datasets\sintel\training\depth` as "Sintel unavailable" and omit `--sintel-root` from copy-paste launch/eval commands until the depth package exists.
 
 ## Suggested Monitor Command
 
