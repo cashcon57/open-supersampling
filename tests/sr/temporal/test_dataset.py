@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import torch
 
+from oss.gaussian.data import GaussianTrainingExample
 from oss.sr.temporal import SequentialPairDataset, default_collate_pair
 
 
@@ -65,6 +66,29 @@ def test_collate_pair() -> None:
     assert batch["tp1_lr"].shape == (3, 3, 8, 8)
     assert batch["t_gt_hr"].shape == (3, 3, 16, 16)
     assert batch["is_first_in_seq"].shape == (3,)
+
+
+def test_collate_pair_accepts_gaussian_training_examples() -> None:
+    def _example(idx: int) -> GaussianTrainingExample:
+        return GaussianTrainingExample(
+            lr_frame=torch.full((3, 8, 8), float(idx)),
+            depth=torch.full((1, 8, 8), float(idx)),
+            motion=torch.full((2, 8, 8), float(idx)),
+            canvas_hint=torch.full((3, 8, 8), float(idx)),
+            gt_hr_frame=torch.full((3, 16, 16), float(idx)),
+            normals=None,
+        )
+
+    pair = {
+        "t": _example(0),
+        "t_plus_1": _example(1),
+        "is_first_in_seq": True,
+    }
+    batch = default_collate_pair([pair])
+    assert batch["t_lr"].shape == (1, 3, 8, 8)
+    assert batch["tp1_motion"].shape == (1, 2, 8, 8)
+    assert batch["t_normals"].shape == (1, 3, 8, 8)
+    assert torch.equal(batch["t_normals"], torch.zeros_like(batch["t_normals"]))
 
 
 def test_pair_stride_two() -> None:

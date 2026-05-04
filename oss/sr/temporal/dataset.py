@@ -69,8 +69,21 @@ class SequentialPairDataset(Dataset):
         }
 
 
-def _stack(field: str, items: Iterable[Mapping[str, Any]]) -> torch.Tensor:
-    return torch.stack([it[field] for it in items], dim=0)
+def _field(item: Any, field: str) -> Any:
+    if isinstance(item, Mapping):
+        return item[field]
+    return getattr(item, field)
+
+
+def _stack(field: str, items: Iterable[Any]) -> torch.Tensor:
+    vals: list[torch.Tensor] = []
+    for item in items:
+        val = _field(item, field)
+        if val is None and field == "normals":
+            lr = _field(item, "lr_frame")
+            val = torch.zeros((3, *lr.shape[-2:]), dtype=lr.dtype, device=lr.device)
+        vals.append(val)
+    return torch.stack(vals, dim=0)
 
 
 def default_collate_pair(samples: List[Mapping[str, Any]]) -> Mapping[str, torch.Tensor]:
