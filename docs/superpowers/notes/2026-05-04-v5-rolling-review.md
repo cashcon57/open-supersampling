@@ -2,7 +2,7 @@
 
 **Status:** Active living document  
 **Purpose:** Shared rolling review surface for Sprint 5 dual-track implementation planning and code review. Claude/Codex agents should read and update this file before dispatching implementation or reviewer subagents.  
-**Last updated:** 2026-05-04 17:28 CDT
+**Last updated:** 2026-05-04 17:31 CDT
 
 **Watcher:** Codex (review) / Claude (implementer-controller)
 
@@ -30,7 +30,7 @@ Sprint 5 planning artifacts created during this watch:
 
 Claude/Codex launch-status note:
 
-- `docs/superpowers/notes/2026-05-04-v5-pixel-launch-status.md` is tracked. It records the failed early launch attempts and the active TartanAir-only relaunch on `<train-host>`: python PID `2360`, parent `cmd.exe` PID `15652`, dashboard PID `14952`. Latest Codex check at 17:27 CDT: PID `2360` alive and log reached step `880` with finite Phase-1 losses.
+- `docs/superpowers/notes/2026-05-04-v5-pixel-launch-status.md` is tracked. It records the failed early launch attempts and the active TartanAir-only relaunch on `<train-host>`: python PID `2360`, parent `cmd.exe` PID `15652`, dashboard PID `14952`. Latest Codex check at 17:30 CDT: PID `2360` alive and log reached step `1260` with finite Phase-1 losses.
 
 Latest observed hashes for active Sprint 5 files:
 
@@ -369,6 +369,7 @@ The Gaussian field is rendered in HR pixel coordinates, but the model previously
 - `tests/sr/gaussian_temporal/test_model_full_step.py:98` adds `test_temporal_warp_uses_hr_field_coordinates`.
 - Verification: `venv-py312/bin/python -m pytest tests/sr/gaussian_temporal/test_model_full_step.py -v` → 11 passed in 0.70s.
 - Verification: `venv-py312/bin/python -m pytest tests/sr/gaussian_temporal -v` → 59 passed in 2.77s.
+- Full local SR verification after `d6bc655`/`e790dde`: `venv-py312/bin/python -m pytest tests/sr -v` → 113 passed, 1 skipped, 14 warnings in 10.88s.
 
 Resolved: high severity Task 1 analytical-warp identity preservation.
 
@@ -768,6 +769,9 @@ C4 Gaussian spec-compliance pass and live monitor:
 - Verification: `venv-py312/bin/python -m pytest tests/sr/gaussian_temporal/test_model_full_step.py -v` → 11 passed.
 - Verification: `venv-py312/bin/python -m pytest tests/sr/gaussian_temporal -v` → 59 passed.
 - `d6bc655` pushed to `origin/v0.2-dev` for Claude/remote sync.
+- `e790dde` pushed the rolling-report updates, and remote `<train-host-data>/oss-gaussian` fast-forwarded to `e790dde`. Git Credential Manager printed a Windows credential-store warning, but fetch/pull completed and `git rev-parse --short HEAD` returned `e790dde`.
+- Full local SR verification after the push: `venv-py312/bin/python -m pytest tests/sr -v` → 113 passed, 1 skipped, 14 warnings.
+- Remote pixel training PID `2360` still alive at 17:30 CDT; latest observed log reached step `1260`.
 
 ## Suggested Monitor Command
 

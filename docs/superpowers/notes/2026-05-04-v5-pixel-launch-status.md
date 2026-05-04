@@ -51,20 +51,18 @@ step=320 phase=1 loss=1.1641 t_l1=0.4901 tp1_l1=0.5080
 step=340 phase=1 loss=0.8655 t_l1=0.3410 tp1_l1=0.3555
 ```
 
-Latest live snapshot (verified 17:27 CDT):
+Latest live snapshot (verified 17:30 CDT):
 
 ```
-python PID 2360 alive; CPU=150.15625; StartTime=5/4/2026 5:20:42 PM
-step=700 phase=1 loss=0.8298 t_l1=0.3288 tp1_l1=0.3683
-step=720 phase=1 loss=1.1572 t_l1=0.4764 tp1_l1=0.4989
-step=740 phase=1 loss=0.9283 t_l1=0.3421 tp1_l1=0.4282
-step=760 phase=1 loss=1.4542 t_l1=0.5835 tp1_l1=0.7322
-step=780 phase=1 loss=1.0044 t_l1=0.3816 tp1_l1=0.4720
-step=800 phase=1 loss=1.5391 t_l1=0.7105 tp1_l1=0.6708
-step=820 phase=1 loss=0.7487 t_l1=0.2869 tp1_l1=0.3236
-step=840 phase=1 loss=1.5974 t_l1=0.6871 tp1_l1=0.7379
-step=860 phase=1 loss=1.7870 t_l1=0.8328 tp1_l1=0.8105
-step=880 phase=1 loss=0.7435 t_l1=0.2859 tp1_l1=0.3077
+python PID 2360 alive; CPU=199.703125; StartTime=5/4/2026 5:20:42 PM
+step=1120 phase=1 loss=0.6065 t_l1=0.2149 tp1_l1=0.2426
+step=1140 phase=1 loss=1.1919 t_l1=0.4834 tp1_l1=0.5411
+step=1160 phase=1 loss=0.9476 t_l1=0.3566 tp1_l1=0.4288
+step=1180 phase=1 loss=0.5376 t_l1=0.1754 tp1_l1=0.2138
+step=1200 phase=1 loss=0.6804 t_l1=0.2157 tp1_l1=0.3133
+step=1220 phase=1 loss=1.1809 t_l1=0.4805 tp1_l1=0.5591
+step=1240 phase=1 loss=1.3851 t_l1=0.5084 tp1_l1=0.6972
+step=1260 phase=1 loss=0.7517 t_l1=0.2904 tp1_l1=0.2928
 ```
 
 Loss bouncing around 1–10 — expected for Phase 1 with backbone frozen + temporal head warming up on TartanAir HR distribution (different from SRGD that v4 trained on). Should stabilize as Phase 1 progresses; Phase 2 (10K steps in) unfreezes backbone and adds temporal-consistency loss.
