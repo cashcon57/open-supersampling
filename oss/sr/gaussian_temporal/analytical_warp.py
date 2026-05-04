@@ -98,6 +98,9 @@ def _recompose_covariance(sigma: torch.Tensor) -> tuple[torch.Tensor, torch.Tens
     return log_scale, rotation
 
 
+_IDENTITY_J_TOL = 1e-5
+
+
 def warp_field(field: GaussianField, motion: torch.Tensor, hw: tuple[int, int]) -> GaussianField:
     """Apply analytical warp to the Gaussian field.
 
@@ -109,6 +112,12 @@ def warp_field(field: GaussianField, motion: torch.Tensor, hw: tuple[int, int]) 
     Returns:
         New GaussianField with warped (mu, log_scale, rotation). alive
         flag is ANDed with in-frame mask from ``warp_positions``.
+
+    Identity / pure-translation invariance: when the sampled Jacobian at a
+    Gaussian's mean is within ``_IDENTITY_J_TOL`` of the identity, the
+    Gaussian's ``log_scale`` and ``rotation`` are passed through unchanged.
+    This avoids SVD axis-reordering for rotated unequal-scale fields under
+    pure translation flows where the covariance is mathematically unchanged.
     """
     out = field.clone()
     new_mu, in_frame = warp_positions(field.mu, motion, hw=hw)
@@ -116,9 +125,24 @@ def warp_field(field: GaussianField, motion: torch.Tensor, hw: tuple[int, int]) 
     out.alive = field.alive & in_frame
 
     j = _sample_jacobian(motion, field.mu, hw=hw)  # (N, 2, 2)
+    n = j.shape[0]
+    if n > 0:
+        eye = torch.eye(2, device=j.device, dtype=j.dtype).unsqueeze(0)  # (1, 2, 2)
+        identity_mask = (j - eye).abs().reshape(n, -1).amax(dim=-1) < _IDENTITY_J_TOL  # (N,)
+    else:
+        identity_mask = torch.zeros((0,), dtype=torch.bool, device=j.device)
+
     sigma = _decompose_covariance(field.log_scale, field.rotation)
     new_sigma = j @ sigma @ j.transpose(-1, -2)
     new_log_scale, new_rotation = _recompose_covariance(new_sigma)
+
+    # Preserve original parameterization where J = I exactly (within tol).
+    if n > 0 and identity_mask.any():
+        new_log_scale = torch.where(
+            identity_mask.unsqueeze(-1), field.log_scale, new_log_scale
+        )
+        new_rotation = torch.where(identity_mask, field.rotation, new_rotation)
+
     out.log_scale = new_log_scale
     out.rotation = new_rotation
     return out

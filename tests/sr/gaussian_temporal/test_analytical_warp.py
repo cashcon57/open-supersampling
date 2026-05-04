@@ -25,6 +25,23 @@ def test_identity_flow_unchanged() -> None:
     assert torch.allclose(g.log_scale, f.log_scale, atol=1e-5)
 
 
+def test_identity_flow_preserves_rotated_unequal_scale() -> None:
+    """Plan acceptance criterion: identity flow must leave mu, log_scale, AND
+    rotation unchanged within 1e-5 — even for rotated unequal-scale fields.
+
+    Without an identity-Jacobian early-out, SVD recomposition silently swaps
+    log_scale axes for rotated Gaussians under pure translation.
+    """
+    f = _make_field(3)
+    f.log_scale = torch.tensor([[0.2, 0.5], [0.5, 0.2], [0.3, 0.1]])
+    f.rotation = torch.tensor([0.7, 1.2, -0.6])
+    motion = torch.zeros(2, 16, 16)
+    g = warp_field(f, motion, hw=(16, 16))
+    assert torch.allclose(g.mu, f.mu, atol=1e-5)
+    assert torch.allclose(g.log_scale, f.log_scale, atol=1e-5)
+    assert torch.allclose(g.rotation, f.rotation, atol=1e-5)
+
+
 def test_translation_preserves_covariance() -> None:
     f = _make_field(4)
     f.log_scale = torch.tensor([[0.5, 0.2], [0.3, 0.4], [0.1, 0.1], [0.6, 0.6]])

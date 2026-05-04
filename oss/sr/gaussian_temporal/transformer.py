@@ -246,9 +246,13 @@ class GaussianMultiFrameTransformer(nn.Module):
         self.head_rot = nn.Linear(d_model, 1)
         self.head_color = nn.Linear(d_model, 3)
 
-        # Initialize output heads near-zero so initial dynamics are gentle.
+        # Initialize output heads near-zero so initial dynamics are gentle BUT
+        # nonzero weights — pure-zero weights kill the gradient path through
+        # the transformer body at init (loss = 0 → grads = 0 everywhere). Tiny
+        # nonzero weight std keeps update magnitude small (~1e-3) while
+        # allowing gradients to propagate to encoder + Gaussian inputs.
         for h in (self.head_mu, self.head_log_scale, self.head_rot, self.head_color):
-            nn.init.zeros_(h.weight)
+            nn.init.normal_(h.weight, mean=0.0, std=1e-3)
             nn.init.zeros_(h.bias)
 
     # ------------------------------------------------------------------ #

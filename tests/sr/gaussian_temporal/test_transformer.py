@@ -50,3 +50,24 @@ def test_permutation_equivariance() -> None:
     f2.color = f.color[perm].clone()
     upd_b = t(field_curr=f2, history=history, tile_features=feats)["dmu"].detach()
     assert torch.allclose(upd_a[perm], upd_b, atol=1e-4)
+
+
+def test_grad_flow_to_inputs() -> None:
+    """Plan acceptance criterion: gradient must flow to encoder features and
+    to a dummy ``nn.Parameter`` wrapped over ``field.color``.
+
+    Without nonzero output-head weight init, all four heads return zero at
+    init, killing gradient propagation through the transformer body.
+    """
+    torch.manual_seed(0)
+    t = GaussianMultiFrameTransformer(d_model=64, n_heads=2, n_layers=2, history_len=1)
+    f = _live_field(8)
+    f.color = torch.nn.Parameter(torch.rand(8, 3))
+    feats = torch.rand(1, 64, 2, 2, requires_grad=True)
+    history = [_live_field(8)]
+    out = t(field_curr=f, history=history, tile_features=feats)
+    loss = sum(v.square().mean() for v in out.values())
+    assert torch.isfinite(loss) and loss.item() > 0.0
+    loss.backward()
+    assert feats.grad is not None and feats.grad.abs().max().item() > 0.0
+    assert f.color.grad is not None and f.color.grad.abs().max().item() > 0.0
