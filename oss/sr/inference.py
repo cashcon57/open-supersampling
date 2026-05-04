@@ -228,3 +228,110 @@ class SRInferenceEngine:
 
 
 __all__ = ["SRInferenceEngine"]
+
+
+# ============================================================================
+# v5 pixel-temporal stateful inference
+# ============================================================================
+
+from oss.sr.temporal import TemporalSRModel, make_first_frame_prev_hr
+
+
+class TemporalSRInferenceEngine:
+    """Stateful inference engine for v5 pixel-temporal SR.
+
+    Carries ``prev_hr_output`` and ``prev_depth_hr`` across calls. Auto-resets
+    when mean motion magnitude exceeds ``scene_cut_motion_threshold`` (in LR
+    pixels).
+    """
+
+    def __init__(
+        self,
+        model: TemporalSRModel,
+        device: str,
+        fp16: bool,
+        scene_cut_motion_threshold: float,
+    ) -> None:
+        self.device = device
+        self.fp16 = fp16
+        self._dtype = torch.float16 if fp16 else torch.float32
+        self.scene_cut_motion_threshold = float(scene_cut_motion_threshold)
+        self.last_call_was_scene_cut = False
+
+        model = model.to(device).train(False)
+        if fp16:
+            model = model.half()
+        for p in model.parameters():
+            p.requires_grad_(False)
+        self.model = model
+
+        self._prev_hr: Optional[torch.Tensor] = None
+        self._prev_depth_hr: Optional[torch.Tensor] = None
+
+    @classmethod
+    def from_checkpoint(
+        cls,
+        ckpt_path: Path,
+        device: str = "cuda",
+        fp16: bool = True,
+        scene_cut_motion_threshold: float = 32.0,
+    ) -> "TemporalSRInferenceEngine":
+        ck = torch.load(ckpt_path, map_location=device, weights_only=False)
+        saved = ck.get("args", {})
+        in_channels = int(saved.get("in_channels", 12))
+        scale = int(saved.get("scale", 2))
+        tier = saved.get("tier", "standard")
+        backbone_kind = "rrdb" if saved.get("sr_backbone") == "rrdb" else "simple"
+        model = TemporalSRModel(
+            in_channels=in_channels, scale=scale, tier=tier, backbone_kind=backbone_kind
+        )
+        model.load_state_dict(ck["temporal_model"])
+        return cls(model=model, device=device, fp16=fp16,
+                   scene_cut_motion_threshold=scene_cut_motion_threshold)
+
+    def reset(self) -> None:
+        self._prev_hr = None
+        self._prev_depth_hr = None
+
+    def __call__(
+        self,
+        lr_inputs: torch.Tensor,
+        depth_hr_curr: torch.Tensor,
+        motion_lr: torch.Tensor,
+    ) -> torch.Tensor:
+        lr_inputs = lr_inputs.to(self.device, dtype=self._dtype, non_blocking=True)
+        depth_hr_curr = depth_hr_curr.to(self.device, dtype=self._dtype, non_blocking=True)
+        motion_lr = motion_lr.to(self.device, dtype=self._dtype, non_blocking=True)
+
+        # Scene-cut detection.
+        mean_mag = float(motion_lr.norm(dim=1).mean().item())
+        self.last_call_was_scene_cut = (
+            self._prev_hr is not None and mean_mag > self.scene_cut_motion_threshold
+        )
+        if self.last_call_was_scene_cut:
+            self.reset()
+
+        # First-frame init or use stored state.
+        if self._prev_hr is None:
+            prev_hr = make_first_frame_prev_hr(lr_inputs[:, :3], scale=self.model.scale)
+            prev_depth = depth_hr_curr
+        else:
+            prev_hr = self._prev_hr
+            prev_depth = self._prev_depth_hr
+
+        with torch.no_grad():
+            out = self.model(
+                lr_inputs=lr_inputs,
+                prev_hr=prev_hr,
+                depth_hr_curr=depth_hr_curr,
+                depth_hr_prev=prev_depth,
+                motion_lr=motion_lr,
+            )
+
+        # Persist state for next call (detached, fp16 if engine fp16).
+        self._prev_hr = out.detach()
+        self._prev_depth_hr = depth_hr_curr.detach()
+        return out.float().contiguous()
+
+
+__all__ = list(set(__all__) | {"TemporalSRInferenceEngine"})  # type: ignore[name-defined]
