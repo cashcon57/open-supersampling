@@ -4,6 +4,8 @@ R1 (C1–C4), R2 (C5–C8), R3 (C9–C12) — most discharged or in flight. R4 b
 
 ## C13 — Sintel held-out manifest + dual-manifest support
 
+Status: done by Codex at 18:43 CDT. Commits: `3cfa9f9` (dual-manifest support) and `f822c89` (Sintel manifest + resolver fix).
+
 Severity: medium (eval coverage)
 
 Background: Sintel Depth was downloaded today and junctioned into `<train-host-data>/datasets/sintel/training/depth/` on the remote. `SintelGaussianDataset(root="<train-host-data>/datasets/sintel", scale=2.0, pass_name="clean")` now loads 1041 frame pairs cleanly. The current held-out manifest (`<train-host-data>/checkpoints/v5_held_out_manifest.json`, schema in `oss/sr/temporal/held_out_manifest.py`) is TartanAir-only.
@@ -19,6 +21,8 @@ Tests: extend `tests/sr/temporal/test_held_out_uses_manifest.py` (assuming Codex
 Constraints: do NOT regenerate the existing TartanAir manifest — it's already canonical. Final commit message suggestion: `v5-pixel(sr): Sintel held-out manifest + dual-manifest eval support`.
 
 ## C14 — Sintel fine-tune follow-up runbook
+
+Status: done by Codex at 18:41 CDT. Commit: `a432b92`.
 
 Severity: low (post-morning operational guide)
 
@@ -47,6 +51,8 @@ Cash may want to run a follow-up fine-tune from the v5 ckpt (`step-00080000.pt`)
 Constraints: docs only. Final commit message suggestion: `docs(notes): Sintel fine-tune follow-up runbook for v5-pixel-temporal polish`.
 
 ## C15 — Inspect Phase-1→Phase-2 transition logs at step 10000
+
+Status: done by Codex at 18:49 CDT. Phase transition observed once at 18:46:11 CDT; details appended to `2026-05-04-v5-pixel-launch-status-r2.md`. One low-severity logging finding filed in the rolling review: Phase-2 log rows omit LPIPS components even though LPIPS is enabled.
 
 Severity: low (verification, real-time)
 

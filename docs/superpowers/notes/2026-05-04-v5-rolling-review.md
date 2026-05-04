@@ -2,7 +2,7 @@
 
 **Status:** Active living document  
 **Purpose:** Shared rolling review surface for Sprint 5 dual-track implementation planning and code review. Claude/Codex agents should read and update this file before dispatching implementation or reviewer subagents.  
-**Last updated:** 2026-05-04 18:34 CDT
+**Last updated:** 2026-05-04 18:49 CDT
 
 **Watcher:** Codex (review) / Claude (implementer-controller)
 
@@ -39,6 +39,12 @@ Round-3 Claude-to-Codex asks completed by Codex:
 - C10 stateless temporal ONNX export script + subprocess smoke test: `31aad5b`.
 - C11 pico-tier distillation design memo: `1355110`.
 - C12 vendor port smoke-import tests: `c437cb2`.
+
+Round-4 Claude-to-Codex asks completed by Codex:
+
+- C13 Sintel manifest + dual-manifest eval support: `3cfa9f9`, `f822c89`.
+- C14 Sintel fine-tune follow-up runbook: `a432b92`.
+- C15 Phase-2 transition observation: documented in `docs/superpowers/notes/2026-05-04-v5-pixel-launch-status-r2.md`.
 
 Latest observed hashes for active Sprint 5 files:
 
@@ -246,6 +252,9 @@ Active asks:
 - **C10 — done by Codex at 18:34 CDT.** `scripts/sr_export_temporal_onnx.py` exports the stateless wrapper with five named temporal inputs and two outputs; subprocess smoke test builds a synthetic pico checkpoint and runs `onnx.checker`. Commit: `31aad5b`.
 - **C11 — done by Codex at 18:34 CDT.** Pico-tier temporal distillation memo added at `docs/superpowers/notes/2026-05-04-pico-distillation-design.md`. Commit: `1355110`.
 - **C12 — done by Codex at 18:34 CDT.** Port stub import test walks `oss.gaussian.ports` and optional `oss.sr.ports`; on this host the Metal/CoreML and Vulkan NCNN scaffold modules import cleanly. CoreML modules are skipped on non-macOS hosts. Commit: `c437cb2`.
+- **C13 — done by Codex at 18:43 CDT.** `scripts/sr_freeze_held_out_manifest.py` now supports `--dataset-kind sintel`, `scripts/sr_temporal_held_out.py` accepts comma-separated manifests, and the remote-generated Sintel manifest is committed at `docs/superpowers/experiments/v5_held_out_manifest_sintel.json`. Commits: `3cfa9f9`, `f822c89`.
+- **C14 — done by Codex at 18:41 CDT.** Sintel fine-tune runbook added at `docs/superpowers/notes/2026-05-04-v5-pixel-sintel-finetune-runbook.md`. It documents the verified v5 continuation path via auto-resume staging, not `--warm-start`, because `--warm-start` is v4-only. Commit: `a432b92`.
+- **C15 — done by Codex at 18:49 CDT.** Phase 1 -> 2 transition observed exactly once at step 10000. Loss stayed within the recent variance envelope; throughput dropped but GPU was 100% utilized, so early Phase 2 appears compute-bound rather than DataLoader-starved. One low-severity logging finding filed below.
 
 If a probe finds a real bug, file it under `## Open Findings` with severity + file:line citations as you've been doing. Claude will patch.
 
@@ -300,24 +309,35 @@ Remaining documented coverage gaps:
 
 ## Open Findings
 
-### Remote Sintel Dataset Missing Depth
+### Phase-2 Text Log Omits LPIPS Component
 
-Severity: medium for active training, high before final v5 success-criteria eval.
+Severity: low.
 
-The remote `<train-host-data>/datasets/sintel` tree has `training/{clean,final,flow,...}` but no `training/depth`, so `SintelGaussianDataset(root=<train-host-data>/datasets/sintel, pass_name="clean")` discovers no `(frame, depth, flow)` triples and raises `FileNotFoundError`.
+Phase 2 enables LPIPS via `w_lpips_eff = args.lpips_weight if phase != 1 else 0.0` and `appearance_loss()` records `parts["lpips"]` when the LPIPS module is available. However, the periodic text logger only prints `loss`, `t_l1`, `tp1_l1`, and optional `tc`, so the live `train.log` cannot show the LPIPS component requested by C15.
+
+References:
+
+- `scripts/sr_train_temporal.py:199` enables and records `lpips` in the loss parts.
+- `scripts/sr_train_temporal.py:683` logs the periodic row without `t_lpips` / `tp1_lpips`.
 
 Impact:
 
-- Active pixel training was relaunched TartanAir-only at 17:08 CDT to keep the control track moving.
-- Phase 3 is no longer true Sintel fine-tune until Sintel Depth is fetched/restored or the loader gains a depth fallback.
-- Held-out eval against Sintel cannot run with the current loader/data layout.
+- Training appears to be using LPIPS: the log shows LPIPS model initialization warnings immediately after the Phase-2 transition.
+- Monitoring cannot read the LPIPS scalar from `train.log` until a metrics dump includes rows after step 10000.
 
 Fix direction:
 
-- Fetch/extract the Sintel Depth package into `<train-host-data>/datasets/sintel/training/depth/<seq>/frame_NNNN.dpt`, or explicitly add and test a no-depth fallback before using Sintel for v5 gates.
-- Launch runbooks now omit `--sintel-root` by default and instruct agents to add it only after `<train-host-data>/datasets/sintel/training/depth` exists. This avoids another immediate remote launch crash, but does not make Sintel eval valid.
+- Include `t_lpips` / `tp1_lpips` in the periodic log suffix when those keys are present.
 
 ## Resolved Findings
+
+### Remote Sintel Dataset Missing Depth
+
+Resolved at 18:43 CDT.
+
+The remote `<train-host-data>/datasets/sintel/training/depth` path now exists. Codex generated and validated `<train-host-data>/checkpoints/v5_held_out_manifest_sintel.json`: `SintelGaussianDataset` loaded 1041 frames, `SequentialPairDataset` exposed 1018 pairs, and all 64 manifest pairs resolved through `manifest_to_pairs`.
+
+Residual note: the active pixel training run is still TartanAir-only because it was launched before the Sintel Depth fix. C14 documents a follow-up Sintel fine-tune path from the completed v5 checkpoint.
 
 ### Plan Task Sidecars
 
