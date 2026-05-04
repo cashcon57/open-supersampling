@@ -926,6 +926,8 @@ git commit -m "v5-gaussian(sr): add opacity + count pruning"
 **Steps:** Read `oss/gaussian/renderer/__init__.py` for `Rasterizer` and `GaussianBatch` API; mirror the call. The wrapper:
 
 ```python
+import torch
+
 from oss.gaussian.renderer import GaussianBatch, Rasterizer
 from oss.sr.gaussian_temporal.gaussian_field import GaussianField
 
@@ -1008,7 +1010,7 @@ git commit -m "v5-gaussian(sr): add Gaussian regularization (drift + area + coun
 **Acceptance Criteria:**
 - [ ] `GaussianTemporalSRModel(in_channels=12, scale=2, max_count=16384)` constructs
 - [ ] Forward signature exactly: `(lr_inputs: (B,12,h,w), motion_lr: (B,2,h,w), prev_field: GaussianField | None) -> (out_hr, new_field, debug)`
-- [ ] On `prev_field=None` (first frame): the encoder + densification produce an initial Gaussian set; `count_alive() > 0`
+- [ ] On `prev_field=None` (first frame): the encoder + densification produce an initial Gaussian set; `count_alive() > 0` AND the returned `rendered_hr` has `abs().max() > 0` (must be a real image, not the pre-densification zero render)
 - [ ] On synthetic moving-rectangle 2-frame sequence: full forward, full loss, `loss.backward()` produces finite gradients
 - [ ] `new_field.alive` is consistent (no NaN, no negative count)
 
@@ -1067,7 +1069,7 @@ class GaussianTemporalSRModel(nn.Module):
             warped.rotation[alive_idx] = warped.rotation[alive_idx] + updates["drot"]
             warped.color[alive_idx] = warped.color[alive_idx] + updates["dcolor"]
 
-        # ---- Render -----------------------------------------------------------
+        # ---- First render -----------------------------------------------------
         rendered_hr = render_field(warped, output_hw=(h_hr, w_hr))
 
         # ---- Densify on residual vs LR-upsampled-target -----------------------
@@ -1080,6 +1082,11 @@ class GaussianTemporalSRModel(nn.Module):
             tile_size=self.scale * 16, residual_threshold=self.densify_threshold,
             max_new=self.densify_max_new,
         )
+
+        # ---- Re-render after densification so frame-0 (and any frame where
+        # densification adds Gaussians) does NOT return the pre-densify image.
+        # Gradient still flows: render_field is differentiable through field.color.
+        rendered_hr = render_field(warped, output_hw=(h_hr, w_hr))
 
         # ---- Prune ------------------------------------------------------------
         new_field = prune(warped, opacity_threshold=self.opacity_threshold,
