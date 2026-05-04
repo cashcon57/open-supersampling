@@ -60,3 +60,40 @@ def test_scene_cut_auto_reset(tmp_path: Path) -> None:
     big_motion = torch.full((1, 2, 8, 8), 10.0)
     eng(lr_inputs=lr, depth_hr_curr=depth_hr, motion_lr=big_motion)
     assert eng.last_call_was_scene_cut is True
+
+
+def test_from_checkpoint_honors_saved_backbone_kind(tmp_path: Path, monkeypatch) -> None:
+    """Training checkpoints save ``backbone_kind``; inference must honor it."""
+    captured: dict[str, str] = {}
+
+    class _FakeTemporalModel(torch.nn.Module):
+        def __init__(
+            self,
+            *,
+            in_channels: int,
+            scale: int,
+            tier: str,
+            backbone_kind: str,
+        ) -> None:
+            super().__init__()
+            self.scale = scale
+            captured["backbone_kind"] = backbone_kind
+
+    monkeypatch.setattr("oss.sr.inference.TemporalSRModel", _FakeTemporalModel)
+
+    ckpt = tmp_path / "temporal_rrdb.pt"
+    torch.save(
+        {
+            "temporal_model": {},
+            "args": {
+                "in_channels": 12,
+                "scale": 2,
+                "tier": "standard",
+                "backbone_kind": "rrdb",
+            },
+        },
+        ckpt,
+    )
+
+    TemporalSRInferenceEngine.from_checkpoint(ckpt, device="cpu", fp16=False)
+    assert captured["backbone_kind"] == "rrdb"

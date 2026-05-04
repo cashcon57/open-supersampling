@@ -281,7 +281,9 @@ class TemporalSRInferenceEngine:
         in_channels = int(saved.get("in_channels", 12))
         scale = int(saved.get("scale", 2))
         tier = saved.get("tier", "standard")
-        backbone_kind = "rrdb" if saved.get("sr_backbone") == "rrdb" else "simple"
+        backbone_kind = saved.get("backbone_kind")
+        if backbone_kind is None:
+            backbone_kind = "rrdb" if saved.get("sr_backbone") == "rrdb" else "simple"
         model = TemporalSRModel(
             in_channels=in_channels, scale=scale, tier=tier, backbone_kind=backbone_kind
         )
