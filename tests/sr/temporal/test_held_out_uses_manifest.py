@@ -49,12 +49,19 @@ class _StubBaseDataset:
         }
 
 
-def _write_manifest(path: Path, *, lr_scale: float = 2.0, extra_lr: dict[str, Any] | None = None) -> None:
+def _write_manifest(
+    path: Path,
+    *,
+    dataset_kind: str = "tartanair",
+    lr_scale: float = 2.0,
+    extra_lr: dict[str, Any] | None = None,
+) -> None:
     lr_synth_args = dict(held_out.DEFAULT_LR_SYNTH_ARGS)
     if extra_lr:
         lr_synth_args.update(extra_lr)
     manifest = {
         "manifest_version": 1,
+        "dataset_kind": dataset_kind,
         "n_pairs": 2,
         "seed": 0,
         "lr_scale": lr_scale,
@@ -146,3 +153,34 @@ def test_manifest_loader_rejects_scale_mismatch(
             scale=2.0,
             lr_synth_args=held_out.DEFAULT_LR_SYNTH_ARGS,
         )
+
+
+def test_dual_manifest_loader_routes_each_manifest_kind(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tartan_manifest = tmp_path / "held_out_tartanair.json"
+    sintel_manifest = tmp_path / "held_out_sintel.json"
+    _write_manifest(tartan_manifest, dataset_kind="tartanair")
+    _write_manifest(sintel_manifest, dataset_kind="sintel")
+
+    calls: list[str] = []
+
+    def _fake_base(kind: str, *args: Any, **kwargs: Any) -> _StubBaseDataset:
+        calls.append(kind)
+        return _StubBaseDataset()
+
+    monkeypatch.setattr(held_out, "_build_manifest_base_dataset", _fake_base)
+
+    loaders = held_out._build_manifest_loaders(
+        held_out._split_manifest_paths(f"{tartan_manifest},{sintel_manifest}"),
+        tartanair_root=tmp_path / "tartan",
+        sintel_root=tmp_path / "sintel",
+        batch_size=2,
+        scale=2.0,
+        lr_synth_args=held_out.DEFAULT_LR_SYNTH_ARGS,
+    )
+
+    assert [name for name, _loader in loaders] == ["tartanair", "sintel"]
+    assert calls == ["tartanair", "sintel"]
+    batches = [next(iter(loader)) for _name, loader in loaders]
+    assert [batch["t_lr"].shape for batch in batches] == [(2, 3, 2, 2), (2, 3, 2, 2)]

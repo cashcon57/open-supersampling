@@ -189,5 +189,13 @@ def test_freezer_script_help_exits_zero() -> None:
     out = proc.stdout.lower()
     assert "usage" in out
     # All advertised flags must be discoverable from --help.
-    for flag in ("--output", "--tartanair-root", "--n-pairs", "--seed", "--lr-scale"):
+    for flag in (
+        "--dataset-kind",
+        "--output",
+        "--tartanair-root",
+        "--sintel-root",
+        "--n-pairs",
+        "--seed",
+        "--lr-scale",
+    ):
         assert flag in proc.stdout, f"flag {flag!r} missing from --help:\n{proc.stdout}"

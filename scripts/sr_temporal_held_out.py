@@ -217,6 +217,26 @@ def _validate_manifest_config(
         )
 
 
+def _split_manifest_paths(manifest_arg: str | Path | None) -> list[Path]:
+    if manifest_arg is None:
+        return []
+    return [
+        Path(part.strip())
+        for part in str(manifest_arg).split(",")
+        if part.strip()
+    ]
+
+
+def _infer_manifest_kind(manifest: Mapping[str, Any]) -> str:
+    kind = manifest.get("dataset_kind")
+    if kind in {"tartanair", "sintel"}:
+        return str(kind)
+    trajectories = [str(p["trajectory"]).lower() for p in manifest["pairs"]]
+    if any("sintel" in t or "training\\clean" in t or "training/clean" in t for t in trajectories):
+        return "sintel"
+    return "tartanair"
+
+
 def _build_manifest_base_dataset(
     kind: str,
     root: Path,
@@ -274,6 +294,44 @@ def _build_manifest_loader(
         pair_ds, batch_size=batch_size, shuffle=False, num_workers=0,
         collate_fn=default_collate_pair, drop_last=False,
     )
+
+
+def _build_manifest_loaders(
+    manifest_paths: list[Path],
+    *,
+    tartanair_root: Path | None,
+    sintel_root: Path | None,
+    batch_size: int,
+    scale: float,
+    lr_synth_args: Mapping[str, Any],
+) -> list[tuple[str, Any]]:
+    from oss.sr.temporal.held_out_manifest import load_manifest
+
+    loaders: list[tuple[str, Any]] = []
+    for manifest_path in manifest_paths:
+        manifest = load_manifest(manifest_path)
+        kind = _infer_manifest_kind(manifest)
+        if kind == "tartanair":
+            if tartanair_root is None:
+                raise ValueError(
+                    f"manifest {manifest_path} is TartanAir but --tartanair-root was not provided"
+                )
+            root = tartanair_root
+        elif kind == "sintel":
+            if sintel_root is None:
+                raise ValueError(
+                    f"manifest {manifest_path} is Sintel but --sintel-root was not provided"
+                )
+            root = sintel_root
+        else:
+            raise ValueError(f"unknown manifest dataset_kind {kind!r} in {manifest_path}")
+        loader = _build_manifest_loader(
+            kind, root, manifest_path, batch_size,
+            scale=scale, lr_synth_args=lr_synth_args,
+        )
+        if loader is not None:
+            loaders.append((kind, loader))
+    return loaders
 
 
 # ---------------------------------------------------------------------------
@@ -437,6 +495,36 @@ def _mean(xs: list[float]) -> float:
     return sum(xs) / len(xs) if xs else float("nan")
 
 
+def _print_compact_result_block(label: str, result: dict[str, list[float]]) -> None:
+    n = len(result["psnr_temporal"])
+    if n == 0:
+        return
+    psnr_a = result["psnr_baseline"]
+    psnr_b = result["psnr_temporal"]
+    psnr_c = result["psnr_bicubic"]
+    lpips_a = result["lpips_baseline"]
+    lpips_b = result["lpips_temporal"]
+    lpips_c = result["lpips_bicubic"]
+    tstab_a = result["tstab_baseline"]
+    tstab_b = result["tstab_temporal"]
+
+    print()
+    print(f"=== {label} held-out (n={n}) ===")
+    print(
+        f"PSNR A={_mean(psnr_a):6.3f}  B={_mean(psnr_b):6.3f}  "
+        f"bicubic={_mean(psnr_c):6.3f}  B-vs-A={_mean(psnr_b)-_mean(psnr_a):+6.3f}"
+    )
+    if lpips_a:
+        print(
+            f"LPIPS A={_mean(lpips_a):6.4f}  B={_mean(lpips_b):6.4f}  "
+            f"bicubic={_mean(lpips_c):6.4f}  B-vs-A={_mean(lpips_b)-_mean(lpips_a):+7.4f}"
+        )
+    print(
+        f"Temporal stability A={_mean(tstab_a):7.5f}  "
+        f"B={_mean(tstab_b):7.5f}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -472,10 +560,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="Total held-out frames to evaluate across both datasets.")
     p.add_argument("--batch-size", type=int, default=4)
     p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--manifest", type=Path, default=None,
-                   help="Frozen held-out manifest JSON. When set, frame pairs "
-                        "are replayed from the manifest instead of discovered "
-                        "from SequentialPairDataset order.")
+    p.add_argument("--manifest", default=None,
+                   help="Frozen held-out manifest JSON path, or a comma-separated "
+                        "list of paths. When set, frame pairs are replayed from "
+                        "the manifest(s) instead of discovered from "
+                        "SequentialPairDataset order.")
     p.add_argument("--scale", type=float, default=DEFAULT_SCALE,
                    help="HR/LR scale factor for manifest config checks.")
     p.add_argument("--enable-jpeg", action="store_true",
@@ -499,6 +588,8 @@ def main(argv: list[str] | None = None) -> int:
     device = args.device
     torch.manual_seed(args.seed)
 
+    manifest_paths = _split_manifest_paths(args.manifest)
+
     if args.tartanair_root is None and args.sintel_root is None:
         print("FAIL: provide at least one of --tartanair-root / --sintel-root")
         return 1
@@ -520,41 +611,49 @@ def main(argv: list[str] | None = None) -> int:
     # Build deterministic loaders.
     loaders: list[tuple[str, "DataLoader"]] = []
     lr_synth_args = _lr_synth_args_from_cli(args)
-    if args.tartanair_root is not None:
-        if args.manifest is not None:
-            loader = _build_manifest_loader(
-                "tartanair", args.tartanair_root, args.manifest,
-                args.batch_size, scale=args.scale,
+    if manifest_paths:
+        try:
+            loaders = _build_manifest_loaders(
+                manifest_paths,
+                tartanair_root=args.tartanair_root,
+                sintel_root=args.sintel_root,
+                batch_size=args.batch_size,
+                scale=args.scale,
                 lr_synth_args=lr_synth_args,
             )
-        else:
+        except Exception as e:
+            print(f"FAIL: {e}")
+            return 1
+        for name, loader in loaders:
+            print(f"{name} manifest held-out pairs: {len(loader.dataset)}")
+    else:
+        if args.tartanair_root is not None:
             loader = _build_pair_loader(
                 "tartanair", args.tartanair_root, args.batch_size,
             )
-        if loader is not None:
-            loaders.append(("tartanair", loader))
-            print(f"tartanair held-out pairs: {len(loader.dataset)}")
-    if args.sintel_root is not None:
-        if args.manifest is not None:
-            loader = _build_manifest_loader(
-                "sintel", args.sintel_root, args.manifest,
-                args.batch_size, scale=args.scale,
-                lr_synth_args=lr_synth_args,
-            )
-        else:
+            if loader is not None:
+                loaders.append(("tartanair", loader))
+                print(f"tartanair held-out pairs: {len(loader.dataset)}")
+        if args.sintel_root is not None:
             loader = _build_pair_loader(
                 "sintel", args.sintel_root, args.batch_size,
             )
-        if loader is not None:
-            loaders.append(("sintel", loader))
-            print(f"sintel held-out pairs: {len(loader.dataset)}")
+            if loader is not None:
+                loaders.append(("sintel", loader))
+                print(f"sintel held-out pairs: {len(loader.dataset)}")
 
     if not loaders:
         print("FAIL: neither dataset produced any sequential pairs")
         return 1
 
-    # Evenly split target sample budget across loaders (round up).
-    per_loader = max(1, math.ceil(args.n_samples / len(loaders)))
+    # Default path preserves the old total-budget behavior. Manifest mode
+    # evaluates up to n_samples from each frozen manifest, so a 64-pair
+    # TartanAir manifest + a 64-pair Sintel manifest produces n=128 aggregate.
+    per_loader = (
+        max(1, args.n_samples)
+        if manifest_paths
+        else max(1, math.ceil(args.n_samples / len(loaders)))
+    )
     per_dataset_results: dict[str, dict[str, list[float]]] = {}
     for name, loader in loaders:
         print(f"-- evaluating {name} (target ~{per_loader} samples) --")
@@ -572,6 +671,11 @@ def main(argv: list[str] | None = None) -> int:
     if n == 0:
         print("FAIL: no samples evaluated")
         return 1
+
+    if manifest_paths and len(per_dataset_results) > 1:
+        for name, result in per_dataset_results.items():
+            display = {"tartanair": "TartanAir", "sintel": "Sintel"}.get(name, name)
+            _print_compact_result_block(display, result)
 
     # ---- Print results (mirror sr_v3_vs_v4_ab.py format) ----
     psnr_a = merged["psnr_baseline"]   # A = baseline (v4)
@@ -636,6 +740,7 @@ def main(argv: list[str] | None = None) -> int:
         "n_samples": n,
         "ckpt_temporal": str(args.ckpt_temporal),
         "ckpt_baseline": str(args.ckpt_baseline),
+        "manifests": [str(p) for p in manifest_paths],
         "datasets": {name: len(r["psnr_temporal"]) for name, r in per_dataset_results.items()},
         "psnr": {
             "baseline_mean": _mean(psnr_a),

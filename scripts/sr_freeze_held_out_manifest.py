@@ -45,8 +45,10 @@ if str(_REPO_ROOT) not in sys.path:
 # NOTE: torch / oss imports are deferred into ``main()`` so that ``--help``
 # (the CLI smoke-test gate) succeeds on a vanilla Python interpreter.
 
-DEFAULT_OUTPUT = Path("docs/superpowers/experiments/v5_held_out_manifest.json")
+DEFAULT_TARTANAIR_OUTPUT = Path("docs/superpowers/experiments/v5_held_out_manifest.json")
+DEFAULT_SINTEL_OUTPUT = Path("docs/superpowers/experiments/v5_held_out_manifest_sintel.json")
 DEFAULT_TARTANAIR_ROOT = Path("<train-host-data>/datasets/tartanair_extracted")
+DEFAULT_SINTEL_ROOT = Path("<train-host-data>/datasets/sintel")
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -55,6 +57,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "Freeze a deterministic held-out frame-pair manifest "
             "(JSON, schema v1) for v5 temporal SR eval."
         )
+    )
+    p.add_argument(
+        "--dataset-kind",
+        choices=["tartanair", "sintel"],
+        default="tartanair",
+        help="Dataset adapter to freeze (default: tartanair).",
     )
     p.add_argument(
         "--tartanair-root",
@@ -67,10 +75,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     p.add_argument(
+        "--sintel-root",
+        type=Path,
+        default=None,
+        help=f"Sintel root when --dataset-kind=sintel (default: {DEFAULT_SINTEL_ROOT}).",
+    )
+    p.add_argument(
         "--output",
         type=Path,
-        default=DEFAULT_OUTPUT,
-        help=f"Manifest output path (default: {DEFAULT_OUTPUT}).",
+        default=None,
+        help=(
+            "Manifest output path. Defaults to "
+            f"{DEFAULT_TARTANAIR_OUTPUT} for TartanAir and "
+            f"{DEFAULT_SINTEL_OUTPUT} for Sintel."
+        ),
     )
     p.add_argument(
         "--n-pairs",
@@ -119,14 +137,28 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def _frame_index_from_path(image_path: Path) -> int:
-    """Extract the zero-padded frame number from a TartanAir image path.
+    """Extract the frame number from a TartanAir or Sintel image path.
 
     TartanAir image filenames look like ``000123_left.png``; the integer
-    prefix is the per-trajectory frame index.
+    prefix is the per-trajectory frame index. Sintel filenames look like
+    ``frame_0001.png``.
     """
     stem = image_path.stem  # e.g. "000123_left"
-    head = stem.split("_")[0]
+    if stem.startswith("frame_"):
+        head = stem.split("_")[-1]
+    else:
+        head = stem.split("_")[0]
     return int(head)
+
+
+def _trajectory_from_image_path(dataset_kind: str, image_path: Path) -> Path:
+    if dataset_kind == "tartanair":
+        # .../<traj>/image_left/000000_left.png
+        return image_path.parent.parent
+    if dataset_kind == "sintel":
+        # .../training/clean/<seq>/frame_0001.png
+        return image_path.parent
+    raise ValueError(f"unknown dataset kind: {dataset_kind!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -136,22 +168,38 @@ def _frame_index_from_path(image_path: Path) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    if args.output is None:
+        args.output = (
+            DEFAULT_SINTEL_OUTPUT
+            if args.dataset_kind == "sintel"
+            else DEFAULT_TARTANAIR_OUTPUT
+        )
 
     if args.n_pairs <= 0:
         print(f"FAIL: --n-pairs must be positive; got {args.n_pairs}")
         return 1
 
-    if args.tartanair_root is None:
+    root = (
+        args.sintel_root if args.dataset_kind == "sintel"
+        else args.tartanair_root
+    )
+    if root is None:
+        root = (
+            DEFAULT_SINTEL_ROOT if args.dataset_kind == "sintel"
+            else DEFAULT_TARTANAIR_ROOT
+        )
+
+    if root is None:
         print(
-            "FAIL: --tartanair-root is required to materialize the "
-            "manifest. Pass a real TartanAir extraction root."
+            f"FAIL: --{args.dataset_kind}-root is required to materialize "
+            "the manifest. Pass a real dataset root."
         )
         return 1
 
-    if not args.tartanair_root.is_dir():
+    if not root.is_dir():
         print(
-            f"FAIL: --tartanair-root {args.tartanair_root} is not a "
-            "directory (run on the box where TartanAir is extracted)."
+            f"FAIL: {args.dataset_kind} root {root} is not a directory "
+            "(run on the box where the dataset is extracted)."
         )
         return 1
 
@@ -159,10 +207,11 @@ def main(argv: list[str] | None = None) -> int:
     import torch
     from torch.utils.data import DataLoader
 
-    from oss.gaussian.data import TartanAirGaussianDataset
+    from oss.gaussian.data import SintelGaussianDataset, TartanAirGaussianDataset
     from oss.gaussian.data.lr_synthesis import EngineAliasedLRSynth
     from oss.sr.temporal import (
         SequentialPairDataset,
+        adapt_sintel,
         adapt_tartanair,
         default_collate_pair,
     )
@@ -179,13 +228,19 @@ def main(argv: list[str] | None = None) -> int:
     }
     lr_synth = EngineAliasedLRSynth(scale=args.lr_scale, **lr_synth_args)
 
-    base = TartanAirGaussianDataset(
-        root=args.tartanair_root, scale=args.lr_scale, lr_synth=lr_synth
-    )
-    base = adapt_tartanair(base)
+    if args.dataset_kind == "tartanair":
+        base = TartanAirGaussianDataset(
+            root=root, scale=args.lr_scale, lr_synth=lr_synth
+        )
+        base = adapt_tartanair(base)
+    else:
+        base = SintelGaussianDataset(
+            root=root, scale=args.lr_scale, pass_name="clean", lr_synth=lr_synth
+        )
+        base = adapt_sintel(base)
     pair_ds = SequentialPairDataset(base)
     if len(pair_ds) == 0:
-        print("FAIL: TartanAir produced 0 sequential pairs")
+        print(f"FAIL: {args.dataset_kind} produced 0 sequential pairs")
         return 1
     if len(pair_ds) < args.n_pairs:
         print(
@@ -217,8 +272,7 @@ def main(argv: list[str] | None = None) -> int:
         # base._items[i] = (image_path, depth_path, flow_path)
         img_path = Path(base._items[base_idx][0])
         next_img_path = Path(base._items[base_idx + 1][0])
-        # Trajectory dir = parent of image_left/.
-        traj_dir = img_path.parent.parent
+        traj_dir = _trajectory_from_image_path(args.dataset_kind, img_path)
         idx_t = _frame_index_from_path(img_path)
         idx_p = _frame_index_from_path(next_img_path)
         if idx_p != idx_t + 1:
@@ -238,6 +292,7 @@ def main(argv: list[str] | None = None) -> int:
 
     manifest = {
         "manifest_version": MANIFEST_VERSION,
+        "dataset_kind": args.dataset_kind,
         "n_pairs": len(pairs_records),
         "seed": int(args.seed),
         "lr_scale": float(args.lr_scale),
