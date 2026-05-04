@@ -86,6 +86,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--tc-weight", type=float, default=0.05,
                    help="Temporal-consistency loss weight (Phase 2/3).")
     p.add_argument("--ssim-weight", type=float, default=0.1)
+    p.add_argument("--num-workers", type=int, default=2,
+                   help="DataLoader worker count. 4-8 helps when disk I/O on the dataset "
+                        "is the bottleneck (TartanAir at 600GB doesn't fit in OS cache).")
     p.add_argument("--tier", default="standard",
                    choices=["pico", "lite", "standard"])
     p.add_argument("--backbone-kind", default="simple",
@@ -235,7 +238,8 @@ def build_datasets(args: argparse.Namespace):
         pair_t = SequentialPairDataset(ds_t)
         tartan_loader = DataLoader(
             pair_t, batch_size=args.batch_size, shuffle=True,
-            num_workers=2, collate_fn=default_collate_pair, drop_last=True,
+            num_workers=args.num_workers, persistent_workers=(args.num_workers > 0),
+            collate_fn=default_collate_pair, drop_last=True,
         )
     if args.sintel_root is not None:
         ds_s = SintelGaussianDataset(root=args.sintel_root, scale=2.0, pass_name="clean")
@@ -243,7 +247,8 @@ def build_datasets(args: argparse.Namespace):
         pair_s = SequentialPairDataset(ds_s)
         sintel_loader = DataLoader(
             pair_s, batch_size=args.batch_size, shuffle=True,
-            num_workers=2, collate_fn=default_collate_pair, drop_last=True,
+            num_workers=args.num_workers, persistent_workers=(args.num_workers > 0),
+            collate_fn=default_collate_pair, drop_last=True,
         )
     return tartan_loader, sintel_loader
 
