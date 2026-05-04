@@ -7,6 +7,10 @@ from oss.sr.gaussian_temporal.pruning import prune
 from oss.sr.gaussian_temporal.rasterizer import render_field
 from oss.sr.gaussian_temporal.regularization import gaussian_regularization_loss
 from oss.sr.gaussian_temporal.model import GaussianTemporalSRModel
+from oss.sr.gaussian_temporal.dataset import (
+    TrajectoryWindowDataset,
+    default_collate_window,
+)
 
 __all__ = [
     "GaussianField",
@@ -19,4 +23,6 @@ __all__ = [
     "render_field",
     "gaussian_regularization_loss",
     "GaussianTemporalSRModel",
+    "TrajectoryWindowDataset",
+    "default_collate_window",
 ]
