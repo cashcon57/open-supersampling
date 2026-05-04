@@ -335,3 +335,104 @@ class TemporalSRInferenceEngine:
 
 
 __all__ = list(set(__all__) | {"TemporalSRInferenceEngine"})  # type: ignore[name-defined]
+
+
+# ============================================================================
+# v5 gaussian-temporal stateful inference
+# ============================================================================
+
+from oss.sr.gaussian_temporal.gaussian_field import GaussianField
+from oss.sr.gaussian_temporal.model import GaussianTemporalSRModel
+
+
+class GaussianTemporalSRInferenceEngine:
+    """Stateful inference engine for v5 Gaussian-temporal SR.
+
+    Carries a ``GaussianField`` across calls. ``reset()`` re-initializes the
+    state to an empty (``None``) field; the next call seeds a new field from
+    the LR input via the model's first-frame densification path.
+
+    Auto-resets when mean motion magnitude exceeds
+    ``scene_cut_motion_threshold`` (in LR pixels), mirroring the pixel
+    engine's scene-cut policy.
+    """
+
+    def __init__(
+        self,
+        model: GaussianTemporalSRModel,
+        device: str,
+        fp16: bool,
+        scene_cut_motion_threshold: float,
+    ) -> None:
+        self.device = device
+        self.fp16 = fp16
+        self._dtype = torch.float16 if fp16 else torch.float32
+        self.scene_cut_motion_threshold = float(scene_cut_motion_threshold)
+        self.last_call_was_scene_cut = False
+
+        model = model.to(device).train(False)
+        if fp16:
+            model = model.half()
+        for p in model.parameters():
+            p.requires_grad_(False)
+        self.model = model
+
+        self._prev_field: Optional[GaussianField] = None
+
+    @classmethod
+    def from_checkpoint(
+        cls,
+        ckpt_path: Path,
+        device: str = "cuda",
+        fp16: bool = True,
+        scene_cut_motion_threshold: float = 32.0,
+    ) -> "GaussianTemporalSRInferenceEngine":
+        ck = torch.load(ckpt_path, map_location=device, weights_only=False)
+        saved = ck.get("args", {})
+        in_channels = int(saved.get("in_channels", 12))
+        scale = int(saved.get("scale", 2))
+        max_count = int(saved.get("max_count", 16384))
+        model = GaussianTemporalSRModel(
+            in_channels=in_channels, scale=scale, max_count=max_count
+        )
+        model.load_state_dict(ck["gaussian_temporal_model"])
+        return cls(
+            model=model,
+            device=device,
+            fp16=fp16,
+            scene_cut_motion_threshold=scene_cut_motion_threshold,
+        )
+
+    def reset(self) -> None:
+        self._prev_field = None
+
+    def __call__(
+        self,
+        lr_inputs: torch.Tensor,
+        motion_lr: torch.Tensor,
+    ) -> torch.Tensor:
+        lr_inputs = lr_inputs.to(self.device, dtype=self._dtype, non_blocking=True)
+        motion_lr = motion_lr.to(self.device, dtype=self._dtype, non_blocking=True)
+
+        # Scene-cut detection — only meaningful once we have prior state.
+        mean_mag = float(motion_lr.norm(dim=1).mean().item())
+        self.last_call_was_scene_cut = (
+            self._prev_field is not None
+            and mean_mag > self.scene_cut_motion_threshold
+        )
+        if self.last_call_was_scene_cut:
+            self.reset()
+
+        with torch.no_grad():
+            rendered_hr, new_field, _ = self.model(
+                lr_inputs=lr_inputs,
+                motion_lr=motion_lr,
+                prev_field=self._prev_field,
+            )
+
+        # Persist state for next call.
+        self._prev_field = new_field
+        return rendered_hr.float().contiguous()
+
+
+__all__ = list(set(__all__) | {"GaussianTemporalSRInferenceEngine"})  # type: ignore[name-defined]
