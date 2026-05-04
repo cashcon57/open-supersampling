@@ -285,6 +285,9 @@ Design memos and runbooks driving the current sprint and the next two:
 **S7 prep (game integration):**
 - [notes/2026-05-04-s7-game-integration-design.md](docs/superpowers/notes/2026-05-04-s7-game-integration-design.md) — DXGI / NGX / Vulkan / Metal / OSS-FX integration design
 
+**v6 research direction (post-v5-race candidate):**
+- [specs/2026-05-04-v6-research-tracks-design.md](docs/superpowers/specs/2026-05-04-v6-research-tracks-design.md) — race-resolution gates, scenarios A/B, common productization, 6-month sequencing
+
 Sprint reference (high-level, predates the v5 implementation work):
 - [specs/oss-gaussian-sprint-1.md](docs/superpowers/specs/oss-gaussian-sprint-1.md) through [specs/oss-gaussian-sprint-7.md](docs/superpowers/specs/oss-gaussian-sprint-7.md)
 
