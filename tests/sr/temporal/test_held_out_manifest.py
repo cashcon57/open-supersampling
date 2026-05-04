@@ -169,6 +169,48 @@ def test_manifest_to_pairs_raises_on_missing_trajectory() -> None:
         manifest_to_pairs(manifest, base)
 
 
+class _PathOnlySintelStub:
+    """Dataset shim with no frame_index(), matching adapted Sintel behavior."""
+
+    def __init__(self) -> None:
+        self._items = [
+            (Path("/data/sintel/training/clean/alley_1/frame_0001.png"), None, None),
+            (Path("/data/sintel/training/clean/alley_1/frame_0002.png"), None, None),
+            (Path("/data/sintel/training/clean/alley_1/frame_0048.png"), None, None),
+            (Path("/data/sintel/training/clean/alley_1/frame_0049.png"), None, None),
+        ]
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+    def trajectory_key(self, idx: int) -> str:
+        return str(self._items[idx][0].parent)
+
+
+def test_manifest_to_pairs_infers_sintel_frame_numbers_from_items() -> None:
+    manifest = {
+        "manifest_version": 1,
+        "n_pairs": 2,
+        "seed": 0,
+        "lr_scale": 2.0,
+        "lr_synth_args": {},
+        "pairs": [
+            {
+                "trajectory": "/data/sintel/training/clean/alley_1",
+                "idx_t": 1,
+                "idx_t_plus_1": 2,
+            },
+            {
+                "trajectory": "/data/sintel/training/clean/alley_1",
+                "idx_t": 48,
+                "idx_t_plus_1": 49,
+            },
+        ],
+    }
+
+    assert manifest_to_pairs(manifest, _PathOnlySintelStub()) == [(0, 1), (2, 3)]
+
+
 # ---------------------------------------------------------------------------
 # Freezer script smoke
 # ---------------------------------------------------------------------------

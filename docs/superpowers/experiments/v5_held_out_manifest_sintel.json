@@ -1,0 +1,336 @@
+{
+  "manifest_version": 1,
+  "dataset_kind": "sintel",
+  "n_pairs": 64,
+  "seed": 0,
+  "lr_scale": 2.0,
+  "lr_synth_args": {
+    "enable_jitter": true,
+    "enable_taa_blur": true,
+    "enable_jpeg": false,
+    "jpeg_quality": 85,
+    "blur_sigma": 0.5
+  },
+  "pairs": [
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_1",
+      "idx_t": 1,
+      "idx_t_plus_1": 2
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_1",
+      "idx_t": 2,
+      "idx_t_plus_1": 3
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_1",
+      "idx_t": 3,
+      "idx_t_plus_1": 4
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_1",
+      "idx_t": 4,
+      "idx_t_plus_1": 5
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_1",
+      "idx_t": 5,
+      "idx_t_plus_1": 6
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_1",
+      "idx_t": 6,
+      "idx_t_plus_1": 7
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_1",
+      "idx_t": 7,
+      "idx_t_plus_1": 8
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_1",
+      "idx_t": 8,
+      "idx_t_plus_1": 9
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_1",
+      "idx_t": 9,
+      "idx_t_plus_1": 10
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_1",
+      "idx_t": 10,
+      "idx_t_plus_1": 11
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_1",
+      "idx_t": 11,
+      "idx_t_plus_1": 12
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_1",
+      "idx_t": 12,
+      "idx_t_plus_1": 13
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_1",
+      "idx_t": 13,
+      "idx_t_plus_1": 14
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_1",
+      "idx_t": 14,
+      "idx_t_plus_1": 15
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_1",
+      "idx_t": 15,
+      "idx_t_plus_1": 16
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_1",
+      "idx_t": 16,
+      "idx_t_plus_1": 17
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_1",
+      "idx_t": 17,
+      "idx_t_plus_1": 18
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_1",
+      "idx_t": 18,
+      "idx_t_plus_1": 19
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_1",
+      "idx_t": 19,
+      "idx_t_plus_1": 20
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_1",
+      "idx_t": 20,
+      "idx_t_plus_1": 21
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_1",
+      "idx_t": 21,
+      "idx_t_plus_1": 22
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_1",
+      "idx_t": 22,
+      "idx_t_plus_1": 23
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_1",
+      "idx_t": 23,
+      "idx_t_plus_1": 24
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_1",
+      "idx_t": 24,
+      "idx_t_plus_1": 25
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_1",
+      "idx_t": 25,
+      "idx_t_plus_1": 26
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_1",
+      "idx_t": 26,
+      "idx_t_plus_1": 27
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_1",
+      "idx_t": 27,
+      "idx_t_plus_1": 28
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_1",
+      "idx_t": 28,
+      "idx_t_plus_1": 29
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_1",
+      "idx_t": 29,
+      "idx_t_plus_1": 30
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_1",
+      "idx_t": 30,
+      "idx_t_plus_1": 31
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_1",
+      "idx_t": 31,
+      "idx_t_plus_1": 32
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_1",
+      "idx_t": 32,
+      "idx_t_plus_1": 33
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_1",
+      "idx_t": 33,
+      "idx_t_plus_1": 34
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_1",
+      "idx_t": 34,
+      "idx_t_plus_1": 35
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_1",
+      "idx_t": 35,
+      "idx_t_plus_1": 36
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_1",
+      "idx_t": 36,
+      "idx_t_plus_1": 37
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_1",
+      "idx_t": 37,
+      "idx_t_plus_1": 38
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_1",
+      "idx_t": 38,
+      "idx_t_plus_1": 39
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_1",
+      "idx_t": 39,
+      "idx_t_plus_1": 40
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_1",
+      "idx_t": 40,
+      "idx_t_plus_1": 41
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_1",
+      "idx_t": 41,
+      "idx_t_plus_1": 42
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_1",
+      "idx_t": 42,
+      "idx_t_plus_1": 43
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_1",
+      "idx_t": 43,
+      "idx_t_plus_1": 44
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_1",
+      "idx_t": 44,
+      "idx_t_plus_1": 45
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_1",
+      "idx_t": 45,
+      "idx_t_plus_1": 46
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_1",
+      "idx_t": 46,
+      "idx_t_plus_1": 47
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_1",
+      "idx_t": 47,
+      "idx_t_plus_1": 48
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_1",
+      "idx_t": 48,
+      "idx_t_plus_1": 49
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_2",
+      "idx_t": 1,
+      "idx_t_plus_1": 2
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_2",
+      "idx_t": 2,
+      "idx_t_plus_1": 3
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_2",
+      "idx_t": 3,
+      "idx_t_plus_1": 4
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_2",
+      "idx_t": 4,
+      "idx_t_plus_1": 5
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_2",
+      "idx_t": 5,
+      "idx_t_plus_1": 6
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_2",
+      "idx_t": 6,
+      "idx_t_plus_1": 7
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_2",
+      "idx_t": 7,
+      "idx_t_plus_1": 8
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_2",
+      "idx_t": 8,
+      "idx_t_plus_1": 9
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_2",
+      "idx_t": 9,
+      "idx_t_plus_1": 10
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_2",
+      "idx_t": 10,
+      "idx_t_plus_1": 11
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_2",
+      "idx_t": 11,
+      "idx_t_plus_1": 12
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_2",
+      "idx_t": 12,
+      "idx_t_plus_1": 13
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_2",
+      "idx_t": 13,
+      "idx_t_plus_1": 14
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_2",
+      "idx_t": 14,
+      "idx_t_plus_1": 15
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_2",
+      "idx_t": 15,
+      "idx_t_plus_1": 16
+    },
+    {
+      "trajectory": "<train-host-data>\\datasets\\sintel\\training\\clean\\alley_2",
+      "idx_t": 16,
+      "idx_t_plus_1": 17
+    }
+  ]
+}

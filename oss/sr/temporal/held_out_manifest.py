@@ -105,6 +105,13 @@ def load_manifest(path: str | Path) -> dict[str, Any]:
     return manifest
 
 
+def _frame_index_from_item_path(path: Path) -> int:
+    stem = path.stem
+    if stem.startswith("frame_"):
+        return int(stem.split("_")[-1])
+    return int(stem.split("_")[0])
+
+
 def manifest_to_pairs(
     manifest: Mapping[str, Any], base_dataset: Any
 ) -> list[tuple[int, int]]:
@@ -140,6 +147,7 @@ def manifest_to_pairs(
     n = len(base_dataset)
 
     use_frame_index = hasattr(base_dataset, "frame_index")
+    use_item_path_index = hasattr(base_dataset, "_items")
     # (trajectory, frame_idx_within_traj) -> base_idx
     lookup: dict[tuple[str, int], int] = {}
     # Track per-trajectory ordinal so we can synthesize a frame index
@@ -149,6 +157,12 @@ def manifest_to_pairs(
         traj = base_dataset.trajectory_key(i)
         if use_frame_index:
             fidx = int(base_dataset.frame_index(i))
+        elif use_item_path_index:
+            try:
+                fidx = _frame_index_from_item_path(Path(base_dataset._items[i][0]))
+            except Exception:
+                fidx = ordinals.get(traj, 0)
+                ordinals[traj] = fidx + 1
         else:
             fidx = ordinals.get(traj, 0)
             ordinals[traj] = fidx + 1
