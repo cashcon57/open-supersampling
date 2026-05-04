@@ -366,14 +366,22 @@ def train_step(
     )
 
     # Frame t+1: prev_hr = out_t.detach() (recurrent rollout).
+    # IMPORTANT: motion fed to the temporal head is the flow that aligns
+    # prev_hr (=out_t) with the CURRENT frame (t+1). TartanAir/Sintel store
+    # forward flow ``t -> t+1`` AT frame t (``t_motion``), so for the t+1
+    # render we must pass ``t_motion``, NOT ``p_motion`` (which is the flow
+    # for t+1 -> t+2 alignment, used on the NEXT step).
     depth_hr_curr_tp1 = F.interpolate(
         p_depth, size=(H_hr, W_hr), mode="bilinear", align_corners=False
     )
+    # x_tp1 packs the t+1 frame's own G-buffers; the motion channel inside
+    # the 12-ch stack is informational for the backbone (G-buffer hint), but
+    # the EXPLICIT ``motion_lr`` arg below is the one that drives the warp.
     x_tp1 = _make_12ch_input(p_lr, p_depth, p_motion, p_normals, p_canvas)
     out_tp1 = model(
         lr_inputs=x_tp1, prev_hr=out_t.detach(),
         depth_hr_curr=depth_hr_curr_tp1, depth_hr_prev=depth_hr_curr_t,
-        motion_lr=p_motion,
+        motion_lr=t_motion,  # forward flow t -> t+1, sampled at t+1 grid (small-motion approx)
     )
 
     # Appearance loss on both frames.
@@ -391,9 +399,12 @@ def train_step(
     parts.update({f"tp1_{k}": v for k, v in parts_tp1.items()})
 
     # Temporal consistency (Phase 2/3 only).
+    # The consistency loss warps ``out_t`` by the t -> t+1 flow and compares
+    # to ``out_tp1``. Same convention as above: forward flow lives at frame t,
+    # so use ``t_motion``.
     if phase != 1:
         tc = temporal_consistency_loss(
-            out_tp1, out_t, p_motion, scale_factor=float(model.scale),
+            out_tp1, out_t, t_motion, scale_factor=float(model.scale),
         )
         loss = loss + args.tc_weight * tc
         parts["tc"] = float(tc.item())

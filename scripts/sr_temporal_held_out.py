@@ -249,11 +249,13 @@ def _eval_loader(
 
             # v5 temporal at t+1 with cold-start regime: prev_hr =
             # baseline_output_at_t.detach() (matches the deployed inference
-            # engine's first-frame behaviour).
+            # engine's first-frame behaviour). Motion fed in is ``t_motion``
+            # (forward flow t -> t+1, lives at frame t, used as small-motion
+            # approximation when sampling at frame t+1's grid).
             temp_out_tp1 = model_temporal(
                 lr_inputs=x_tp1, prev_hr=base_out_t.detach(),
                 depth_hr_curr=depth_hr_tp1, depth_hr_prev=depth_hr_t,
-                motion_lr=p_motion,
+                motion_lr=t_motion,
             ).clamp(0.0, 1.0)
 
             # Bicubic upsample of LR_{t+1}.
@@ -263,8 +265,10 @@ def _eval_loader(
 
             # Temporal stability:
             #   |warp(out_t, motion_{t->t+1}) - out_{t+1}|_1, mean per sample.
-            warped_temp = warp_prev_hr(temp_out_t, p_motion, scale=scale)
-            warped_base = warp_prev_hr(base_out_t, p_motion, scale=scale)
+            # Same convention: t->t+1 forward flow lives at frame t, i.e.
+            # ``t_motion`` (NOT ``p_motion`` which is t+1->t+2).
+            warped_temp = warp_prev_hr(temp_out_t, t_motion, scale=scale)
+            warped_base = warp_prev_hr(base_out_t, t_motion, scale=scale)
 
             for b_idx in range(p_lr.shape[0]):
                 if len(psnr_temp) >= n_samples_remaining:
