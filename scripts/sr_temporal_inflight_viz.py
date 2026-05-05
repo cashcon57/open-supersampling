@@ -227,9 +227,17 @@ def _render_iteration(
         gt_tp1 = ex_tp1.gt_hr_frame.unsqueeze(0).to(device).clamp(0.0, 1.0)
 
         # v4-baseline column (single-frame; no temporal/prev_hr regime).
+        # MUST match the SRGD training distribution v4 was trained against
+        # (depth/motion/normals = 0, normals[2]=1.0). Feeding TartanAir's
+        # real G-buffers into v4 produces the same chromatic-dispersion
+        # garbage that motivated the b2fa647 fix in TemporalSRModel.
         if baseline is not None:
             with torch.no_grad():
-                base_out_tp1 = baseline(x12_tp1).clamp(0.0, 1.0)
+                base_in = torch.zeros_like(x12_tp1)
+                base_in[:, :3] = x12_tp1[:, :3]
+                if base_in.shape[1] >= 7:
+                    base_in[:, 6] = 1.0
+                base_out_tp1 = baseline(base_in).clamp(0.0, 1.0)
         else:
             base_out_tp1 = bicubic_tp1  # fallback so strip width stays consistent
 
