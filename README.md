@@ -2,7 +2,7 @@
 
 > Vendor-agnostic open-source real-time game super-resolution and frame extrapolation.
 
-**Status:** Pre-alpha / active research. Single-frame upscaler trained and exported. Sprint 5 dual-track temporal **implementation is complete**; pixel-temporal training is **in flight** on the 3080 Ti host (TartanAir w/ engine-aliased LR-synth, held-out env `oldtown`), Gaussian-temporal queued behind it. Sprint 7 community **OSS Capture Tool** in tandem build — one-click-install per-game DLL that captures real-game training data while you play, with four bandwidth tiers (trickle / lite / regular / INSANE) so anyone from a metered-data laptop to a fiber-uncapped data warrior can contribute at the level they want. Held-out results pending. Not yet suitable for production use.
+**Status:** Pre-alpha / active research. v4 single-frame upscaler trained and exported. v5-pixel-temporal warm-start in flight as Stage 3 validation; v5-Gaussian-temporal staged validation (Stage 0 → 1 → 2 → 3) queued via watchdog v4 to run as soon as v5-pixel finishes. **v6 canonical architecture locked**: covariance-resampled online Gaussian-temporal SR with HAT spatial backbone + cross-attention to Gaussian canvas + score-based active pruning + custom kernels per vendor + DLL-shim integration (no game-developer cooperation needed for any DLSS/FSR/XeSS-supporting title). Frame extrapolation (OSS-FX) ships free as the same canvas rendered at α<1. Three model tiers (Pico / Standard / Heavy) — same architecture, scaled. Sprint 7 community **OSS Capture Tool** in tandem build — four bandwidth tiers (trickle / lite / regular / INSANE) for opt-in training-data contribution. Not yet suitable for production use.
 
 ---
 
@@ -45,41 +45,37 @@ No closed weights. No SDK SLAs. No vendor lock-in. Pixel-based and Gaussian-base
   - Live training dashboard at `scripts/training_dashboard.py` — Chart.js panels for PSNR/LPIPS/loss/SSIM, polls `metrics.json` and `score_log.json`, downsamples large series
   - Lab-notebook-discipline experiment memos in `docs/superpowers/experiments/` — every result that drives a decision is documented before it does
 
-### Architecture (v5)
+### Architecture (v6 canonical, locked 2026-05-05)
 
-The two v5 tracks share data plumbing and held-out eval but train independent networks.
-
-**Pixel-temporal (control track):**
+**v6 = covariance-resampled online Gaussian-temporal SR.** v5-pixel and v5-Gaussian-temporal are validation steps; v6 is the actual ship target. Full memo at [experiments/2026-05-05-v6-architecture-canonical.md](docs/superpowers/experiments/2026-05-05-v6-architecture-canonical.md). Worked-out math at [research/2026-05-05-gaussian-temporal-research-deep-dive.md](docs/research/2026-05-05-gaussian-temporal-research-deep-dive.md).
 
 ```text
-                ┌──────────────────┐
-  prev HR ───►──│ motion-vec warp  │──► warped prev ─┐
-                └──────────────────┘                 │
-                                                     ▼
-  current LR ──► v4 backbone (frozen N steps) ──► single-frame SR ──► ┌──────────────────┐
-                                                                      │  temporal head   │──► final HR
-  depth + mvec ──────► disocclusion gate (mask) ──────────────────────►│ (gated blend)    │
-                                                                      └──────────────────┘
+                                    ┌─────────────────────────┐
+  current LR + G-buffers ──────────►│ HAT-Base spatial backbone│──► coarse SR features
+  (RGB, depth, motion, normals)     └─────────────────────────┘                │
+                                                                                ▼
+                                                      ┌────────────────────────────┐
+   persistent Gaussian canvas ──► analytical warp ───►│ cross-attention            │──► refined HR features
+   (5K-15K Gaussians per scene,    by engine MVs +    │ (pixel queries × Gaussian  │
+    accumulated across frames)     covariance         │  keys/values)              │
+                                   resampling         └────────────────────────────┘
+                                                                                │
+   key-frame active mask (every K=10 frames) ─────────────► rasterizer ─────► HR output
+                                                                                │
+   Spatial-Temporal Variation Score pruning ◄─── update canvas ◄────────────────┘
+
+   For frame extrapolation (OSS-FX): rasterize canvas at α ∈ (0, 1) instead of α = 1.
+   Cost: one in-place add to position tensor. Free.
 ```
 
-**Gaussian-temporal (research track):**
+The architectural moat (why pixel-grid SR — DLSS, FSR, XeSS — provably cannot match this on splat content):
 
-```text
-  current LR + G-buffers ──► g-buffer encoder ──► fitted Gaussians (token set)
-                                                          │
-                                  prev N Gaussian sets ───┤
-                                                          ▼
-                                          analytical sub-pixel warp
-                                                          │
-                                                          ▼
-                                          multi-frame transformer
-                                                          │
-                                                          ▼
-                                          densify (under disocclusion) + prune
-                                                          │
-                                                          ▼
-                                              differentiable rasterizer ──► HR output
-```
+| Technique | What it gives us | What pixel-grid methods can do |
+|---|---|---|
+| **Covariance resampling** (GS-STVSR, 2026) | Anti-shimmering by mathematical construction — `Σ'_output = J_t·Σ_t·J_t^⊤ + Σ_recon` matched to target resolution | post-hoc filtering only — can't reshape reconstruction kernel pre-emptively |
+| **Spatial-Temporal Variation Score pruning** (4DGS-1K, NeurIPS 2025) | 14-34× rendering speedup at <0.3 dB quality cost | n/a — no per-primitive contribution score |
+| **Persistent canvas with analytical sub-pixel warp** | No resample-blur compounding; densification under disocclusion is exact | bilinear/bicubic warp blurs every cycle; disocclusion fill is heuristic |
+| **Same canvas at α<1 = OSS-FX** | Frame extrapolation is one in-place add to position tensor | requires separate frame-generation network (DLSS-FG style, hallucination-prone) |
 
 ### Measured inference latency (RTX 3080 Ti, TensorRT FP16, narrow profile, single-frame v4)
 
@@ -108,10 +104,11 @@ These numbers are honest and current. **The deliberate comparison is FSR 2/3 at 
 |---|---|---|---|
 | **S1–S3** | Renderer scaffolding, hooks, tile classifier | ✓ done | components scaffolded + tests pass |
 | **S4** | Single-frame SR-CNN trained, ONNX/TRT export | ✓ done (v3 + v4 shipped, A/B confirms v4 real) | v4 beats v3 on fixed-batch held-out |
-| **S5** | **v5 dual-track temporal** (current sprint) | ⏳ implementation complete; pixel training in flight on 3080 Ti; results pending closeout memo | one track meets success criteria, ships as v5 |
-| **S6** | Performance pass: distill, custom CUDA mega-kernel, vendor ports | 📐 design memos landed (vendor audit, CUDA mega-kernel, pico distill, ONNX export); not yet started | TRT FP16 latency cut ≥3× |
-| **S7** | Game integration: DXGI hook + NGX shim + Vulkan layer + OSS-FX | 📐 design memo landed; not yet started | runtime swap working in one DX12 title |
+| **S5** | v5 temporal validation tracks (pixel + Gaussian) | ⏳ pixel warm-start in flight; Gaussian staged validation queued via watchdog v4; both feed v6 not their own ship | each architecture's convergence verified |
+| **S6 / v6** | **Covariance-resampled online Gaussian-temporal SR + 3-tier distillation + DLL-shim runtime** (current sprint) | 🚧 architecture locked, validation chain armed; full design at [experiments/2026-05-05-v6-architecture-canonical.md](docs/superpowers/experiments/2026-05-05-v6-architecture-canonical.md) | v6-Heavy beats DLSS 3.5 quality on held-out OR matches DLSS 4 on glassbench; Pico runs <3 ms on Steam Deck via Vulkan compute |
+| **S7** | Game integration: DXGI hook + NGX/FSR/XeSS shim + Vulkan layer + OSS-FX | 📐 design memo landed; runtime build queued after v6 model ships | one DLL drop into a DLSS-supporting game produces upscaled output |
 | **S7-data** | **OSS Capture Tool** — community training-data pipeline (one-click-install per-game DLL + 4 bandwidth modes + auto-upload + auto-delete) | 📐 design memo landed; tandem implementation in progress (Claude server-side, Codex client-side); burst-mode + 4-tier mode presets (trickle / lite / regular / INSANE) wired into schema | first contributor frame uploaded end-to-end through hosted ingest |
+| **Custom kernels** (parallel to S6 + S7) | Per-vendor specialists: CUDA + CUTLASS, HIP + rocWMMA, Metal + MPS / MLX, Level Zero + XMX, Vulkan compute | 📐 design memos landed (CUDA mega-kernel, vendor audit); implementation queued after v6-Heavy model exists | each backend hits its inference budget at SR + FX |
 
 ### Sprint 5 — current sprint
 
@@ -187,14 +184,28 @@ Once v5 quality is locked. S6 design work has already landed (see [Reference doc
 5. **Vulkan compute fallback** for Steam Deck and any remaining target — hand-written kernels, FSR-2-style portability
 6. **Bump model capacity** once latency budget has headroom — quality push back to the ceiling temporal+control unlocks
 
-### Long-term: integration (Sprint 7)
+### Long-term: integration (Sprint 7) — DLL shim, no dev cooperation needed
 
 Design memo: [notes/2026-05-04-s7-game-integration-design.md](docs/superpowers/notes/2026-05-04-s7-game-integration-design.md).
 
-- **DXGI hook + NGX shim** (Windows DLSS-API-compatible swap-in for any DX12 game already shipping DLSS 2/3) — initial validation target Cyberpunk 2077 (no anti-cheat, well-documented hook patterns)
+The killer integration property: **OSS-SR works on hundreds of AAA games via DLL drop-in** because every game using DLSS / FSR / XeSS already provides depth + motion vectors + jitter via stable, documented APIs. We shim those DLLs.
+
+| Game already supports | We shim | Quality |
+|---|---|---|
+| DLSS 2 / 3 / 4 (NVIDIA NGX) | `nvngx_dlss.dll` masquerade | best — full payload from game |
+| FSR 2 / 3 (AMD FidelityFX) | `ffx_fsr2_*.dll` masquerade | best |
+| XeSS (Intel) | `libxess_*.dll` masquerade | best |
+| TAA only (older games) | DXGI resource intercept + heuristics | medium (tier 2 in `oss/model/oss_fx_warp.py`) |
+| Custom AA / no temporal SR | DXGI intercept + on-the-fly RAFT-Small flow | lower (tier 3 fallback) |
+
+Day-1 candidate games (DLSS-supporting + no kernel anti-cheat): Cyberpunk 2077, Alan Wake 2, Hogwarts Legacy, Starfield, Baldur's Gate 3, Returnal, Hellblade II, Forza Horizon 5, Ghost of Tsushima Director's Cut, Black Myth: Wukong — and 200+ more. **Drop the OSS DLL into the game directory, restart, you're upscaling with OSS instead of DLSS.**
+
+Off-limits permanently: kernel anti-cheat (Vanguard, BattlEye, EAC, Ricochet) — DLL injection trips them, ban risk.
+
+Other integration paths:
 - **Vulkan layer** (Linux, Steam Deck Proton)
 - **Metal frame interception** (CrossOver / native macOS games)
-- **OSS-FX α-conditioned frame extrapolation** — once temporal infrastructure exists, frame extrapolation is a near-free byproduct of the same warp pass at fractional time
+- **OSS-FX α-conditioned frame extrapolation** — same v6 trained canvas, rasterized at α<1. Free byproduct, no separate frame-generation network needed (cf. DLSS-FG which is a heavy separate ML pass).
 
 ---
 
@@ -237,14 +248,15 @@ Three options ordered by engineering cost and performance ceiling:
 
 ---
 
-## Hardware tiers (target, post-distillation)
+## Hardware tiers (v6 — same architecture, scaled)
 
-| Tier | Params | Target hardware | Deploy backend |
-|---|---|---|---|
-| Pico | ~150K | Steam Deck, integrated GPUs, GTX 10/16 | Vulkan compute / NCNN |
-| Lite | ~600K | RTX 20+, RDNA 2+ | TRT FP16 / DirectML / CoreML |
-| Standard (current `v4`) | ~605K | RTX 30+, RDNA 3+, M3 Max | TRT FP16 / MIGraphX / CoreML |
-| Heavy | ~2–5M | RTX 4080+, RX 9070 XT+ | TRT FP16 / custom CUDA |
+All three tiers share the v6 covariance-resampled Gaussian-temporal architecture (HAT spatial backbone + persistent Gaussian canvas + cross-attention + score-based pruning). Distillation cascades **Heavy → Standard → Pico**. Same training data, same loss, same architecture, just sized.
+
+| Tier | Backbone | Canvas size | Target hardware | Inference budget | Backend |
+|---|---|---|---|---|---|
+| **Pico** | HAT-Tiny (~1M) | ~1-2K Gaussians | Steam Deck, integrated GPUs, mobile dGPU | ~3 ms at 720p→1080p | hand-tuned Vulkan compute (no matrix accel needed) |
+| **Standard** | HAT-Small (~5M) | ~5K Gaussians | RTX 30+, RX 6700+, Arc, M2+ | ~5 ms at 1080p→1440p | custom CUDA / HIP / Metal / Level Zero kernel per vendor |
+| **Heavy** | HAT-Base (~15M) | ~15K Gaussians | RTX 4080+, RX 7900+, M4 Max | ~10 ms at 1440p→4K | same per-vendor kernel path |
 
 Quality modes (planned):
 
@@ -354,8 +366,12 @@ Design memos and runbooks driving the current sprint and the next two:
 **S7 prep (game integration):**
 - [notes/2026-05-04-s7-game-integration-design.md](docs/superpowers/notes/2026-05-04-s7-game-integration-design.md) — DXGI / NGX / Vulkan / Metal / OSS-FX integration design
 
-**v6 research direction (post-v5-race candidate):**
-- [specs/2026-05-04-v6-research-tracks-design.md](docs/superpowers/specs/2026-05-04-v6-research-tracks-design.md) — race-resolution gates, scenarios A/B, common productization, 6-month sequencing
+**v6 architecture (current sprint, locked 2026-05-05):**
+- [experiments/2026-05-05-v6-architecture-canonical.md](docs/superpowers/experiments/2026-05-05-v6-architecture-canonical.md) — **canonical v6 design**: covariance-resampled online Gaussian-temporal SR with HAT spatial backbone + cross-attention + Spatial-Temporal Variation Score pruning + custom kernels per vendor + DLL-shim integration. Three tiers (Pico / Standard / Heavy) — same architecture, scaled. Frame extrapolation (OSS-FX) free as α<1 canvas render.
+- [research/2026-05-05-gaussian-temporal-research-deep-dive.md](docs/research/2026-05-05-gaussian-temporal-research-deep-dive.md) — worked-out math of every technique v6 incorporates (3DGS rasterization foundation, deformation field vs native 4D fork, 4DGS-1K pruning algorithm, Gaussian Frosting, GRTX, GS-STVSR covariance resampling, glTF KHR_gaussian_splatting standardization, engine-integration plugins, summary table of 2024-2026 SOTA methods).
+- [experiments/2026-05-05-v6-design-two-tier-distillation.md](docs/superpowers/experiments/2026-05-05-v6-design-two-tier-distillation.md) — **superseded** earlier same day; pixel-only design that retreated from the dual-track Gaussian commitment before the research synthesis was reckoned with. Retained for forensic value (loss recipe + training recipe + data plan all carry forward).
+- [experiments/2026-05-05-v6-handheld-tier-deferred.md](docs/superpowers/experiments/2026-05-05-v6-handheld-tier-deferred.md) — **reversed** later same day; handheld tier (Steam Deck, integrated GPUs) is back in scope as the v6 Pico tier once custom Vulkan compute kernels became part of the project plan. Memo retained showing the brief defer-and-reinstate decision context.
+- [specs/2026-05-04-v6-research-tracks-design.md](docs/superpowers/specs/2026-05-04-v6-research-tracks-design.md) — **superseded**; pre-research-synthesis race-resolution framing.
 
 **OSS Capture Tool (community training data, S7-adjacent):**
 - [specs/2026-05-04-oss-capture-tool-design.md](docs/superpowers/specs/2026-05-04-oss-capture-tool-design.md) — one-click-install per-game DLL, four capture modes (trickle ~100 MB/h · lite ~500 MB/h · regular ~2 GB/h · INSANE ~20–50 GB/h), burst-mode sampler (short pairs + long sequences), auto-upload + delete-immediately, FastAPI ingest + R2 layout, tandem implementation split

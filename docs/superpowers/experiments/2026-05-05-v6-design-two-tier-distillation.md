@@ -1,6 +1,20 @@
 # 2026-05-05 — v6 design: two-tier teacher/student distillation
 
-**Status:** Design locked. Implementation queued. Kicks off when v5-warmstart run finishes (~14:00 CDT 2026-05-05) and frees the 3080 Ti.
+**Status: SUPERSEDED later same day.** This memo proposed a pixel-only architecture (HAT-Base teacher → NAFNet-small + HAT-Tiny students) before the dual-track Gaussian commitment was reaffirmed and before the 2026 Gaussian-temporal research dump (`docs/research/2026-05-05-gaussian-temporal-research-deep-dive.md`) was reckoned with.
+
+**Replaced by:** `2026-05-05-v6-architecture-canonical.md` — Gaussian-temporal foundation with HAT spatial backbone + cross-attention + covariance resampling + S-T variation score pruning + custom kernels per vendor + DLL-shim integration. Three tiers (Pico / Standard / Heavy) — one architecture, scaled.
+
+**What carries over from this memo:** loss recipe (Charbonnier + LPIPS + multi-scale VGG + wavelet L1 + GAN UNetD + edge + temporal consistency), training recipe (AdamW, cosine + warm restarts, EMA, bf16, importance-sampled patches), data plan (TartanAir + Hypersim, no SRGD), 9-channel input (drop SRGD canvas hint).
+
+**What this memo got wrong:** treated Gaussian-temporal as research-only side track instead of architectural foundation; bifurcated by vendor (CNN portable vs transformer NVIDIA-only) instead of using one architecture with custom per-vendor kernels; demoted handheld tier on cross-vendor-runtime grounds that disappear when we hand-write Vulkan compute kernels FSR-style.
+
+Memo retained for forensic value (decision context).
+
+---
+
+(Original content below.)
+
+
 
 ## Goal
 

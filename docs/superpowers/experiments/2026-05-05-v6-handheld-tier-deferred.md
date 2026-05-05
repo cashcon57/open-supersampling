@@ -1,6 +1,16 @@
-# 2026-05-05 — v6 handheld tier: deferred to post-launch
+# 2026-05-05 — v6 handheld tier: ~~deferred~~ REINSTATED
 
-**Status:** Deferred. Will revisit when one of the trigger conditions in this doc is met.
+**Status: REVERSED later same day.** This memo originally deferred the handheld tier (Steam Deck, integrated GPUs, mobile dGPU) to post-launch on the grounds that cross-vendor ONNX Runtime support was the constraint and FSR 2/3 was a hard floor to beat at 500K params.
+
+**That argument disappeared** once the project recommitted to **custom per-vendor kernels** as the inference path (Vulkan compute hand-tuned, FSR-engineering-intensity). With that engineering discipline applied, RDNA2 becomes a viable target — the same way FSR is.
+
+**Current position:** handheld is the **Pico tier** in `2026-05-05-v6-architecture-canonical.md` — same architecture as Standard and Heavy, scaled down (HAT-Tiny ~1M params + ~1-2K Gaussians, target <3 ms at 720p→1080p via Vulkan compute on RDNA2).
+
+This memo retained for forensic value — captures the decision context at the moment we briefly considered dropping handheld, and the reasoning that brought it back.
+
+---
+
+## Why the deferral made sense at the time
 
 ## What we're deferring
 

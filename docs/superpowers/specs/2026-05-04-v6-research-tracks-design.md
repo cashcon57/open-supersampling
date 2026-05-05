@@ -1,6 +1,13 @@
 # v6 Research Tracks Design — Sprint 5 Closeout Candidate
 
-**Status:** Draft. Pure design, written before the v5 race resolves.
+**Status: SUPERSEDED 2026-05-05.** Written before the 2026 Gaussian-temporal research synthesis (`docs/research/2026-05-05-gaussian-temporal-research-deep-dive.md`) was reckoned with. This memo framed v6 as a v5 race resolution into A/B scenarios; the actual v6 commits to **Gaussian-temporal as the architectural foundation** with HAT spatial backbone + cross-attention + covariance resampling + score-based active pruning + custom kernels per vendor + DLL-shim integration.
+
+**Replaced by:** `docs/superpowers/experiments/2026-05-05-v6-architecture-canonical.md`.
+
+Memo retained for forensic value (decision context, scenario A/B framing).
+
+---
+
 **Author:** Claude (subagent), 2026-05-04.
 **Branch:** `v0.2-dev`.
 **Predecessors:**

@@ -1,5 +1,7 @@
 # OSS-Gaussian — Sprint 6 Detailed Plan: Frame Extrapolation
 
+> **Note (2026-05-05):** Sprint 6 has been **absorbed into v6** as the natural byproduct of Gaussian-canvas SR (rendering the same canvas at α<1 = frame extrapolation, essentially free). The current Sprint 6 / v6 architecture is documented in `docs/superpowers/experiments/2026-05-05-v6-architecture-canonical.md`. This original plan remains valid for the FX-specific deliverables (`oss/gaussian/extrapolation/extrapolator.py` is already built per this plan); the v6 work makes those deliverables consume the v6-trained canvas.
+
 **Spec:** `docs/superpowers/specs/2026-05-01-gaussian-temporal-canvas-design.md` (§3.1, §3.2 row 6, §4.1)
 **Master plan:** `docs/superpowers/plans/2026-05-01-gaussian-master-plan.md` (Sprint 6 outline)
 **Design doc:** `docs/superpowers/gaussian-frame-extrapolation.md`
