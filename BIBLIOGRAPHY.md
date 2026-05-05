@@ -24,8 +24,8 @@ How to read this file:
 **[Frosting]** Guédon and Lepetit (2024). *Gaussian Frosting: Editable Complex Radiance Fields with Real-Time Rendering*. ECCV 2024.
 > Mesh-aware Gaussian shells; parked for the OSS-FX engine-integration track but informs our long-term thinking about hybrid mesh + splat assets.
 
-**[GS-STVSR]** Zhou et al. (2026). *GS-STVSR: Gaussian Splatting for Spatio-Temporal Video Super-Resolution*. arXiv:2604.18047
-> Direct precedent for **covariance resampling** as the SR upscaling operator on a Gaussian canvas; v6 adopts this as its core spatial upsampler in place of a pixel-shuffle head.
+**[GS-STVSR]** Shi et al. (2026). *GS-STVSR: Ultra-Efficient Continuous Spatio-Temporal Video Super-Resolution via 2D Gaussian Splatting*. arXiv:2604.18047
+> Direct precedent for **covariance resampling** as the SR upscaling operator on a Gaussian canvas; v6 adopts this as its core spatial upsampler in place of a pixel-shuffle head. Their optical-flow-guided motion module is the offline analog of OSS's exact-engine-MV pipeline — same math, stronger input signal in our setting.
 
 **[3DGUT]** Wu et al. (2024). *3DGUT: Enabling Distorted Cameras and Secondary Rays in Gaussian Splatting*. NVIDIA. arXiv:2412.12507
 > Unscented-Transform replacement for the linearized projection; flagged as the path to wide-FOV, fisheye, and rolling-shutter robustness once OSS moves beyond pinhole game cameras.
@@ -41,6 +41,18 @@ How to read this file:
 
 **[gsplat]** *gsplat library mathematical supplement* (2023). arXiv:2312.02121
 > Open-source CUDA reference implementation we cross-check our custom kernels against; documents the exact gradient formulas for differentiable rasterization.
+
+**[GRAPE]** Jang and Jin (2026). *GRAPE: Gaussian Rendering for Accelerated Pixel Enhancement Brings Fast and Lightweight Arbitrary Super-Resolution*. WACV 2026, pp. 7750-7758.
+> **Concrete candidate for the OSS Pico-tier student**: a single point-wise layer predicts anisotropic Gaussian parameters (RGB + rotation + scale + offset) and a differentiable rasterizer renders the HR output in one pass. **1.56M params, ~1.10 GB VRAM, 69.33 FPS at 4× on Urban100, 315× faster than GSASR.** Single-image only — temporal extension is the OSS contribution to make.
+
+**[DSA-SRGS]** Zhang et al. (2026). *DSA-SRGS: Super-Resolution Gaussian Splatting for Dynamic Sparse-View DSA Reconstruction*. arXiv:2603.04770
+> Medical (vascular angiography) domain, but two pieces transfer to OSS: (a) **Confidence-Aware Strategy** mixing trusted-but-sparse HR signal with abundant-but-hallucinatory pseudo-labels — directly applicable to our v6.1 INSANE-mode-vs-diffusion-teacher mixing problem; (b) **Radiative Sub-Pixel Densification** — adaptive densification gradient-accumulated from HR sub-pixel sampling, candidate refinement for our densification logic.
+
+**[SR3R]** Feng et al. (2026). *SR3R: Rethinking Super-Resolution 3D Reconstruction With Feed-Forward Gaussian Splatting*. CVPR 2026. arXiv:2602.24020
+> Independent validation that **feed-forward Gaussian-field prediction across scenes** is viable — the architectural class OSS is betting on for v6. Different problem (multi-view 3D recon vs streaming temporal SR) but their plug-and-play modular pattern is a north-star for keeping OSS pixel and Gaussian modules cleanly separable.
+
+**[Voronoi-HSI]** Zhang et al. (2026). *Voronoi-guided Bilateral 2D Gaussian Splatting for Arbitrary-Scale Hyperspectral Image Super-Resolution*. arXiv:2604.17727
+> Adjacent work — hyperspectral (remote-sensing) SR via Voronoi-partitioned 2D-GS with bilateral weighting. Different problem domain than RGB game SR; cited for completeness on the 2D-GS-for-arbitrary-scale-SR literature axis.
 
 ---
 

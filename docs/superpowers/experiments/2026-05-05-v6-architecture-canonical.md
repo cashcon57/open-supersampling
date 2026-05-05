@@ -89,6 +89,24 @@ Distillation cascades **Heavy → Standard → Pico**. Same training data, same 
 
 **Handheld is back in scope** because custom Vulkan compute kernels — the same engineering intensity FSR uses on Steam Deck — are part of the project regardless of tier.
 
+### Candidate Pico-tier architecture: GRAPE (Jang and Jin, WACV 2026)
+
+The Pico tier above ("HAT-Tiny + ~1-2K Gaussians") is a sizing target, not a fixed architecture. **GRAPE** (Gaussian Rendering for Accelerated Pixel Enhancement, [WACV 2026](https://openaccess.thecvf.com/content/WACV2026/html/Jang_GRAPE_Gaussian_Rendering_for_Accelerated_Pixel_Enhancement_Brings_Fast_and_WACV_2026_paper.html)) is a concrete published architecture in the right footprint:
+
+| GRAPE attribute | Value | Pico-tier fit |
+|---|---|---|
+| Total params | 1.56M | matches Pico ~1M target |
+| GPU memory | 1.10 GB | fits Steam Deck shared-memory budget |
+| Throughput | 69.33 FPS at 4× on Urban100 (985×798) | hits the <3 ms inference budget |
+| Speedup vs GSASR baseline | 315× | demonstrates the compact-Gaussian-predictor pattern is real-time-viable |
+| Architecture | single point-wise layer predicts anisotropic Gaussian params (RGB + rotation + scale + offset), differentiable rasterizer renders HR in one pass | clean target for a Vulkan compute kernel port |
+
+GRAPE is **single-image SR** (no temporal context). The OSS contribution would be extending it with the persistent canvas + analytical sub-pixel warp + covariance resampling that the rest of v6 already commits to. That extension is the first concrete prototype to build when Pico-tier work begins, after v5-Gaussian-temporal validates and the v6 Heavy / Standard tiers prove the recipe.
+
+Also bookmarked from the same review pass:
+- **DSA-SRGS** (Zhang et al., 2026, arXiv:2603.04770) — confidence-aware mixing of trusted-but-sparse HR signal with abundant-but-hallucinatory pseudo-labels. Directly applicable to v6.1's INSANE-mode-supersample-GT vs diffusion-teacher-synthesis mixing problem.
+- **SR3R** (Feng et al., CVPR 2026, arXiv:2602.24020) — independent validation that feed-forward cross-scene Gaussian-field prediction is viable.
+
 ---
 
 ## 4. Per-vendor custom kernel strategy
