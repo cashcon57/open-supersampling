@@ -39,6 +39,7 @@ import argparse
 import json
 import logging
 import math
+import os
 import sys
 import time
 from pathlib import Path
@@ -61,6 +62,68 @@ from oss.sr.gaussian_temporal import (
 from oss.train.losses import temporal_consistency_loss
 
 log = logging.getLogger("oss.sr.gaussian_temporal.train")
+
+
+# ---------------------------------------------------------------------------
+# Distributed (DDP) helpers
+# ---------------------------------------------------------------------------
+#
+# Backward-compatible: if not launched via ``torchrun``, every helper returns
+# the single-GPU baseline answer and the rest of the trainer behaves exactly
+# as it did before.  Launch via:
+#     torchrun --nproc_per_node=N scripts/sr_train_gaussian_temporal.py ...
+#
+# DDP correctness rationale for this trainer specifically:
+#   - ``prev_field`` resets to None at the start of every train_step (it is
+#     per-trajectory, not persistent across steps), so per-rank canvas
+#     divergence within a step does not propagate.
+#   - The model parameters (encoder, transformer, output head) ARE shared
+#     across ranks and synced by DDP every backward pass.
+#   - Densify/prune produce different Gaussian counts per rank's batch, but
+#     those counts only affect within-step renders; gradients on the encoder
+#     and transformer params are still well-defined and DDP-averageable.
+#   - ``find_unused_parameters=True`` is set because Phase 1 freezes the
+#     encoder briefly and Phase 2 swaps which params receive gradients;
+#     unused-parameter detection prevents NCCL from hanging.
+
+
+def _is_distributed() -> bool:
+    return "LOCAL_RANK" in os.environ
+
+
+def _ddp_init_if_needed(device_arg: str) -> tuple[str, int, int]:
+    """Initialize DDP if launched via torchrun. Returns (device, rank, world_size)."""
+    if not _is_distributed():
+        return device_arg, 0, 1
+
+    import torch.distributed as dist
+
+    local_rank = int(os.environ["LOCAL_RANK"])
+    rank = int(os.environ.get("RANK", local_rank))
+    world_size = int(os.environ.get("WORLD_SIZE", 1))
+
+    backend = "nccl" if torch.cuda.is_available() else "gloo"
+    if not dist.is_initialized():
+        dist.init_process_group(backend=backend)
+
+    if torch.cuda.is_available():
+        torch.cuda.set_device(local_rank)
+        device = f"cuda:{local_rank}"
+    else:
+        device = "cpu"
+
+    return device, rank, world_size
+
+
+def _ddp_cleanup() -> None:
+    if _is_distributed():
+        import torch.distributed as dist
+        if dist.is_initialized():
+            dist.destroy_process_group()
+
+
+def _is_main(rank: int) -> bool:
+    return rank == 0
 
 
 # ---------------------------------------------------------------------------
@@ -236,14 +299,18 @@ def detach_field(field: GaussianField) -> GaussianField:
 # ---------------------------------------------------------------------------
 
 
-def build_datasets(args: argparse.Namespace):
+def build_datasets(args: argparse.Namespace, rank: int = 0, world_size: int = 1):
     """Build TrajectoryWindowDataset loaders for TartanAir + Sintel.
 
     Returns ``(tartan_loader_or_None, sintel_loader_or_None)``. Either may be
     None when its root flag wasn't provided. Phase-aware loader-selection is
     done per step in the main loop.
+
+    Under DDP (world_size > 1), each loader uses a DistributedSampler so each
+    rank sees a disjoint slice of the dataset per epoch.
     """
     from torch.utils.data import DataLoader
+    from torch.utils.data.distributed import DistributedSampler
 
     from oss.gaussian.data import (
         SintelGaussianDataset,
@@ -257,6 +324,7 @@ def build_datasets(args: argparse.Namespace):
 
     tartan_loader = None
     sintel_loader = None
+    distributed = world_size > 1
 
     if args.tartanair_root is not None:
         ds_t = TartanAirGaussianDataset(root=args.tartanair_root, scale=2.0)
@@ -267,24 +335,45 @@ def build_datasets(args: argparse.Namespace):
                 t for t in ds_t._items
                 if not any(env in t[0].parts for env in held_out)
             ]
-            log.info(
-                "tartanair held-out filter: %s -> dropped %d/%d items, %d remain",
-                sorted(held_out), before - len(ds_t._items), before, len(ds_t._items),
-            )
+            if _is_main(rank):
+                log.info(
+                    "tartanair held-out filter: %s -> dropped %d/%d items, %d remain",
+                    sorted(held_out), before - len(ds_t._items), before, len(ds_t._items),
+                )
         ds_t = adapt_tartanair(ds_t)
         win_t = TrajectoryWindowDataset(ds_t, window=args.window)
-        tartan_loader = DataLoader(
-            win_t, batch_size=1, shuffle=True,
-            num_workers=2, collate_fn=default_collate_window, drop_last=True,
-        )
+        if distributed:
+            sampler_t = DistributedSampler(
+                win_t, num_replicas=world_size, rank=rank,
+                shuffle=True, seed=args.seed, drop_last=True,
+            )
+            tartan_loader = DataLoader(
+                win_t, batch_size=1, sampler=sampler_t,
+                num_workers=2, collate_fn=default_collate_window, drop_last=True,
+            )
+        else:
+            tartan_loader = DataLoader(
+                win_t, batch_size=1, shuffle=True,
+                num_workers=2, collate_fn=default_collate_window, drop_last=True,
+            )
     if args.sintel_root is not None:
         ds_s = SintelGaussianDataset(root=args.sintel_root, scale=2.0, pass_name="clean")
         ds_s = adapt_sintel(ds_s)
         win_s = TrajectoryWindowDataset(ds_s, window=args.window)
-        sintel_loader = DataLoader(
-            win_s, batch_size=1, shuffle=True,
-            num_workers=2, collate_fn=default_collate_window, drop_last=True,
-        )
+        if distributed:
+            sampler_s = DistributedSampler(
+                win_s, num_replicas=world_size, rank=rank,
+                shuffle=True, seed=args.seed, drop_last=True,
+            )
+            sintel_loader = DataLoader(
+                win_s, batch_size=1, sampler=sampler_s,
+                num_workers=2, collate_fn=default_collate_window, drop_last=True,
+            )
+        else:
+            sintel_loader = DataLoader(
+                win_s, batch_size=1, shuffle=True,
+                num_workers=2, collate_fn=default_collate_window, drop_last=True,
+            )
     return tartan_loader, sintel_loader
 
 
@@ -605,41 +694,82 @@ def build_optimizer(model: GaussianTemporalSRModel, lr: float) -> torch.optim.Op
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    )
-    torch.manual_seed(args.seed)
-    if args.device.startswith("cuda"):
-        torch.cuda.manual_seed_all(args.seed)
 
-    log.info(
-        "v5-gaussian-temporal: device=%s steps=%d window=%d smoke=%s "
-        "phase1_end=%d phase2_end=%d phase3_end=%d lr=%.2e",
-        args.device, args.max_steps, args.window, args.smoke,
-        args.phase1_end, args.phase2_end, args.phase3_end, args.lr,
-    )
+    # DDP init (no-op if not launched via torchrun).
+    device, rank, world_size = _ddp_init_if_needed(args.device)
+    args.device = device
+    is_main = _is_main(rank)
+
+    if is_main:
+        args.output_dir.mkdir(parents=True, exist_ok=True)
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        )
+    else:
+        # Non-rank-0 ranks log only at WARNING+ to avoid log-file contention.
+        logging.basicConfig(
+            level=logging.WARNING,
+            format=f"%(asctime)s [rank{rank}] %(levelname)s %(name)s %(message)s",
+        )
+
+    # Per-rank seeding so DataLoader/transform stochasticity differs across ranks
+    # but is deterministic per-rank.
+    rank_seed = args.seed + rank
+    torch.manual_seed(rank_seed)
+    if device.startswith("cuda"):
+        torch.cuda.manual_seed_all(rank_seed)
+
+    if is_main:
+        log.info(
+            "v5-gaussian-temporal: device=%s world_size=%d steps=%d window=%d "
+            "smoke=%s phase1_end=%d phase2_end=%d phase3_end=%d lr=%.2e",
+            device, world_size, args.max_steps, args.window, args.smoke,
+            args.phase1_end, args.phase2_end, args.phase3_end, args.lr,
+        )
 
     # Build model.
     model = GaussianTemporalSRModel(
         in_channels=12, scale=2, max_count=args.max_count,
     )
-    model.to(args.device)
-    log.info("model params: total=%d", sum(p.numel() for p in model.parameters()))
+    model.to(device)
+    if is_main:
+        log.info("model params: total=%d", sum(p.numel() for p in model.parameters()))
 
     optim = build_optimizer(model, lr=args.lr)
 
-    # Auto-resume.
+    # Wrap in DDP if distributed. find_unused_parameters=True because phase
+    # 1/2 freezes the encoder, leaving its params with no gradient — which
+    # NCCL would otherwise treat as a hang condition.
+    if world_size > 1:
+        from torch.nn.parallel import DistributedDataParallel as DDP
+        local_rank = int(os.environ["LOCAL_RANK"])
+        model_for_train = DDP(
+            model, device_ids=[local_rank] if device.startswith("cuda") else None,
+            find_unused_parameters=True,
+        )
+        # train_step + checkpoint code expect the underlying module's API
+        # (model.encoder, model.parameters(), etc.). DDP exposes the wrapped
+        # module as `.module` — keep a reference to the unwrapped model for
+        # those call sites.
+        model_unwrapped = model
+    else:
+        model_for_train = model
+        model_unwrapped = model
+
+    # Auto-resume (rank 0 reads, then all ranks load the same state via
+    # distributed broadcast in load_latest_checkpoint's torch.load — each
+    # rank reads from the same file, so they end up identical without
+    # explicit broadcast).
     resume_step, metrics_log, score_log = load_latest_checkpoint(
-        args.output_dir, model, optim, args.device,
+        args.output_dir, model_unwrapped, optim, device,
     )
 
     # Initial phase application.
     cur_phase = phase_for_step(
         max(resume_step, 0), args.phase1_end, args.phase2_end, args.phase3_end,
     )
-    apply_phase(model, optim, args.lr, prev_phase=-1, cur_phase=cur_phase)
+    apply_phase(model_unwrapped, optim, args.lr, prev_phase=-1, cur_phase=cur_phase)
 
     train_start = time.monotonic()
     final_step = resume_step
@@ -648,11 +778,12 @@ def main(argv: list[str] | None = None) -> int:
     tartan_loader = sintel_loader = None
     tartan_iter = sintel_iter = None
     if not args.smoke:
-        tartan_loader, sintel_loader = build_datasets(args)
+        tartan_loader, sintel_loader = build_datasets(args, rank=rank, world_size=world_size)
         if tartan_loader is None and sintel_loader is None:
-            log.error(
-                "Non-smoke training requires --tartanair-root and/or --sintel-root.",
-            )
+            if is_main:
+                log.error(
+                    "Non-smoke training requires --tartanair-root and/or --sintel-root.",
+                )
             return 2
 
     step = resume_step
@@ -666,7 +797,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         if new_phase != cur_phase:
             apply_phase(
-                model, optim, args.lr,
+                model_unwrapped, optim, args.lr,
                 prev_phase=cur_phase, cur_phase=new_phase,
             )
             cur_phase = new_phase
@@ -720,13 +851,18 @@ def main(argv: list[str] | None = None) -> int:
                         sintel_iter = iter(sintel_loader)
                         batch = next(sintel_iter)
 
-        parts = train_step(model, batch, optim, phase=cur_phase, args=args)
+        # train_step expects the unwrapped model API (model.scale, model.encoder, etc.).
+        # DDP gradient sync still happens via the wrapped model's backward pass —
+        # we rely on train_step calling model.forward which goes through the wrapper.
+        parts = train_step(model_for_train, batch, optim, phase=cur_phase, args=args)
         if not math.isfinite(parts["loss"]):
-            log.error("non-finite loss at step %d: %r", step, parts)
+            if is_main:
+                log.error("non-finite loss at step %d: %r", step, parts)
+            _ddp_cleanup()
             return 4
 
-        # Periodic logging.
-        if step % args.log_every == 0 or step == 1 or args.smoke:
+        # Periodic logging — only rank 0 logs to avoid log-file contention.
+        if is_main and (step % args.log_every == 0 or step == 1 or args.smoke):
             row = {"step": step, **parts}
             metrics_log.append(row)
             log.info(
@@ -736,31 +872,32 @@ def main(argv: list[str] | None = None) -> int:
             )
 
         # Periodic checkpoint + rolling metrics dump.
-        # Per Codex finding: do NOT append synthetic eval rows to score_log
-        # during training. Dashboard's eval cards / margin lines treat any
-        # row in score_log as a real held-out eval — emitting train-loss-derived
-        # rows with bicubic=None makes JS coerce null→0, showing a misleading
-        # positive PSNR margin before the held-out script runs. Training
-        # progress lives in metrics.json train rows; score_log.json stays
-        # empty until scripts/sr_gaussian_temporal_held_out.py populates it.
-        if step % args.ckpt_every == 0 or step == args.max_steps or args.smoke:
-            save_checkpoint(args.output_dir, step, model, optim, args)
+        # Only rank 0 writes — under DDP all ranks have identical params after
+        # the backward sync, so rank 0's saved state is canonical.
+        if is_main and (step % args.ckpt_every == 0 or step == args.max_steps or args.smoke):
+            save_checkpoint(args.output_dir, step, model_unwrapped, optim, args)
             dump_metrics(args.output_dir, metrics_log, score_log)
 
-    # Final dump (idempotent).
-    if final_step > 0:
-        save_checkpoint(args.output_dir, final_step, model, optim, args)
+    # Final dump (idempotent, rank 0 only).
+    if is_main and final_step > 0:
+        save_checkpoint(args.output_dir, final_step, model_unwrapped, optim, args)
         dump_metrics(args.output_dir, metrics_log, score_log)
 
     elapsed = time.monotonic() - train_start
     final_loss = parts.get("loss", float("nan"))
-    # WMI-orphan-spawn-friendly: flush after every print so downstream readers
-    # see the script's progress in real time.
-    print(f"v5-gaussian-temporal training: device={args.device} smoke={args.smoke}", flush=True)
-    print(f"final_step={final_step} elapsed={elapsed:.1f}s", flush=True)
-    print(f"final_loss={final_loss:.6f} phase={cur_phase}", flush=True)
-    print(f"checkpoint -> {args.output_dir}/step-{final_step:08d}.pt", flush=True)
-    print("done.", flush=True)
+    if is_main:
+        # WMI-orphan-spawn-friendly: flush after every print so downstream
+        # readers see the script's progress in real time.
+        print(
+            f"v5-gaussian-temporal training: device={device} world_size={world_size} "
+            f"smoke={args.smoke}", flush=True,
+        )
+        print(f"final_step={final_step} elapsed={elapsed:.1f}s", flush=True)
+        print(f"final_loss={final_loss:.6f} phase={cur_phase}", flush=True)
+        print(f"checkpoint -> {args.output_dir}/step-{final_step:08d}.pt", flush=True)
+        print("done.", flush=True)
+
+    _ddp_cleanup()
     return 0
 
 
