@@ -128,6 +128,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=85,
         help="EngineAliasedLRSynth.jpeg_quality (default: 85).",
     )
+    p.add_argument(
+        "--include-envs",
+        type=str,
+        default=None,
+        help="Comma-separated TartanAir env names to RESTRICT manifest selection to "
+             "(e.g. 'oldtown'). Should match the training script's --held-out-envs "
+             "set so the manifest contains only frames the trainer never saw.",
+    )
     return p.parse_args(argv)
 
 
@@ -232,6 +240,26 @@ def main(argv: list[str] | None = None) -> int:
         base = TartanAirGaussianDataset(
             root=root, scale=args.lr_scale, lr_synth=lr_synth
         )
+        # --include-envs: restrict to the held-out env(s) the training script
+        # excludes via --held-out-envs. Without this, the manifest can land
+        # on training frames (data leak; see launch-status notes).
+        if args.include_envs:
+            include = {e.strip() for e in args.include_envs.split(",") if e.strip()}
+            root_str = str(root.resolve())
+            def _env_of(item) -> str:
+                rel = str(item[0]).removeprefix(root_str).lstrip("\\/")
+                return rel.split("/")[0].split("\\")[0]
+            before = len(base._items)
+            base._items = [it for it in base._items if _env_of(it) in include]
+            if not base._items:
+                raise SystemExit(
+                    f"--include-envs={sorted(include)} matched 0 items under {root}; "
+                    f"check the env names. (Was: {before} items before filter.)"
+                )
+            print(
+                f"include-envs filter: {sorted(include)} -> kept {len(base._items)}/{before} items",
+                flush=True,
+            )
         base = adapt_tartanair(base)
     else:
         base = SintelGaussianDataset(

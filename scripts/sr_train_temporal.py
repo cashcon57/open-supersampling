@@ -89,6 +89,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--num-workers", type=int, default=2,
                    help="DataLoader worker count. 4-8 helps when disk I/O on the dataset "
                         "is the bottleneck (TartanAir at 600GB doesn't fit in OS cache).")
+    p.add_argument("--held-out-envs", type=str, default=None,
+                   help="Comma-separated TartanAir env names to EXCLUDE from training "
+                        "(e.g. 'oldtown'). Frames in these envs are reserved for "
+                        "held-out eval. Without this, eval on the same root will see "
+                        "training frames; this is the documented v5 'TartanAir held-out "
+                        "trajectory (not seen in training)' enforcement.")
     p.add_argument("--tier", default="standard",
                    choices=["pico", "lite", "standard"])
     p.add_argument("--backbone-kind", default="simple",
@@ -234,6 +240,24 @@ def build_datasets(args: argparse.Namespace):
 
     if args.tartanair_root is not None:
         ds_t = TartanAirGaussianDataset(root=args.tartanair_root, scale=2.0)
+        # Held-out filter: drop any items whose environment is in the holdout
+        # set. The TartanAir layout is ``<env>/<level>/<traj>/...``, so the env
+        # is the first directory under the dataset root. Done in-place on the
+        # internal ``_items`` list before adapter/pair-dataset construction so
+        # ``trajectory_key`` enumeration sees the filtered view.
+        if getattr(args, "held_out_envs", None):
+            holdout = {e.strip() for e in args.held_out_envs.split(",") if e.strip()}
+            root_str = str(args.tartanair_root.resolve())
+            def _env_of(item) -> str:
+                # First component of the item's image path under the root
+                rel = str(item[0]).removeprefix(root_str).lstrip("\\/")
+                return rel.split("/")[0].split("\\")[0]
+            before = len(ds_t._items)
+            ds_t._items = [it for it in ds_t._items if _env_of(it) not in holdout]
+            log.info(
+                "tartanair held-out filter: %s -> dropped %d/%d items, %d remain",
+                sorted(holdout), before - len(ds_t._items), before, len(ds_t._items),
+            )
         ds_t = adapt_tartanair(ds_t)
         pair_t = SequentialPairDataset(ds_t)
         tartan_loader = DataLoader(
