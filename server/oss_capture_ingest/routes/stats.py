@@ -33,6 +33,21 @@ def build_router() -> APIRouter:
         global_frames = sum(r.total_frames for r in all_tokens.values())
         global_bytes = sum(r.total_bytes for r in all_tokens.values())
 
+        # Per-mode global rollup — surfaces the dataset's contribution
+        # mix (trickle / lite / regular / INSANE) so the dataset card can
+        # report stratified counts without re-reading every JSON sidecar.
+        global_frames_by_mode: Dict[str, int] = {}
+        global_bytes_by_mode: Dict[str, int] = {}
+        for r in all_tokens.values():
+            for mode, n in r.frames_by_mode.items():
+                global_frames_by_mode[mode] = (
+                    global_frames_by_mode.get(mode, 0) + int(n)
+                )
+            for mode, n in r.bytes_by_mode.items():
+                global_bytes_by_mode[mode] = (
+                    global_bytes_by_mode.get(mode, 0) + int(n)
+                )
+
         result: Dict[str, Any] = {
             "api_version": API_VERSION,
             "global": {
@@ -41,6 +56,8 @@ def build_router() -> APIRouter:
                 "contributor_count": sum(
                     1 for r in all_tokens.values() if r.total_frames > 0
                 ),
+                "frames_by_mode": global_frames_by_mode,
+                "bytes_by_mode": global_bytes_by_mode,
             },
         }
 
@@ -60,6 +77,8 @@ def build_router() -> APIRouter:
                 "frames_uploaded": rec.total_frames,
                 "total_bytes": rec.total_bytes,
                 "contributor_rank": rank,
+                "frames_by_mode": dict(rec.frames_by_mode),
+                "bytes_by_mode": dict(rec.bytes_by_mode),
             }
 
         return result

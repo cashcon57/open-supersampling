@@ -77,8 +77,10 @@ def test_ingest_happy_path_writes_to_r2(
     assert j["frame_uuid"] == meta["frame_uuid"]
     assert j["frame_bytes"] == len(body)
 
-    # The two keys exist in the moto-backed bucket.
-    expected_exr = "cyberpunk-2077/2024-05/11111111-1111-1111-1111-111111111111/22222222-2222-2222-2222-222222222222.exr"
+    # The two keys exist in the moto-backed bucket. Layout includes the
+    # capture_mode segment (post-C23) — meta with no capture_mode falls
+    # back to "lite" on the server side.
+    expected_exr = "cyberpunk-2077/2024-05/lite/11111111-1111-1111-1111-111111111111/22222222-2222-2222-2222-222222222222.exr"
     expected_json = expected_exr[:-4] + ".json"
     assert j["exr_key"] == expected_exr
     assert j["json_key"] == expected_json
@@ -154,6 +156,38 @@ def test_ingest_duplicate_frame_returns_409(
     # Second upload of the *same body* (different frame_uuid) is dedup'd.
     r2 = post_ingest_fn(client, token=token, frame_body=body, meta=make_meta_fn())
     assert r2.status_code == 409
+
+
+def test_ingest_dedup_survives_lru_reset_via_durable_backend(
+    client, r2_client, make_meta_fn, post_ingest_fn, reset_state
+):
+    """Closes Codex's MED 'volatile dedup' finding: even if the in-memory
+    LRU is wiped (simulating a process restart), the next upload of the
+    same content still returns 409 because the dedup marker persists in
+    R2 and the LRU falls back to it on miss."""
+    from server.oss_capture_ingest.dedup import get_dedup, reset_dedup_for_tests
+
+    # Wire moto-backed R2 as the durable backend (the test app fixture
+    # doesn't auto-wire it because configure_r2_from_env=False).
+    get_dedup().set_durable_backend(r2_client)
+
+    token = _register(reset_state)
+    body = b"DEDUP-PERSISTS" * 40
+
+    r1 = post_ingest_fn(client, token=token, frame_body=body, meta=make_meta_fn())
+    assert r1.status_code == 200, r1.text
+
+    # Simulate process restart — fresh LRU, no in-memory hash entries.
+    fresh = reset_dedup_for_tests()
+    fresh.set_durable_backend(r2_client)
+    assert len(fresh) == 0
+
+    # The marker in R2 must still cause a 409.
+    r2 = post_ingest_fn(client, token=token, frame_body=body, meta=make_meta_fn())
+    assert r2.status_code == 409
+    # And the LRU should now be hot for that hash (hydrated on the
+    # contains-call fallback).
+    assert len(fresh) == 1
 
 
 # ---- rate limit ------------------------------------------------------------
@@ -269,6 +303,34 @@ def test_stats_per_token_after_uploads(
     assert j["token"]["frames_uploaded"] == 2
     assert j["token"]["total_bytes"] > 0
     assert j["token"]["contributor_rank"] == 1
+
+
+def test_stats_per_mode_counts_global_and_per_token(
+    client, make_meta_fn, post_ingest_fn, reset_state
+):
+    """Closes the 'no per-mode contribution stratification' gap on /stats.
+    Dataset card consumes these counts to report per-mode contribution."""
+    token = _register(reset_state, token="mode-stats-token")
+    # Two trickle, one regular — distinct bodies to avoid dedup.
+    for i, mode in enumerate(("trickle", "trickle", "regular")):
+        body = f"MODE-BODY-{i}".encode() * 32
+        r = post_ingest_fn(
+            client,
+            token=token,
+            frame_body=body,
+            meta=make_meta_fn(capture_mode=mode),
+        )
+        assert r.status_code == 200, r.text
+
+    j = client.get(f"/stats?token={token}").json()
+    assert j["global"]["frames_by_mode"] == {"trickle": 2, "regular": 1}
+    assert j["token"]["frames_by_mode"] == {"trickle": 2, "regular": 1}
+    # Bytes are mode-stratified too.
+    assert j["token"]["bytes_by_mode"]["trickle"] > 0
+    assert j["token"]["bytes_by_mode"]["regular"] > 0
+    # Bytes by mode roll up to total.
+    by_mode_total = sum(j["token"]["bytes_by_mode"].values())
+    assert by_mode_total == j["token"]["total_bytes"]
 
 
 # ---- healthz ---------------------------------------------------------------

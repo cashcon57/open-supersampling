@@ -187,12 +187,17 @@ def build_router(*, max_frame_bytes: int = MAX_FRAME_BYTES) -> APIRouter:
             log.error("R2 config missing: %s", exc)
             raise HTTPException(status_code=500, detail="R2 not configured")
 
+        # Mode-stratified path layout — pre-C23 uploads with no
+        # capture_mode in metadata default to "lite" (server's documented
+        # back-compat assumption from schema.py).
+        capture_mode = normalized.get("capture_mode") or "lite"
         exr_key = frame_key(
             normalized["game_id"],
             normalized["captured_at_unix"],
             normalized["session_uuid"],
             normalized["frame_uuid"],
             suffix=".exr",
+            capture_mode=capture_mode,
         )
         json_key = frame_key(
             normalized["game_id"],
@@ -200,6 +205,7 @@ def build_router(*, max_frame_bytes: int = MAX_FRAME_BYTES) -> APIRouter:
             normalized["session_uuid"],
             normalized["frame_uuid"],
             suffix=".json",
+            capture_mode=capture_mode,
         )
 
         meta_with_hash = dict(normalized)
@@ -250,7 +256,13 @@ def build_router(*, max_frame_bytes: int = MAX_FRAME_BYTES) -> APIRouter:
 
         # ---- accounting --------------------------------------------------
         dedup.add(content_hash)
-        registry.record_upload(token, len(frame_bytes))
+        # Durable dedup marker — survives process restarts. Best-effort:
+        # the LRU is authoritative within the process, the marker only
+        # becomes load-bearing post-restart.
+        dedup.add_durable(content_hash)
+        registry.record_upload(
+            token, len(frame_bytes), capture_mode=capture_mode
+        )
 
         return {
             "status": "ok",

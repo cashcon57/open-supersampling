@@ -50,6 +50,79 @@ def test_frame_key_rejects_bad_suffix():
         frame_key("g", 0.0, "s", "f", suffix=".png")
 
 
+# ---- mode-stratified path layout (post-C23) --------------------------------
+
+
+def test_frame_key_with_capture_mode_inserts_segment():
+    from server.oss_capture_ingest.r2 import frame_key
+
+    ts = datetime(2026, 5, 4, tzinfo=timezone.utc).timestamp()
+    key = frame_key(
+        "cyberpunk-2077",
+        ts,
+        "11111111-1111-1111-1111-111111111111",
+        "22222222-2222-2222-2222-222222222222",
+        capture_mode="trickle",
+    )
+    assert (
+        key
+        == "cyberpunk-2077/2026-05/trickle/11111111-1111-1111-1111-111111111111/22222222-2222-2222-2222-222222222222.exr"
+    )
+
+
+def test_frame_key_capture_mode_none_is_legacy_layout():
+    from server.oss_capture_ingest.r2 import frame_key
+
+    ts = datetime(2026, 5, 4, tzinfo=timezone.utc).timestamp()
+    legacy = frame_key("g", ts, "s", "f", capture_mode=None)
+    moded = frame_key("g", ts, "s", "f", capture_mode="lite")
+    assert "/lite/" in moded
+    assert "/lite/" not in legacy
+
+
+def test_frame_key_rejects_unknown_capture_mode():
+    from server.oss_capture_ingest.r2 import frame_key
+
+    ts = datetime(2026, 5, 4, tzinfo=timezone.utc).timestamp()
+    with pytest.raises(ValueError):
+        frame_key("g", ts, "s", "f", capture_mode="ULTRAINSANE")
+
+
+def test_dedup_key_layout():
+    from server.oss_capture_ingest.r2 import dedup_key
+
+    h = "deadbeefcafebabe" * 4  # 64 hex
+    assert dedup_key(h) == f"_dedup/de/{h}"
+    # Case-normalized.
+    assert dedup_key(h.upper()) == f"_dedup/de/{h}"
+
+
+def test_ingest_with_trickle_lands_under_trickle_segment(
+    client, r2_client, make_meta_fn, post_ingest_fn, reset_state
+):
+    registry, _ = reset_state
+    registry.register_token("trickle-token", label="trickle-test")
+
+    session_uuid = "cccccccc-dddd-eeee-ffff-000000000000"
+    frame_uuid = "11111111-2222-3333-4444-555555555555"
+    captured_at = datetime(2026, 4, 1, tzinfo=timezone.utc).timestamp()
+
+    meta = make_meta_fn(
+        game_id="cyberpunk-2077",
+        session_uuid=session_uuid,
+        frame_uuid=frame_uuid,
+        captured_at_unix=captured_at,
+        capture_mode="trickle",  # static single — no burst fields
+    )
+    body = b"TRICKLE-EXR" * 200
+
+    r = post_ingest_fn(client, token="trickle-token", frame_body=body, meta=meta)
+    assert r.status_code == 200, r.text
+    assert r.json()["exr_key"] == (
+        f"cyberpunk-2077/2026-04/trickle/{session_uuid}/{frame_uuid}.exr"
+    )
+
+
 def test_month_partition_boundary():
     from server.oss_capture_ingest.r2 import month_partition
 
@@ -84,8 +157,10 @@ def test_ingest_lands_at_expected_key(
 
     r = post_ingest_fn(client, token="layout-token", frame_body=body, meta=meta)
     assert r.status_code == 200, r.text
-    expected_exr = f"bg3/2026-03/{session_uuid}/{frame_uuid}.exr"
-    expected_json = f"bg3/2026-03/{session_uuid}/{frame_uuid}.json"
+    # Layout includes capture_mode segment (defaults to "lite" when meta
+    # omits it — the conftest's make_meta() does).
+    expected_exr = f"bg3/2026-03/lite/{session_uuid}/{frame_uuid}.exr"
+    expected_json = f"bg3/2026-03/lite/{session_uuid}/{frame_uuid}.json"
     assert r.json()["exr_key"] == expected_exr
     assert r.json()["json_key"] == expected_json
 

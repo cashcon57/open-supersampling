@@ -52,6 +52,11 @@ class TokenRecord:
     # cumulative counters (do not reset; used by /stats)
     total_frames: int = 0
     total_bytes: int = 0
+    # per-mode cumulative counters — populated when ingest passes the
+    # capture_mode through ``record_upload``. Surfaces in ``/stats`` so
+    # the dataset card can stratify contribution by mode.
+    frames_by_mode: Dict[str, int] = field(default_factory=dict)
+    bytes_by_mode: Dict[str, int] = field(default_factory=dict)
 
 
 class TokenRegistry:
@@ -133,6 +138,14 @@ class TokenRegistry:
                 revoked=bool(entry.get("revoked", False)),
                 total_frames=int(entry.get("total_frames", 0)),
                 total_bytes=int(entry.get("total_bytes", 0)),
+                frames_by_mode={
+                    str(k): int(v)
+                    for k, v in (entry.get("frames_by_mode") or {}).items()
+                },
+                bytes_by_mode={
+                    str(k): int(v)
+                    for k, v in (entry.get("bytes_by_mode") or {}).items()
+                },
             )
             self._tokens[tok] = rec
 
@@ -159,6 +172,8 @@ class TokenRegistry:
                         "revoked": rec.revoked,
                         "total_frames": rec.total_frames,
                         "total_bytes": rec.total_bytes,
+                        "frames_by_mode": dict(rec.frames_by_mode),
+                        "bytes_by_mode": dict(rec.bytes_by_mode),
                     }
                     for rec in self._tokens.values()
                 ],
@@ -286,8 +301,13 @@ class TokenRegistry:
         token: str,
         frame_bytes: int,
         now: Optional[float] = None,
+        capture_mode: Optional[str] = None,
     ) -> None:
-        """Record a successful upload for rate-limit + /stats accounting."""
+        """Record a successful upload for rate-limit + /stats accounting.
+
+        ``capture_mode`` (when provided) increments the per-mode counters
+        on the token record; the dataset card consumes these via /stats.
+        """
         if now is None:
             now = time.time()
         with self._lock:
@@ -297,6 +317,13 @@ class TokenRegistry:
             rec.upload_times.append(now)
             rec.total_frames += 1
             rec.total_bytes += int(frame_bytes)
+            if capture_mode:
+                rec.frames_by_mode[capture_mode] = (
+                    rec.frames_by_mode.get(capture_mode, 0) + 1
+                )
+                rec.bytes_by_mode[capture_mode] = (
+                    rec.bytes_by_mode.get(capture_mode, 0) + int(frame_bytes)
+                )
             self._prune_window(rec, now)
             # Persist every 10 uploads to amortize disk I/O. The window
             # itself isn't persisted (transient); only cumulative counters.

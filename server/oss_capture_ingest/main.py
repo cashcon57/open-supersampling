@@ -101,9 +101,15 @@ def create_app(*, configure_r2_from_env: bool = True) -> Any:
     # boto3 import latency. Skipped for tests (which inject their own).
     if configure_r2_from_env:
         try:
+            from .dedup import get_dedup  # noqa: PLC0415
             from .r2 import build_default_client  # noqa: PLC0415
 
-            app.state.r2_client = build_default_client()
+            client = build_default_client()
+            app.state.r2_client = client
+            # Wire R2 as the durable backend for the dedup LRU. Closes
+            # Codex's MED 'volatile dedup' finding — a process restart no
+            # longer drops the dedup index.
+            get_dedup().set_durable_backend(client)
         except RuntimeError as exc:
             log.warning(
                 "R2 not configured at startup (%s); /ingest will return 500 "

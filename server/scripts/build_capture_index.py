@@ -96,6 +96,11 @@ def collect_rows(r2_client: Any, *, prefix: str = "") -> List[Dict[str, Any]]:
         # Skip any bucket-root index files we wrote previously.
         if key.startswith("_index_") or "/_index_" in key:
             continue
+        # Skip durable-dedup markers (post-MED-volatile-dedup fix). These
+        # never have a .json suffix today, but the prefix-skip is cheap
+        # insurance against future marker-format changes.
+        if key.startswith("_dedup/"):
+            continue
         try:
             body = r2_client.get_bytes(key)
             meta = json.loads(body.decode("utf-8"))

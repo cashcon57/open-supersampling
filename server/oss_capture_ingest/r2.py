@@ -71,6 +71,9 @@ def month_partition(captured_at_unix: float) -> str:
     return dt.strftime("%Y-%m")
 
 
+_VALID_CAPTURE_MODES = ("trickle", "lite", "regular", "INSANE")
+
+
 def frame_key(
     game_id: str,
     captured_at_unix: float,
@@ -78,17 +81,49 @@ def frame_key(
     frame_uuid: str,
     *,
     suffix: str = ".exr",
+    capture_mode: Optional[str] = None,
 ) -> str:
     """Build the bucket key for a frame or its companion JSON.
 
-    Layout matches the design memo:
+    Layout (post-C23 spec — stratifies by capture mode so the daily
+    index can compute per-mode dataset stats without re-reading every
+    sidecar):
 
-        <game_id>/<YYYY-MM>/<session_uuid>/<frame_uuid>.{exr,json}
+        <game_id>/<YYYY-MM>/<capture_mode>/<session_uuid>/<frame_uuid>.{exr,json}
+
+    ``capture_mode=None`` is back-compat for legacy uploads pre-mode and
+    falls back to the original mode-less layout. New ingest paths always
+    pass an explicit mode (defaulting to ``"lite"``).
     """
     if suffix not in (".exr", ".json"):
         raise ValueError(f"unexpected suffix: {suffix!r}")
     month = month_partition(captured_at_unix)
-    return f"{game_id}/{month}/{session_uuid}/{frame_uuid}{suffix}"
+    if capture_mode is None:
+        return f"{game_id}/{month}/{session_uuid}/{frame_uuid}{suffix}"
+    if capture_mode not in _VALID_CAPTURE_MODES:
+        raise ValueError(
+            f"unknown capture_mode {capture_mode!r}; "
+            f"expected one of {_VALID_CAPTURE_MODES}"
+        )
+    return (
+        f"{game_id}/{month}/{capture_mode}/"
+        f"{session_uuid}/{frame_uuid}{suffix}"
+    )
+
+
+def dedup_key(content_hash: str) -> str:
+    """Return the R2 key for the durable dedup marker.
+
+    Layout: ``_dedup/<first 2 hex chars>/<full sha256 hex>``.
+
+    The 2-char fan-out keeps any single dedup-prefix listing well under
+    R2's per-prefix list throughput when we ever need to enumerate
+    (we don't today — the only access pattern is ``head_object``).
+    """
+    h = content_hash.lower().strip()
+    if len(h) < 2:
+        raise ValueError("content_hash must be at least 2 hex chars")
+    return f"_dedup/{h[:2]}/{h}"
 
 
 # ---- client -----------------------------------------------------------------
@@ -173,6 +208,22 @@ class R2Client:
         c = self._client()
         resp = c.get_object(Bucket=self.config.bucket, Key=key)
         return resp["Body"].read()
+
+    # ---- durable dedup ----------------------------------------------------
+    #
+    # The hash-keyed marker at ``_dedup/<hash[:2]>/<hash>`` is the durable
+    # backing store for :class:`HashLRU` — closes Codex's MED finding that
+    # in-memory dedup loses state across restarts and multi-process workers.
+
+    def head_dedup(self, content_hash: str) -> bool:
+        """Return True if the dedup marker for ``content_hash`` exists."""
+        key = dedup_key(content_hash)
+        return self.head(key) is not None
+
+    def put_dedup(self, content_hash: str) -> None:
+        """Write a tiny marker so future processes catch this hash."""
+        key = dedup_key(content_hash)
+        self.put_bytes(key, b"", content_type="application/octet-stream")
 
     def iter_objects(
         self, prefix: str = ""
