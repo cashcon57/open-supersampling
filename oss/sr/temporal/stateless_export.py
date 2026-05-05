@@ -45,7 +45,15 @@ class TemporalSRModelStateless(nn.Module):
         depth_hr_prev: torch.Tensor,
         motion_lr: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        current_sr = self.model.backbone(lr_inputs)
+        # Match TemporalSRModel.forward: backbone sees only RGB + zero
+        # G-buffer slots (with normals[2]=1.0 default-up) — that's the
+        # SRGD distribution v4 was trained on. Real G-buffers feed the
+        # warp + disocclusion paths only.
+        lr_for_backbone = torch.zeros_like(lr_inputs)
+        lr_for_backbone[:, :3] = lr_inputs[:, :3]
+        if lr_for_backbone.shape[1] >= 7:
+            lr_for_backbone[:, 6] = 1.0
+        current_sr = self.model.backbone(lr_for_backbone)
         warped_prev = warp_prev_hr(prev_hr, motion_lr, scale=self.model.scale)
         disoccl = self.model.gate(
             depth_curr=depth_hr_curr,

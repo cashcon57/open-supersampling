@@ -56,7 +56,21 @@ class TemporalSRModel(nn.Module):
         depth_hr_prev: torch.Tensor,
         motion_lr: torch.Tensor,
     ) -> torch.Tensor:
-        current_sr = self.backbone(lr_inputs)
+        # The v4 backbone was trained on SRGD where channels 3-11 of the
+        # 12-channel input (depth, motion, normals, canvas) were ALL ZERO
+        # except normals[2]=1.0 (default "up" vector). Feeding TartanAir's
+        # real depth/motion/normals into those channels at warm-start time
+        # is a hard distribution shift — the conv1 weights against those
+        # channels were trained against a constant signal and produce
+        # garbage on real values. Match the training distribution: pass
+        # only RGB to the backbone, with a constant prior on the rest.
+        # The temporal head, warp, and disocclusion gate still see the
+        # real G-buffers via their dedicated arguments.
+        lr_for_backbone = torch.zeros_like(lr_inputs)
+        lr_for_backbone[:, :3] = lr_inputs[:, :3]
+        if lr_for_backbone.shape[1] >= 7:
+            lr_for_backbone[:, 6] = 1.0  # normals[2]: SRGD default "up"
+        current_sr = self.backbone(lr_for_backbone)
         warped_prev = warp_prev_hr(prev_hr, motion_lr, scale=self.scale)
         disoccl = self.gate(
             depth_curr=depth_hr_curr, depth_prev=depth_hr_prev,
