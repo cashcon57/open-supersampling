@@ -2,7 +2,7 @@
 
 > Vendor-agnostic open-source real-time game super-resolution and frame extrapolation.
 
-**Status:** Pre-alpha / active research. Single-frame upscaler trained and exported. Sprint 5 dual-track temporal **implementation is complete**; pixel-temporal training is **in flight** on the 3080 Ti host (TartanAir w/ engine-aliased LR-synth, held-out env `oldtown`), Gaussian-temporal queued behind it. Sprint 7 community **OSS Capture Tool** designed today — one-click-install per-game DLL that lets users contribute real-game training data while they play. Held-out results pending. Not yet suitable for production use.
+**Status:** Pre-alpha / active research. Single-frame upscaler trained and exported. Sprint 5 dual-track temporal **implementation is complete**; pixel-temporal training is **in flight** on the 3080 Ti host (TartanAir w/ engine-aliased LR-synth, held-out env `oldtown`), Gaussian-temporal queued behind it. Sprint 7 community **OSS Capture Tool** in tandem build — one-click-install per-game DLL that captures real-game training data while you play, with four bandwidth tiers (trickle / lite / regular / INSANE) so anyone from a metered-data laptop to a fiber-uncapped data warrior can contribute at the level they want. Held-out results pending. Not yet suitable for production use.
 
 ---
 
@@ -111,7 +111,7 @@ These numbers are honest and current. **The deliberate comparison is FSR 2/3 at 
 | **S5** | **v5 dual-track temporal** (current sprint) | ⏳ implementation complete; pixel training in flight on 3080 Ti; results pending closeout memo | one track meets success criteria, ships as v5 |
 | **S6** | Performance pass: distill, custom CUDA mega-kernel, vendor ports | 📐 design memos landed (vendor audit, CUDA mega-kernel, pico distill, ONNX export); not yet started | TRT FP16 latency cut ≥3× |
 | **S7** | Game integration: DXGI hook + NGX shim + Vulkan layer + OSS-FX | 📐 design memo landed; not yet started | runtime swap working in one DX12 title |
-| **S7-data** | **OSS Capture Tool** — community training-data pipeline (one-click-install per-game DLL + auto-upload + auto-delete) | 📐 design memo landed; tandem implementation in progress (Claude server-side, Codex client-side) | first contributor frame uploaded end-to-end through hosted ingest |
+| **S7-data** | **OSS Capture Tool** — community training-data pipeline (one-click-install per-game DLL + 4 bandwidth modes + auto-upload + auto-delete) | 📐 design memo landed; tandem implementation in progress (Claude server-side, Codex client-side); burst-mode + 4-tier mode presets (trickle / lite / regular / INSANE) wired into schema | first contributor frame uploaded end-to-end through hosted ingest |
 
 ### Sprint 5 — current sprint
 
@@ -259,6 +259,66 @@ Quality modes (planned):
 
 ---
 
+## OSS Capture Tool — contribute training data while you play
+
+OSS gets better when it trains on real games. The OSS Capture Tool is a small DLL that drops into a supported game, captures rendered frames + engine G-buffers while you play, and ships them to the project's training-data bucket. Frames are deleted from your disk as soon as the server confirms receipt.
+
+You set the bandwidth budget. You control which games are enabled. You can pause or uninstall at any time.
+
+### Capture modes
+
+Pick the mode that matches what you're willing to spend on bandwidth. Default is **lite** because the 99% case shouldn't have to think about it.
+
+| Mode | Bandwidth | Who it's for | What you give up |
+|---|---|---|---|
+| **trickle** | ~100 MB/h | Anyone who doesn't want to notice it. Maximum-density data inside an invisible budget — full G-buffers, not stripped-down. | No long temporal sequences. Sparse capture (one short burst every 5–20 min, fired only when the camera is settled). |
+| **lite** *(default)* | ~500 MB/h | Most contributors. The sweet spot for v5 temporal training — short pairs every 80 s + a 60-frame long sequence every 30 min. | No material BRDF channels (albedo / roughness / metallic). |
+| **regular** | ~2 GB/h | Anyone with uncapped fiber who wants to maximize training value per hour. Adds material-aware channels (albedo + roughness) and denser bursts. | Higher network bill if you're metered. |
+| **INSANE** | ~20–50 GB/h | Data warriors with high-end GPUs + uncapped uplink who want to contribute the data that lets OSS exceed DLSS. Full PBR + 4-second long bursts + automatic supersample ground truth. | The supersample-GT pass briefly stutters the game when the camera is settled. Documented in the install consent dialog. |
+
+Mode is set at install time. Per-install live mode-switching (tray-icon menu) is on the v1+ list.
+
+### What gets captured
+
+- The game's rendered low-resolution frame and the upscaled high-resolution frame (when available), plus engine G-buffers: depth, motion vectors, surface normals.
+- In **regular**+: surface albedo + roughness for material-aware temporal training.
+- In **INSANE**: full PBR channels (metallic, emissive), FP32 depth/motion, DLAA captures, every-DLSS-mode pairing, scene-cut bursts, and an automatic 256-frame supersample ground truth on settled cameras.
+
+Each captured frame carries metadata identifying the game, game version, capture mode, resolution, jitter offset, motion magnitude, and an opaque per-install token. No personally identifying information is in the metadata.
+
+### What does NOT get captured
+
+- No audio.
+- No keyboard / mouse / controller input.
+- No other windows. No desktop. Only the supported game's rendered output and its engine buffers.
+- No webcam, no microphone, no chat, no save data, no network traffic.
+
+### Network behavior
+
+- Hard bandwidth cap per mode. The uploader respects backoff and retries; never hammers the server.
+- Frames are deleted from disk immediately after the server confirms receipt. No long-term local storage.
+- Per-game opt-in. You install for one game at a time.
+- Tray-icon menu lets you pause uploads or uninstall any time.
+
+### Anti-cheat — supported games only
+
+We only support games where capture won't get you banned. The supported-games list is editorial — maintained by the project, not auto-detected. Don't try to install on a game outside the list; the installer won't let you, and circumventing that is not supported.
+
+Initial validation target: Cyberpunk 2077 (no anti-cheat, well-documented hook patterns). Additional titles will be added as their hook patterns are validated and their EULAs reviewed.
+
+### Where the data goes
+
+- A FastAPI ingest server validates each frame's metadata schema, deduplicates by content hash, rate-limits per token + per game, then writes to Cloudflare R2 with the layout `<game_id>/<YYYY-MM>/<capture_mode>/<session_uuid>/<frame_uuid>.exr`.
+- Contributor identity is a one-time opaque token. No account, no email, no PII.
+- The dataset card publishes per-mode contribution counts so you can see exactly what your bytes did.
+- All trained model weights derived from contributed data ship under **CC-BY-4.0** alongside the rest of OSS.
+
+### Install
+
+Installer is in build. First public contributor session lands with the S7-data exit gate (first end-to-end contributed frame). Track progress in [specs/2026-05-04-oss-capture-tool-design.md](docs/superpowers/specs/2026-05-04-oss-capture-tool-design.md).
+
+---
+
 ## Training data
 
 - **SRGD** (Game Engine Data, ~51K HR frames across 17 scenes) — current v3 / v4 training, sequential frames, **no real G-buffers** (zeros — temporal gains pending)
@@ -298,7 +358,7 @@ Design memos and runbooks driving the current sprint and the next two:
 - [specs/2026-05-04-v6-research-tracks-design.md](docs/superpowers/specs/2026-05-04-v6-research-tracks-design.md) — race-resolution gates, scenarios A/B, common productization, 6-month sequencing
 
 **OSS Capture Tool (community training data, S7-adjacent):**
-- [specs/2026-05-04-oss-capture-tool-design.md](docs/superpowers/specs/2026-05-04-oss-capture-tool-design.md) — one-click-install per-game DLL, sampling policy (≤500 MB/h), auto-upload + delete-immediately, FastAPI ingest + R2 layout, tandem implementation split
+- [specs/2026-05-04-oss-capture-tool-design.md](docs/superpowers/specs/2026-05-04-oss-capture-tool-design.md) — one-click-install per-game DLL, four capture modes (trickle ~100 MB/h · lite ~500 MB/h · regular ~2 GB/h · INSANE ~20–50 GB/h), burst-mode sampler (short pairs + long sequences), auto-upload + delete-immediately, FastAPI ingest + R2 layout, tandem implementation split
 - [d3d12-hook-design.md](docs/superpowers/d3d12-hook-design.md) — parent DLL hook architecture (Detours/MinHook + NGX spoofing) shared with S7 inference shim
 
 Sprint reference (high-level, predates the v5 implementation work):
