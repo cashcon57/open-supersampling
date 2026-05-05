@@ -226,10 +226,19 @@ def validate_metadata(meta: Any) -> Dict[str, Any]:
     # contribution per mode.
     capture_mode = meta.get("capture_mode")
     if capture_mode is not None:
-        if capture_mode not in ("lite", "regular", "INSANE"):
+        if capture_mode not in ("trickle", "lite", "regular", "INSANE"):
             raise SchemaError(
-                "capture_mode must be 'lite', 'regular', or 'INSANE' when present"
+                "capture_mode must be 'trickle', 'lite', 'regular', or "
+                "'INSANE' when present"
             )
+        # trickle is single-frame (no burst). If trickle, burst_uuid +
+        # burst_index + burst_tier should all be absent.
+        if capture_mode == "trickle":
+            if burst_uuid is not None or burst_index is not None or burst_tier is not None:
+                raise SchemaError(
+                    "capture_mode='trickle' is single-frame; burst_uuid, "
+                    "burst_index, and burst_tier must all be absent"
+                )
 
     return {
         "schema_version": sv,
