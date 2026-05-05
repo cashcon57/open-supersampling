@@ -36,9 +36,16 @@ def test_oru_feature_handoff_mode():
 
 
 def test_oru_param_budget():
+    """Standard-tier OSS pixel model param budget.
+
+    Budget bumped from 1.5M to 3.0M after the standard tier was scaled up
+    to ~2.6M params (see oss/model/oss.py header docstring: '"standard":
+    [96, 144, 224, 320], # ~2.6M params'). Pico/lite tiers have their own
+    smaller budgets enforced separately.
+    """
     oru = OSS(input_mode="rgb", scale_factor=2.0, tier="standard")
     n = sum(p.numel() for p in oru.parameters())
-    assert n < 1_500_000, f"standard tier exceeds 1.5M params: {n}"
+    assert n < 3_000_000, f"standard tier exceeds 3M params: {n}"
 
 
 def test_oru_invalid_scale_rejected():

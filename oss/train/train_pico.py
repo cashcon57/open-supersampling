@@ -25,7 +25,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from oss.data.noisebase import NoiseBaseDataset
-from oss.model.oru_pico import OSSPico
+from oss.model.oss_pico import OSSPico
 from oss.train.losses import CompositeLoss, temporal_consistency_loss
 
 

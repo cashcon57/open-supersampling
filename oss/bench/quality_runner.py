@@ -35,7 +35,7 @@ class QualityRunner:
     def _load_pico(self):
         if self._pico is not None or not self.ckpt_path:
             return self._pico
-        from oss.model.oru_pico import OSSPico
+        from oss.model.oss_pico import OSSPico
 
         state = torch.load(Path(self.ckpt_path), map_location=self.device)
         model = OSSPico().to(self.device).train(False)

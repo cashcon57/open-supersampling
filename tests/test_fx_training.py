@@ -139,7 +139,11 @@ def test_losses_fx():
     from oss.train.losses_fx import extrapolation_loss
 
     B, H, W = 2, 32, 32
-    pred      = torch.rand(B, 3, H, W)
+    # ``pred`` stands in for a model output and must require_grad so that
+    # extrapolation_loss(...).backward() has a graph to walk; target,
+    # pred_prev, and alpha are stop-gradient inputs in the real training
+    # loop too.
+    pred      = torch.rand(B, 3, H, W, requires_grad=True)
     target    = torch.rand(B, 3, H, W)
     pred_prev = torch.rand(B, 3, H, W)
     alpha     = torch.rand(B) * 0.85 + 0.1

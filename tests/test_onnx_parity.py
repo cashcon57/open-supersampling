@@ -20,7 +20,7 @@ def test_onnx_export_round_trip(tmp_path):
     onnx_path = tmp_path / "test_pico.onnx"
 
     result = subprocess.run(
-        [sys.executable, "-m", "ors.export.onnx_export", "--ckpt", str(ckpt), "--out", str(onnx_path)],
+        [sys.executable, "-m", "oss.export.onnx_export", "--ckpt", str(ckpt), "--out", str(onnx_path)],
         capture_output=True, text=True, timeout=180,
     )
     assert result.returncode == 0, f"export failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"

@@ -12,7 +12,7 @@ from pathlib import Path
 
 import torch
 
-from oss.model.oru_pico import OSSPico
+from oss.model.oss_pico import OSSPico
 
 
 def export(ckpt_path: Path, out_path: Path, validate: bool = True):
@@ -51,7 +51,15 @@ def export(ckpt_path: Path, out_path: Path, validate: bool = True):
         model,
         (color_lr, depth_lr, motion_lr, normals_lr, albedo_lr, history_hr, hidden_zero),
         str(out_path),
-        opset_version=17,
+        # opset 18 (was 17): the Resize op used by upsample paths has no
+        # v17 adapter in the current onnx-c-api version converter (see
+        # `No Adapter To Version $17 for Resize`), so the exporter fails
+        # to convert and silently leaves the graph at v18 — but the v18
+        # graph then evaluates with a small numerical shift vs the
+        # PyTorch eager pass, breaking the rgb-parity assertion downstream.
+        # Asking for v18 directly skips the failed-conversion step and
+        # produces a graph whose runtime output matches eager within 2e-3.
+        opset_version=18,
         input_names=["color_lr", "depth_lr", "motion_lr", "normals_lr", "albedo_lr", "history_hr", "hidden_state"],
         output_names=["rgb_hr", "new_hidden_state"],
         dynamic_axes={
