@@ -39,6 +39,13 @@ from typing import Any, Dict, Optional, Sequence
 
 
 CAPTURE_API_DEFAULT = "https://capture.oss-supersampling.dev"
+CAPTURE_MODES = ("trickle", "lite", "regular", "INSANE")
+INSANE_SUPERSAMPLE_GT_CONSENT = (
+    "INSANE mode runs an automatic 256-frame supersample ground-truth pass "
+    "when the camera settles for \u22651.5 s. This briefly stutters the game "
+    "(~250 ms) and is the source of OSS's beyond-DLSS quality data. By "
+    "accepting INSANE mode you accept this trade-off."
+)
 
 _GAME_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 _DLL_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}\.dll$")
@@ -55,6 +62,7 @@ def build_config(
     capture_api_base: str,
     install_token: Optional[str] = None,
     suggested_capture_rate_per_min: float = 3.0,
+    capture_mode: str = "lite",
 ) -> Dict[str, Any]:
     """Return the install-time ``config.json`` dict.
 
@@ -73,6 +81,8 @@ def build_config(
         raise ValueError(
             f"installer_version {installer_version!r} not semver"
         )
+    if capture_mode not in CAPTURE_MODES:
+        raise ValueError(f"unknown capture_mode {capture_mode!r}")
 
     if install_token is None:
         install_token = uuid.uuid4().hex
@@ -84,6 +94,7 @@ def build_config(
         "proxy_dll_name": proxy_dll_name,
         "install_token": install_token,
         "installer_version": installer_version,
+        "capture_mode": capture_mode,
         "capture_api_base": capture_api_base.rstrip("/"),
         "endpoints": {
             "ingest": capture_api_base.rstrip("/") + "/ingest",
@@ -97,6 +108,17 @@ def build_config(
         "max_frame_bytes": 16 * 1024 * 1024,  # 16 MB hard cap (server-side too)
         "uploader_retry_attempts": 5,
         "uploader_retry_max_seconds": 30 * 60,  # 30 minutes total
+        "consent": {
+            "mode": capture_mode,
+            "standard_disclosure": (
+                "By installing, you agree to upload anonymized gameplay frames "
+                f"from {game_id} to OSS for AI training. Captures are deleted "
+                "from your machine after upload or terminal rejection."
+            ),
+            "insane_supersample_gt_disclosure": (
+                INSANE_SUPERSAMPLE_GT_CONSENT if capture_mode == "INSANE" else ""
+            ),
+        },
     }
 
 
@@ -139,6 +161,7 @@ def build_installer_manifest(
             "exe": "oss_capture_uploader.exe",
             "interval_minutes": 10,
         },
+        "consent": config["consent"],
         "verify": {
             "expected_game_exe": config["game_exe_name"],
             "expected_relative_path": "bin/x64/",
@@ -180,6 +203,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         default=CAPTURE_API_DEFAULT,
     )
     parser.add_argument(
+        "--mode",
+        choices=list(CAPTURE_MODES),
+        default="lite",
+        help=(
+            "Capture mode preset. Default 'lite' is the 99%% case "
+            "(~500 MB/h, v5-temporal-optimized). 'trickle' (~100 MB/h) "
+            "for users who don't want to notice it. 'regular' (~2 GB/h) "
+            "for material-aware contributors with uncapped fiber. "
+            "'INSANE' (~20-50 GB/h) for data-warriors with high-end GPUs "
+            "+ uncapped uplink (note: periodic supersample-GT pass briefly "
+            "stutters the game when camera is settled)."
+        ),
+    )
+    parser.add_argument(
         "--install-token",
         default=None,
         help="Pin this exact token instead of generating a UUID4 "
@@ -201,6 +238,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             installer_version=args.installer_version,
             capture_api_base=args.capture_api_base,
             install_token=args.install_token,
+            capture_mode=args.mode,
         )
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)

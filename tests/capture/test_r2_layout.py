@@ -188,8 +188,50 @@ def test_build_installer_config_pure_function():
     assert cfg["schema_version"] == 1
     assert cfg["game_id"] == "cyberpunk-2077"
     assert cfg["proxy_dll_name"] == "dxgi.dll"
+    assert cfg["capture_mode"] == "lite"
     assert len(cfg["install_token"]) == 32  # uuid4 hex
     assert cfg["endpoints"]["ingest"].endswith("/ingest")
+    assert cfg["consent"]["mode"] == "lite"
+    assert cfg["consent"]["insane_supersample_gt_disclosure"] == ""
+
+
+@pytest.mark.parametrize("mode", ["trickle", "lite", "regular", "INSANE"])
+def test_build_installer_config_accepts_each_mode(mode):
+    from scripts.build_capture_installer import (
+        INSANE_SUPERSAMPLE_GT_CONSENT,
+        build_config,
+    )
+
+    cfg = build_config(
+        game_id="cyberpunk-2077",
+        game_exe_name="Cyberpunk2077.exe",
+        proxy_dll_name="dxgi.dll",
+        installer_version="1.0.0",
+        capture_api_base="https://capture.oss-supersampling.dev",
+        capture_mode=mode,
+    )
+
+    assert cfg["capture_mode"] == mode
+    assert cfg["consent"]["mode"] == mode
+    if mode == "INSANE":
+        assert cfg["consent"]["insane_supersample_gt_disclosure"] == INSANE_SUPERSAMPLE_GT_CONSENT
+        assert "256-frame supersample ground-truth pass" in cfg["consent"]["insane_supersample_gt_disclosure"]
+    else:
+        assert cfg["consent"]["insane_supersample_gt_disclosure"] == ""
+
+
+def test_build_installer_config_rejects_unknown_mode():
+    from scripts.build_capture_installer import build_config
+
+    with pytest.raises(ValueError, match="unknown capture_mode"):
+        build_config(
+            game_id="cyberpunk-2077",
+            game_exe_name="Cyberpunk2077.exe",
+            proxy_dll_name="dxgi.dll",
+            installer_version="1.0.0",
+            capture_api_base="https://capture.oss-supersampling.dev",
+            capture_mode="FOO",
+        )
 
 
 def test_build_installer_config_rejects_bad_inputs():
@@ -254,3 +296,30 @@ def test_build_installer_writes_files(tmp_path):
     assert any(
         f["src"] == "oss_capture.dll" for f in manifest["files"]
     )
+
+
+def test_build_installer_writes_files_with_explicit_mode(tmp_path):
+    from scripts.build_capture_installer import main as installer_main
+
+    out = tmp_path / "out"
+    rc = installer_main(
+        [
+            "--game",
+            "cyberpunk-2077",
+            "--game-exe-name",
+            "Cyberpunk2077.exe",
+            "--proxy-dll-name",
+            "dxgi.dll",
+            "--mode",
+            "trickle",
+            "--output",
+            str(out),
+        ]
+    )
+
+    assert rc == 0
+    cfg = json.loads((out / "config.json").read_text())
+    manifest = json.loads((out / "installer_manifest.json").read_text())
+    assert cfg["capture_mode"] == "trickle"
+    assert cfg["consent"]["mode"] == "trickle"
+    assert manifest["consent"]["mode"] == "trickle"
