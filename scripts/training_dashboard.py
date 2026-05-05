@@ -38,6 +38,9 @@ HTML = """<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>OSS Training Dashboard</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0"></script>
+<!-- Pan + wheel-zoom for every chart (drag to pan x-axis, wheel to zoom on cursor). -->
+<script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1"></script>
 <style>
   :root {
     --bg: #0e1116;
@@ -170,7 +173,7 @@ HTML = """<!DOCTYPE html>
   <div class="panel">
     <h2>PSNR <span style="font-size:13px;color:#3fb950">↑ higher is better</span></h2>
     <canvas id="chart-psnr"></canvas>
-    <div style="font-size:11px;color:#8b949e;margin-top:4px">Solid line: live training-time PSNR proxy (≈ −10·log10(t_l1²)). Held-out eval lines populate after `sr_temporal_held_out.py` runs (closeout). Dashed: published-benchmark estimates of competing upscalers at 1080p→4K Quality (±1 dB envelope).</div>
+    <div style="font-size:11px;color:#8b949e;margin-top:4px"><b>Drag to pan · scroll to zoom · double-click to reset.</b> Solid line: live training-time PSNR proxy (≈ −10·log10(t_l1²)). Held-out eval lines populate after `sr_temporal_held_out.py` runs (closeout). Dashed: published-benchmark estimates of competing upscalers at 1080p→4K Quality (±1 dB envelope). Solid + thicker = our measured numbers (OSS v3, v4).</div>
   </div>
 
   <div class="panel">
@@ -262,7 +265,24 @@ function lineChart(canvasId, label, color, opts = {}) {
       responsive: true,
       maintainAspectRatio: false,
       interaction: { mode: 'nearest', axis: 'x', intersect: false },
-      plugins: { legend: { labels: { color: '#e6edf3' } } },
+      plugins: {
+        legend: { labels: { color: '#e6edf3' } },
+        // chartjs-plugin-zoom: scroll-wheel zoom (cursor-anchored), drag to
+        // pan the x-axis, double-click to reset. Vertical zoom enabled too
+        // so users can magnify into a tight loss range.
+        zoom: {
+          pan: { enabled: true, mode: 'xy', modifierKey: null },
+          zoom: {
+            wheel: { enabled: true, speed: 0.1 },
+            pinch: { enabled: true },
+            mode: 'xy',
+          },
+          limits: {
+            x: { min: 'original', max: 'original' },
+            y: { min: 'original', max: 'original' },
+          },
+        },
+      },
       scales: {
         x: { type: 'linear', title: { display: true, text: 'step', color: '#8b949e' },
              ticks: { color: '#8b949e' }, grid: { color: '#30363d' } },
@@ -379,6 +399,20 @@ const upscalerRefPlugin = (metric) => ({
     ctx.restore();
   },
 });
+
+// Double-click any chart to reset its zoom/pan to original bounds.
+function _wireResetZoomOnDblClick() {
+  const ids = ['chart-psnr', 'chart-lpips', 'chart-throughput', 'chart-loss',
+               'chart-ssim', 'chart-out', 'chart-grad'];
+  for (const id of ids) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    el.addEventListener('dblclick', () => {
+      const c = charts[id.replace('chart-', '')];
+      if (c && typeof c.resetZoom === 'function') c.resetZoom();
+    });
+  }
+}
 
 function buildCharts() {
   // Explicit y-min/y-max so the upscaler reference lines render even when
@@ -732,6 +766,7 @@ async function refresh() {
 }
 
 buildCharts();
+_wireResetZoomOnDblClick();
 refresh();
 setInterval(refresh, POLL_MS);
 </script>
