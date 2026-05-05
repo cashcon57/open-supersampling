@@ -1,0 +1,52 @@
+# fly.io app config for the OSS Capture Ingest server.
+#
+# Region: iad (US-East). Closest to Cloudflare R2's North America hot path
+# and gives the lowest p95 to most contributor-side uploaders in NA + EU.
+# Multi-region rollout is a v2 followup; v1 is single-region by design.
+#
+# Free-tier-compatible: shared-cpu-1x with 256 MB. The server is I/O
+# bound (most time is spent streaming an EXR body to R2), so memory is
+# the cheap dimension to skimp on. Bump to 512 MB if dedup LRU + token
+# registry exceed footprint at scale.
+
+app = "oss-capture-ingest"
+primary_region = "iad"
+kill_signal = "SIGINT"
+kill_timeout = "5s"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  # All R2 creds + token-store path come from `fly secrets set`. Only
+  # non-secret runtime knobs go here.
+  OSS_CAPTURE_TOKEN_STORE = "/data/oss-capture-tokens.json"
+  PYTHONUNBUFFERED = "1"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+
+[[http_service.checks]]
+  interval = "30s"
+  timeout = "5s"
+  grace_period = "10s"
+  method = "GET"
+  path = "/healthz"
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 256
+
+# Persistent volume for the token registry JSON file. Survives machine
+# restarts so contributor-token state isn't lost on deploy. Tiny — 1 GB
+# is ~1M tokens worth of JSON at conservative encoding.
+[mounts]
+  source = "oss_capture_data"
+  destination = "/data"
+  initial_size = "1gb"

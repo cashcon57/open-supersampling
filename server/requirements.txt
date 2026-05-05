@@ -1,0 +1,12 @@
+# Pinned runtime dependencies for the OSS Capture Ingest server.
+#
+# Kept separate from the top-level pyproject.toml on purpose: the server
+# runs on a slim FastAPI image with no torch / no PyTorch / no CUDA. The
+# pyproject deps would pull ~3 GB of ML libs we don't need in production.
+#
+# Bump policy: minor-version pins; major-version bumps require manual review.
+
+fastapi>=0.115,<0.140
+uvicorn[standard]>=0.30,<0.40
+python-multipart>=0.0.9,<0.1
+boto3>=1.35,<2.0

@@ -212,6 +212,10 @@ def test_ingest_rate_limit_returns_429(
         meta=make_meta_fn(),
     )
     assert r4.status_code == 429
+    # Retry-After is set so the client can honor RFC 7231 backoff (closes
+    # the day-one server-side prep for the uploader's MED 429 fix).
+    assert "retry-after" in {h.lower() for h in r4.headers}
+    assert int(r4.headers["retry-after"]) >= 1
 
 
 # ---- multipart parsing -----------------------------------------------------

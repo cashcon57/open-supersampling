@@ -103,6 +103,21 @@ def build_router(*, max_frame_bytes: int = MAX_FRAME_BYTES) -> APIRouter:
         if rec is None or rec.revoked:
             raise HTTPException(status_code=401, detail="unknown or revoked token")
 
+        # Estimated time until the rate-limit window frees a slot. A
+        # rough but useful Retry-After hint for the client — clients that
+        # honor RFC 7231 ``Retry-After`` will back off precisely instead
+        # of hammering. Capped at the full window so a permanently
+        # exhausted budget still produces a finite hint.
+        retry_after_attempt = max(
+            1, registry.window_seconds // max(1, registry.attempt_limit)
+        )
+        retry_after_upload = max(
+            1, registry.window_seconds // max(1, registry.rate_limit)
+        )
+        retry_after_per_game = max(
+            1, registry.window_seconds // max(1, registry.per_game_attempt_limit)
+        )
+
         # ---- attempt rate limit (cheap gate, BEFORE multipart parsing) ---
         # Closes Codex's MED finding: every authenticated request (success
         # or rejection) charges against this budget so a misbehaving client
@@ -115,6 +130,7 @@ def build_router(*, max_frame_bytes: int = MAX_FRAME_BYTES) -> APIRouter:
                     f"({registry.attempt_limit} attempts/"
                     f"{registry.window_seconds}s)"
                 ),
+                headers={"Retry-After": str(retry_after_attempt)},
             )
         # ---- successful-upload rate limit (also cheap; hard cap) ---------
         if not registry.check_rate(token):
@@ -124,6 +140,7 @@ def build_router(*, max_frame_bytes: int = MAX_FRAME_BYTES) -> APIRouter:
                     f"upload rate limit exceeded "
                     f"({registry.rate_limit} frames/{registry.window_seconds}s)"
                 ),
+                headers={"Retry-After": str(retry_after_upload)},
             )
 
         # Charge the attempt before any further work — even a 400/409/413
@@ -153,6 +170,7 @@ def build_router(*, max_frame_bytes: int = MAX_FRAME_BYTES) -> APIRouter:
                     f"({registry.per_game_attempt_limit} attempts/"
                     f"{registry.window_seconds}s)"
                 ),
+                headers={"Retry-After": str(retry_after_per_game)},
             )
         registry.record_per_game_attempt(token, game_id_val)
 

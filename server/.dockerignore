@@ -1,0 +1,27 @@
+# Don't bake secrets, training data, checkpoints, virtualenvs, or test
+# artifacts into the server image.
+.secrets/
+.git/
+.gitignore
+venv-*/
+.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+node_modules/
+docs/
+tests/
+oss/
+scripts/
+checkpoints/
+out/
+runs/
+*.pt
+*.onnx
+*.engine
+*.exr
+*.parquet
+.DS_Store
