@@ -36,9 +36,10 @@ def _start_server(statuses: list[int]) -> tuple[ThreadingHTTPServer, str]:
 
 def test_uploader_fake_server_roundtrip_deletes_terminal_and_exhausted_frames(tmp_path: Path) -> None:
     pending = tmp_path / "pending"
-    ok = make_synthetic_capture(pending, session_uuid="session", frame_uuid="000-ok")
-    rejected = make_synthetic_capture(pending, session_uuid="session", frame_uuid="001-rejected")
-    exhausted = make_synthetic_capture(pending, session_uuid="session", frame_uuid="002-exhausted")
+    burst_uuid = "11111111-1111-4111-8111-111111111111"
+    ok = make_synthetic_capture(pending, session_uuid="session", frame_uuid="000-ok", burst_uuid=burst_uuid, burst_index=0)
+    rejected = make_synthetic_capture(pending, session_uuid="session", frame_uuid="001-rejected", burst_uuid=burst_uuid, burst_index=1)
+    exhausted = make_synthetic_capture(pending, session_uuid="session", frame_uuid="002-exhausted", burst_uuid=burst_uuid, burst_index=2)
     server, ingest_url = _start_server([200, 400, 500, 500])
     try:
         config = UploadConfig(
@@ -62,6 +63,8 @@ def test_uploader_fake_server_roundtrip_deletes_terminal_and_exhausted_frames(tm
     assert b'name="frame"; filename="000-ok.exr"' in first_body
     assert b'name="meta"; filename="000-ok.json"' in first_body
     assert b'"schema_version": 1' in first_body
+    assert b'"burst_uuid": "11111111-1111-4111-8111-111111111111"' in first_body
+    assert b'"burst_index": 0' in first_body
 
 
 def test_pending_cap_evicts_oldest_pairs_before_upload(tmp_path: Path) -> None:

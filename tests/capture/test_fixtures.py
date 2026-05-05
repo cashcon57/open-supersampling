@@ -39,6 +39,8 @@ def make_synthetic_capture(
     game_version: str = "test",
     session_uuid: str | None = None,
     frame_uuid: str | None = None,
+    burst_uuid: str | None = None,
+    burst_index: int = 0,
     lr_resolution: tuple[int, int] = (16, 9),
     scale: int = 2,
     payload_bytes: int | None = None,
@@ -46,6 +48,7 @@ def make_synthetic_capture(
 ) -> SyntheticCapture:
     session_uuid = session_uuid or str(uuid.uuid4())
     frame_uuid = frame_uuid or str(uuid.uuid4())
+    burst_uuid = burst_uuid or str(uuid.uuid4())
     session_dir = pending_dir / game_id / session_uuid
     session_dir.mkdir(parents=True, exist_ok=True)
 
@@ -61,6 +64,8 @@ def make_synthetic_capture(
         game_version=game_version,
         session_uuid=session_uuid,
         frame_uuid=frame_uuid,
+        burst_uuid=burst_uuid,
+        burst_index=burst_index,
         lr_resolution=lr_resolution,
         hr_resolution=hr_resolution,
         captured_at_unix=captured_at_unix,
@@ -75,6 +80,8 @@ def make_metadata(
     game_version: str,
     session_uuid: str,
     frame_uuid: str,
+    burst_uuid: str,
+    burst_index: int,
     lr_resolution: tuple[int, int] = (16, 9),
     hr_resolution: tuple[int, int] = (32, 18),
     captured_at_unix: int | None = None,
@@ -85,6 +92,8 @@ def make_metadata(
         "game_version": game_version,
         "session_uuid": session_uuid,
         "frame_uuid": frame_uuid,
+        "burst_uuid": burst_uuid,
+        "burst_index": int(burst_index),
         "captured_at_unix": int(captured_at_unix if captured_at_unix is not None else time.time()),
         "lr_resolution": [int(lr_resolution[0]), int(lr_resolution[1])],
         "hr_resolution": [int(hr_resolution[0]), int(hr_resolution[1])],
@@ -193,6 +202,8 @@ def test_synthetic_capture_fixture_matches_pending_layout_and_schema(tmp_path: P
         "game_version",
         "session_uuid",
         "frame_uuid",
+        "burst_uuid",
+        "burst_index",
         "captured_at_unix",
         "lr_resolution",
         "hr_resolution",

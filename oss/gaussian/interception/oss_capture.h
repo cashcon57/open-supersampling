@@ -41,7 +41,9 @@ typedef struct OssCaptureConfig {
     char     game_version[64];
     char     user_consent_token[160];
     wchar_t  pending_root[260];
-    double   capture_stride_seconds;
+    double   capture_stride_seconds; // Compatibility alias; prefer stride_seconds.
+    uint32_t burst_n;
+    double   stride_seconds;
     double   dedup_window_seconds;
     double   loading_gap_seconds;
     uint32_t max_motion_bucket_samples;
@@ -63,7 +65,16 @@ typedef struct OssCaptureCandidate {
 typedef struct OssCaptureDecision {
     uint32_t               capture;
     OssCaptureDecisionRule rule;
+    uint32_t               burst_n;
+    char                   burst_uuid[37];
 } OssCaptureDecision;
+
+typedef struct OssCaptureBurstFrame {
+    uint32_t active;
+    uint32_t burst_index;
+    uint32_t burst_n;
+    char     burst_uuid[37];
+} OssCaptureBurstFrame;
 
 typedef struct OssCaptureImageView {
     const float* pixels;
@@ -86,6 +97,7 @@ OSS_CAPTURE_API OssCaptureDecision oss_capture_consider_candidate(const OssCaptu
 OSS_CAPTURE_API uint64_t oss_capture_phash64_rgb8(const uint8_t* rgb, uint32_t width, uint32_t height, uint32_t stride_bytes);
 OSS_CAPTURE_API uint32_t oss_capture_hamming_distance64(uint64_t a, uint64_t b);
 OSS_CAPTURE_API int oss_capture_write_exr(const wchar_t* path, const OssCaptureFramePayload* payload);
+OSS_CAPTURE_API uint32_t oss_capture_consume_present_burst(OssCaptureBurstFrame* out);
 
 // Hook entry points used by the D3D12/DXGI detour layer. They intentionally use
 // void* to keep this header free of Windows/D3D12 includes.
