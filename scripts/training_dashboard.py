@@ -170,13 +170,13 @@ HTML = """<!DOCTYPE html>
   <div class="panel">
     <h2>PSNR <span style="font-size:13px;color:#3fb950">↑ higher is better</span></h2>
     <canvas id="chart-psnr"></canvas>
-    <div style="font-size:11px;color:#8b949e;margin-top:4px">Dashed reference lines: published-benchmark estimates of competing upscalers at 1080p→4K Quality. Estimates are scene-dependent; treat as ±1 dB envelope.</div>
+    <div style="font-size:11px;color:#8b949e;margin-top:4px">Solid line: live training-time PSNR proxy (≈ −10·log10(t_l1²)). Held-out eval lines populate after `sr_temporal_held_out.py` runs (closeout). Dashed: published-benchmark estimates of competing upscalers at 1080p→4K Quality (±1 dB envelope).</div>
   </div>
 
   <div class="panel">
     <h2>LPIPS-VGG <span style="font-size:13px;color:#3fb950">↓ lower is better</span></h2>
     <canvas id="chart-lpips"></canvas>
-    <div style="font-size:11px;color:#8b949e;margin-top:4px">Perceptual distance vs GT. Bicubic ≈ 0.45–0.55 typical; DLSS 2/FSR 2 ≈ 0.20–0.30; DLSS 4 ≈ 0.15–0.20.</div>
+    <div style="font-size:11px;color:#8b949e;margin-top:4px">Solid line: live training-time LPIPS (Phase 2+ only, when LPIPS loss is enabled). Held-out eval lines populate after closeout. Dashed: published-benchmark estimates (Bicubic ≈ 0.51, DLSS 2/FSR 2 ≈ 0.22, DLSS 4 ≈ 0.17).</div>
   </div>
 
   <div class="panel">
@@ -294,6 +294,7 @@ const UPSCALER_ESTIMATES = {
   fsr2:     { psnr: 28.5, lpips: 0.28, latency_ms: 0.8,  color: '#bc8cff' },
   fsr3:     { psnr: 28.5, lpips: 0.28, latency_ms: 0.8,  color: '#d2a8ff' },
   fsr4:     { psnr: 30.0, lpips: 0.22, latency_ms: 2.0,  color: '#e6c1ff' },
+  dlss1:    { psnr: 26.5, lpips: 0.40, latency_ms: 1.5,  color: '#1f6feb' },
   dlss2:    { psnr: 30.0, lpips: 0.22, latency_ms: 0.4,  color: '#3fb950' },
   dlss3:    { psnr: 30.0, lpips: 0.22, latency_ms: 0.4,  color: '#56d364' },
   dlss4:    { psnr: 31.5, lpips: 0.17, latency_ms: 1.0,  color: '#7ee787' },
@@ -344,8 +345,8 @@ const upscalerRefPlugin = (metric) => ({
     ctx.font = '10px -apple-system, sans-serif';
     const items = [
       ['bicubic', 'bicubic'], ['fsr1', 'FSR 1'], ['fsr2', 'FSR 2'],
-      ['fsr3', 'FSR 3'], ['fsr4', 'FSR 4'], ['dlss2', 'DLSS 2'],
-      ['dlss3', 'DLSS 3'], ['dlss4', 'DLSS 4'],
+      ['fsr3', 'FSR 3'], ['fsr4', 'FSR 4'], ['dlss1', 'DLSS 1'],
+      ['dlss2', 'DLSS 2'], ['dlss3', 'DLSS 3'], ['dlss4', 'DLSS 4'],
     ];
     for (const [k, label] of items) {
       const v = UPSCALER_ESTIMATES[k][metric];
@@ -365,8 +366,11 @@ const upscalerRefPlugin = (metric) => ({
 });
 
 function buildCharts() {
+  // Explicit y-min/y-max so the upscaler reference lines render even when
+  // there's no data yet (Chart.js can't compute axis bounds from 0 points,
+  // and getPixelForValue returns NaN without bounds).
   charts.psnr = lineChart('chart-psnr', 'PSNR (dB)', null, {
-    yLabel: 'PSNR (dB) ↑ better',
+    yLabel: 'PSNR (dB) ↑ better', yMin: 22, yMax: 36,
     extraPlugins: [phaseMarkerPlugin, upscalerRefPlugin('psnr')],
   });
   charts.lpips = lineChart('chart-lpips', 'LPIPS', null, {
@@ -673,13 +677,25 @@ async function refresh() {
     const evalXY = (key) => scoreRows
       .map(r => ({ x: r.step, y: r[key] }))
       .filter(p => p.y !== undefined && p.y !== null);
+    // Live training-time PSNR proxy (rough: −10·log10(t_l1²) when t_l1 ≈ sqrt(MSE)).
+    // Captures the relative trend; absolute values may differ from held-out PSNR
+    // by 1-2 dB. Refresh once held-out eval rows arrive in score_log.json.
+    const trainPsnrXY = train.map(r => {
+      const v = (r.l1 != null) ? r.l1 : r.t_l1;
+      if (v == null || v <= 0) return null;
+      return { x: r.step, y: -10 * Math.log10(v * v) };
+    }).filter(p => p !== null);
+    const trainLpipsXY = trainXY('t_lpips');
+
     setChart(charts.psnr, [
-      { label: 'model', data: evalXY('model_psnr_mean'), borderColor: '#3fb950', backgroundColor: '#3fb950', tension: 0, pointRadius: 3 },
+      { label: 'live train PSNR proxy', data: trainPsnrXY, borderColor: '#58a6ff', backgroundColor: '#58a6ff', tension: 0, pointRadius: 0 },
+      { label: 'held-out model (after closeout)', data: evalXY('model_psnr_mean'), borderColor: '#3fb950', backgroundColor: '#3fb950', tension: 0, pointRadius: 3 },
       { label: 'bicubic', data: evalXY('bicubic_psnr_mean'), borderColor: '#8b949e', backgroundColor: '#8b949e', tension: 0, pointRadius: 3, borderDash: [4, 4] },
     ]);
     setChart(charts.lpips, [
-      { label: 'model', data: evalXY('model_lpips_mean'), borderColor: '#3fb950', backgroundColor: '#3fb950', tension: 0, pointRadius: 3 },
-      { label: 'bicubic', data: evalXY('bicubic_lpips_mean'), borderColor: '#8b949e', backgroundColor: '#8b949e', tension: 0, pointRadius: 3, borderDash: [4, 4] },
+      { label: 'live train LPIPS (Phase 2+)', data: trainLpipsXY, borderColor: '#58a6ff', backgroundColor: '#58a6ff', tension: 0, pointRadius: 0 },
+      { label: 'held-out model (after closeout)', data: evalXY('model_lpips_mean'), borderColor: '#3fb950', backgroundColor: '#3fb950', tension: 0, pointRadius: 3 },
+      { label: 'held-out bicubic (after closeout)', data: evalXY('bicubic_lpips_mean'), borderColor: '#8b949e', backgroundColor: '#8b949e', tension: 0, pointRadius: 3, borderDash: [4, 4] },
     ]);
 
     // ---- Log tail (textContent — safe) ----
