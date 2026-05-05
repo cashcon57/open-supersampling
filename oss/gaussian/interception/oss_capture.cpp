@@ -88,6 +88,21 @@ const char* tier_name(OssCaptureBurstTier tier) {
     }
 }
 
+const char* mode_name(OssCaptureMode mode) {
+    switch (mode) {
+    case OSS_CAPTURE_MODE_TRICKLE:
+        return "trickle";
+    case OSS_CAPTURE_MODE_LITE:
+        return "lite";
+    case OSS_CAPTURE_MODE_REGULAR:
+        return "regular";
+    case OSS_CAPTURE_MODE_INSANE:
+        return "INSANE";
+    default:
+        return "lite";
+    }
+}
+
 void make_burst_uuid(char out[37]) {
     const uint64_t id = g_burst_counter.fetch_add(1, std::memory_order_relaxed);
     std::snprintf(
@@ -113,7 +128,33 @@ void set_tier_name(char out[8], OssCaptureBurstTier tier) {
     out[7] = '\0';
 }
 
-OssCaptureDecision accept(const OssCaptureConfig& config, OssCaptureBurstTier tier) {
+void set_mode_name(char out[8], OssCaptureMode mode) {
+    std::strncpy(out, mode_name(mode), 7u);
+    out[7] = '\0';
+}
+
+void populate_mode(OssCaptureDecision& decision, const OssCaptureConfig& config) {
+    decision.capture_mode = config.mode;
+    set_mode_name(decision.capture_mode_name, config.mode);
+    decision.supersample_gt =
+        (config.mode == OSS_CAPTURE_MODE_INSANE && config.enable_supersample_gt != 0) ? 1u : 0u;
+}
+
+OssCaptureDecision accept_static_single(const OssCaptureConfig& config) {
+    OssCaptureDecision decision{};
+    decision.capture = 1u;
+    decision.rule = OSS_CAPTURE_RULE_ACCEPT;
+    decision.burst_tier = OSS_CAPTURE_TIER_NONE;
+    set_tier_name(decision.burst_tier_name, OSS_CAPTURE_TIER_NONE);
+    decision.burst_n = 1u;
+    decision.capture_hr = static_cast<uint32_t>(config.capture_hr_on_t0 != 0);
+    decision.capture_hr_on_t0 = decision.capture_hr;
+    decision.capture_hr_on_tplus = decision.capture_hr;
+    populate_mode(decision, config);
+    return decision;
+}
+
+OssCaptureDecision accept_burst(const OssCaptureConfig& config, OssCaptureBurstTier tier) {
     OssCaptureDecision decision{};
     decision.capture = 1u;
     decision.rule = OSS_CAPTURE_RULE_ACCEPT;
@@ -121,8 +162,15 @@ OssCaptureDecision accept(const OssCaptureConfig& config, OssCaptureBurstTier ti
     set_tier_name(decision.burst_tier_name, tier);
     decision.burst_n =
         (tier == OSS_CAPTURE_TIER_LONG) ? long_burst_n(config) : short_burst_n(config);
-    decision.capture_hr =
-        (tier == OSS_CAPTURE_TIER_LONG) ? static_cast<uint32_t>(config.long_capture_hr != 0) : 1u;
+    if (tier == OSS_CAPTURE_TIER_LONG) {
+        decision.capture_hr_on_t0 = static_cast<uint32_t>(config.long_capture_hr != 0);
+        decision.capture_hr_on_tplus = static_cast<uint32_t>(config.long_capture_hr != 0);
+    } else {
+        decision.capture_hr_on_t0 = static_cast<uint32_t>(config.capture_hr_on_t0 != 0);
+        decision.capture_hr_on_tplus = static_cast<uint32_t>(config.capture_hr_on_tplus != 0);
+    }
+    decision.capture_hr = decision.capture_hr_on_t0;
+    populate_mode(decision, config);
     make_burst_uuid(decision.burst_uuid);
     return decision;
 }
@@ -175,6 +223,9 @@ CaptureSampler::CaptureSampler(const OssCaptureConfig& config) : config_(config)
 void CaptureSampler::Reset() {
     last_short_event_time_ = -1.0e30;
     last_long_event_time_ = -1.0e30;
+    last_static_single_time_ = -1.0e30;
+    last_static_candidate_time_ = -1.0e30;
+    last_opportunistic_pair_time_ = -1.0e30;
     std::fill(std::begin(motion_buckets_), std::end(motion_buckets_), 0u);
     std::fill(std::begin(recent_hashes_), std::end(recent_hashes_), RecentHash{});
     recent_count_ = 0;
@@ -182,15 +233,39 @@ void CaptureSampler::Reset() {
 }
 
 OssCaptureDecision CaptureSampler::Consider(const OssCaptureCandidate& candidate) {
-    // 1. Tier stride gates. Long takes priority when both windows are open.
+    const bool is_static =
+        config_.enable_static_frame_trigger != 0 &&
+        candidate.motion_mean_magnitude_px < static_cast<float>(config_.static_motion_threshold_px) &&
+        candidate.motion_below_threshold_seconds >= config_.static_dwell_seconds;
+    const bool moving_after_static =
+        config_.enable_opportunistic_pair != 0 &&
+        candidate.motion_mean_magnitude_px >= static_cast<float>(config_.static_motion_threshold_px) &&
+        candidate.timestamp_seconds - last_static_candidate_time_ <= config_.opportunistic_pair_motion_window_s &&
+        candidate.timestamp_seconds - last_opportunistic_pair_time_ >=
+            static_cast<double>(config_.opportunistic_pair_min_period_s);
+
     OssCaptureBurstTier tier = OSS_CAPTURE_TIER_NONE;
-    if (config_.two_tier_enabled &&
-        candidate.timestamp_seconds - last_long_event_time_ >= long_stride_seconds(config_)) {
-        tier = OSS_CAPTURE_TIER_LONG;
-    } else if (candidate.timestamp_seconds - last_short_event_time_ >= short_stride_seconds(config_)) {
+    bool static_single = false;
+
+    // 1. Mode-specific stride gates. Long takes priority when both burst
+    // windows are open. Static singles are independent non-burst captures.
+    if (moving_after_static) {
         tier = OSS_CAPTURE_TIER_SHORT;
-    }
-    if (tier == OSS_CAPTURE_TIER_NONE) {
+    } else if (config_.mode != OSS_CAPTURE_MODE_TRICKLE &&
+               config_.two_tier_enabled &&
+               candidate.timestamp_seconds - last_long_event_time_ >= long_stride_seconds(config_)) {
+        tier = OSS_CAPTURE_TIER_LONG;
+    } else if (config_.mode != OSS_CAPTURE_MODE_TRICKLE &&
+               candidate.timestamp_seconds - last_short_event_time_ >= short_stride_seconds(config_)) {
+        tier = OSS_CAPTURE_TIER_SHORT;
+    } else if (is_static &&
+               candidate.timestamp_seconds - last_static_single_time_ >=
+                   static_cast<double>(config_.static_min_period_seconds)) {
+        static_single = true;
+    } else {
+        if (is_static) {
+            last_static_candidate_time_ = candidate.timestamp_seconds;
+        }
         return reject(OSS_CAPTURE_RULE_TEMPORAL_STRIDE);
     }
 
@@ -226,7 +301,13 @@ OssCaptureDecision CaptureSampler::Consider(const OssCaptureCandidate& candidate
     }
 
     ++motion_buckets_[bucket];
-    if (tier == OSS_CAPTURE_TIER_LONG) {
+    if (static_single) {
+        last_static_single_time_ = candidate.timestamp_seconds;
+        last_static_candidate_time_ = candidate.timestamp_seconds;
+    } else if (moving_after_static) {
+        last_short_event_time_ = candidate.timestamp_seconds;
+        last_opportunistic_pair_time_ = candidate.timestamp_seconds;
+    } else if (tier == OSS_CAPTURE_TIER_LONG) {
         last_long_event_time_ = candidate.timestamp_seconds;
     } else {
         last_short_event_time_ = candidate.timestamp_seconds;
@@ -234,7 +315,7 @@ OssCaptureDecision CaptureSampler::Consider(const OssCaptureCandidate& candidate
     recent_hashes_[recent_next_] = RecentHash{candidate.perceptual_hash_64, candidate.timestamp_seconds};
     recent_next_ = (recent_next_ + 1u) % std::size(recent_hashes_);
     recent_count_ = std::min<size_t>(recent_count_ + 1u, std::size(recent_hashes_));
-    return accept(config_, tier);
+    return static_single ? accept_static_single(config_) : accept_burst(config_, tier);
 }
 
 } // namespace oss_gaussian::capture
@@ -245,20 +326,116 @@ OssCaptureConfig oss_capture_default_config(void) {
     OssCaptureConfig cfg{};
     std::strncpy(cfg.game_id, "unknown-game", sizeof(cfg.game_id) - 1u);
     std::strncpy(cfg.game_version, "unknown", sizeof(cfg.game_version) - 1u);
-    cfg.capture_stride_seconds = 80.0;
-    cfg.burst_n = 2u;
-    cfg.stride_seconds = 80.0;
-    cfg.short_burst_n = 2;
-    cfg.short_stride_seconds = 80.0;
-    cfg.long_burst_n = 60;
-    cfg.long_stride_seconds = 1800.0;
-    cfg.long_capture_hr = 0;
-    cfg.two_tier_enabled = 0;
+    oss_capture_apply_mode_preset(&cfg, OSS_CAPTURE_MODE_LITE);
     cfg.dedup_window_seconds = 300.0;
     cfg.loading_gap_seconds = 30.0;
     cfg.max_motion_bucket_samples = 24u;
     cfg.dedup_hamming_threshold = 5u;
     return cfg;
+}
+
+int oss_capture_apply_mode_preset(OssCaptureConfig* config, OssCaptureMode mode) {
+    if (!config) {
+        return 0;
+    }
+    config->mode = mode;
+    config->capture_lr = 1;
+    config->capture_depth = 1;
+    config->capture_motion = 1;
+    config->capture_normals = 1;
+    config->capture_albedo = 0;
+    config->capture_roughness = 0;
+    config->capture_metallic = 0;
+    config->capture_emissive = 0;
+    config->fp32_depth_motion = 0;
+    config->enable_supersample_gt = 0;
+    config->enable_dlaa_capture = 0;
+    config->enable_multi_dlss_mode = 0;
+    config->enable_scene_cut_burst = 0;
+    config->scene_cut_burst_n = 0;
+    config->static_motion_threshold_px = 0.5;
+    config->static_dwell_seconds = 1.5;
+    config->enable_opportunistic_pair = 0;
+    config->opportunistic_pair_motion_window_s = 5.0;
+    config->opportunistic_pair_min_period_s = 1200;
+    config->long_capture_hr = 0;
+
+    switch (mode) {
+    case OSS_CAPTURE_MODE_TRICKLE:
+        config->capture_stride_seconds = 300.0;
+        config->burst_n = 2u;
+        config->stride_seconds = 300.0;
+        config->short_burst_n = 2;
+        config->short_stride_seconds = 300.0;
+        config->long_burst_n = 0;
+        config->long_stride_seconds = 1800.0;
+        config->two_tier_enabled = 0;
+        config->capture_hr_on_t0 = 1;
+        config->capture_hr_on_tplus = 0;
+        config->enable_static_frame_trigger = 1;
+        config->static_min_period_seconds = 300;
+        config->enable_opportunistic_pair = 1;
+        config->dedup_window_seconds = 1800.0;
+        config->dedup_hamming_threshold = 10u;
+        break;
+    case OSS_CAPTURE_MODE_REGULAR:
+        config->capture_stride_seconds = 40.0;
+        config->burst_n = 4u;
+        config->stride_seconds = 40.0;
+        config->short_burst_n = 4;
+        config->short_stride_seconds = 40.0;
+        config->long_burst_n = 60;
+        config->long_stride_seconds = 600.0;
+        config->two_tier_enabled = 1;
+        config->capture_hr_on_t0 = 1;
+        config->capture_hr_on_tplus = 1;
+        config->capture_albedo = 1;
+        config->capture_roughness = 1;
+        config->enable_static_frame_trigger = 1;
+        config->static_min_period_seconds = 600;
+        break;
+    case OSS_CAPTURE_MODE_INSANE:
+        config->capture_stride_seconds = 40.0;
+        config->burst_n = 4u;
+        config->stride_seconds = 40.0;
+        config->short_burst_n = 4;
+        config->short_stride_seconds = 40.0;
+        config->long_burst_n = 240;
+        config->long_stride_seconds = 300.0;
+        config->two_tier_enabled = 1;
+        config->capture_hr_on_t0 = 1;
+        config->capture_hr_on_tplus = 1;
+        config->capture_albedo = 1;
+        config->capture_roughness = 1;
+        config->capture_metallic = 1;
+        config->capture_emissive = 1;
+        config->fp32_depth_motion = 1;
+        config->enable_supersample_gt = 1;
+        config->enable_dlaa_capture = 1;
+        config->enable_multi_dlss_mode = 1;
+        config->enable_scene_cut_burst = 1;
+        config->scene_cut_burst_n = 8;
+        config->enable_static_frame_trigger = 1;
+        config->static_min_period_seconds = 300;
+        break;
+    case OSS_CAPTURE_MODE_LITE:
+    default:
+        config->mode = OSS_CAPTURE_MODE_LITE;
+        config->capture_stride_seconds = 80.0;
+        config->burst_n = 2u;
+        config->stride_seconds = 80.0;
+        config->short_burst_n = 2;
+        config->short_stride_seconds = 80.0;
+        config->long_burst_n = 60;
+        config->long_stride_seconds = 1800.0;
+        config->two_tier_enabled = 1;
+        config->capture_hr_on_t0 = 1;
+        config->capture_hr_on_tplus = 1;
+        config->enable_static_frame_trigger = 1;
+        config->static_min_period_seconds = 600;
+        break;
+    }
+    return 1;
 }
 
 int oss_capture_configure(const OssCaptureConfig* config) {
@@ -277,8 +454,9 @@ int oss_capture_configure(const OssCaptureConfig* config) {
     oss_gaussian::capture::g_enabled.store(true, std::memory_order_release);
     OSSG_LOG_INFO(
         "capture",
-        "capture-mode configured game_id=%s short=(n=%u stride=%.2fs) long=(enabled=%d n=%u stride=%.2fs capture_hr=%d)",
+        "capture-mode configured game_id=%s mode=%s short=(n=%u stride=%.2fs) long=(enabled=%d n=%u stride=%.2fs capture_hr=%d)",
         config->game_id,
+        oss_gaussian::capture::mode_name(config->mode),
         oss_gaussian::capture::short_burst_n(*config),
         oss_gaussian::capture::short_stride_seconds(*config),
         config->two_tier_enabled,
@@ -294,18 +472,26 @@ OssCaptureDecision oss_capture_consider_candidate(const OssCaptureCandidate* can
     }
     std::lock_guard<std::mutex> lk(oss_gaussian::capture::g_sampler_mu);
     OssCaptureDecision decision = oss_gaussian::capture::g_sampler.Consider(*candidate);
-    if (decision.capture) {
+    if (decision.capture && decision.burst_tier != OSS_CAPTURE_TIER_NONE) {
         std::lock_guard<std::mutex> burst_lk(oss_gaussian::capture::g_burst_mu);
         oss_gaussian::capture::g_active_burst = OssCaptureBurstFrame{};
         oss_gaussian::capture::g_active_burst.active = 1u;
         oss_gaussian::capture::g_active_burst.burst_index = 0u;
         oss_gaussian::capture::g_active_burst.burst_n = decision.burst_n;
         oss_gaussian::capture::g_active_burst.burst_tier = decision.burst_tier;
-        oss_gaussian::capture::g_active_burst.capture_hr = decision.capture_hr;
+        oss_gaussian::capture::g_active_burst.capture_hr = decision.capture_hr_on_t0;
+        oss_gaussian::capture::g_active_burst.capture_hr_on_t0 = decision.capture_hr_on_t0;
+        oss_gaussian::capture::g_active_burst.capture_hr_on_tplus = decision.capture_hr_on_tplus;
+        oss_gaussian::capture::g_active_burst.capture_mode = decision.capture_mode;
+        oss_gaussian::capture::g_active_burst.supersample_gt = decision.supersample_gt;
         std::strncpy(
             oss_gaussian::capture::g_active_burst.burst_tier_name,
             decision.burst_tier_name,
             sizeof(oss_gaussian::capture::g_active_burst.burst_tier_name) - 1u);
+        std::strncpy(
+            oss_gaussian::capture::g_active_burst.capture_mode_name,
+            decision.capture_mode_name,
+            sizeof(oss_gaussian::capture::g_active_burst.capture_mode_name) - 1u);
         std::strncpy(
             oss_gaussian::capture::g_active_burst.burst_uuid,
             decision.burst_uuid,
@@ -326,6 +512,10 @@ uint32_t oss_capture_consume_present_burst(OssCaptureBurstFrame* out) {
 
     if (out) {
         *out = oss_gaussian::capture::g_active_burst;
+        out->capture_hr =
+            (out->burst_index == 0u)
+                ? oss_gaussian::capture::g_active_burst.capture_hr_on_t0
+                : oss_gaussian::capture::g_active_burst.capture_hr_on_tplus;
     }
     ++oss_gaussian::capture::g_active_burst.burst_index;
     if (oss_gaussian::capture::g_active_burst.burst_index >= oss_gaussian::capture::g_active_burst.burst_n) {

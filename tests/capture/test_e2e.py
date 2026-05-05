@@ -37,7 +37,23 @@ def _start_server(statuses: list[int]) -> tuple[ThreadingHTTPServer, str]:
 def test_uploader_fake_server_roundtrip_deletes_terminal_and_exhausted_frames(tmp_path: Path) -> None:
     pending = tmp_path / "pending"
     burst_uuid = "11111111-1111-4111-8111-111111111111"
-    ok = make_synthetic_capture(pending, session_uuid="session", frame_uuid="000-ok", burst_uuid=burst_uuid, burst_index=0)
+    ok = make_synthetic_capture(pending, session_uuid="session", frame_uuid="000-0-ok", burst_uuid=burst_uuid, burst_index=0)
+    trickle_static = make_synthetic_capture(
+        pending,
+        session_uuid="session",
+        frame_uuid="000-a-trickle-static",
+        capture_mode="trickle",
+        burst_tier=None,
+    )
+    trickle_pair_tplus = make_synthetic_capture(
+        pending,
+        session_uuid="session",
+        frame_uuid="000-b-trickle-pair-tplus",
+        capture_mode="trickle",
+        burst_uuid="33333333-3333-4333-8333-333333333333",
+        burst_index=1,
+        burst_tier="short",
+    )
     long = make_synthetic_capture(
         pending,
         session_uuid="session",
@@ -46,9 +62,11 @@ def test_uploader_fake_server_roundtrip_deletes_terminal_and_exhausted_frames(tm
         burst_index=12,
         burst_tier="long",
     )
-    rejected = make_synthetic_capture(pending, session_uuid="session", frame_uuid="002-rejected", burst_uuid=burst_uuid, burst_index=1)
-    exhausted = make_synthetic_capture(pending, session_uuid="session", frame_uuid="003-exhausted", burst_uuid=burst_uuid, burst_index=2)
-    server, ingest_url = _start_server([200, 200, 400, 500, 500])
+    regular = make_synthetic_capture(pending, session_uuid="session", frame_uuid="002-regular", capture_mode="regular")
+    insane = make_synthetic_capture(pending, session_uuid="session", frame_uuid="003-insane", capture_mode="INSANE")
+    rejected = make_synthetic_capture(pending, session_uuid="session", frame_uuid="004-rejected", burst_uuid=burst_uuid, burst_index=1)
+    exhausted = make_synthetic_capture(pending, session_uuid="session", frame_uuid="005-exhausted", burst_uuid=burst_uuid, burst_index=2)
+    server, ingest_url = _start_server([200, 200, 200, 200, 200, 200, 400, 500, 500])
     try:
         config = UploadConfig(
             pending_dir=pending,
@@ -57,27 +75,41 @@ def test_uploader_fake_server_roundtrip_deletes_terminal_and_exhausted_frames(tm
             max_attempts=2,
             backoff_seconds=(0.0, 0.0),
         )
-        assert drain_once(config, sleep=lambda _: None) == 4
+        assert drain_once(config, sleep=lambda _: None) == 8
     finally:
         server.shutdown()
         server.server_close()
 
-    for capture in (ok, long, rejected, exhausted):
+    for capture in (ok, trickle_static, trickle_pair_tplus, long, regular, insane, rejected, exhausted):
         assert not capture.frame_path.exists()
         assert not capture.meta_path.exists()
 
-    assert len(ScriptedIngestHandler.requests_seen) == 5
+    assert len(ScriptedIngestHandler.requests_seen) == 9
     first_body = ScriptedIngestHandler.requests_seen[0]
-    assert b'name="frame"; filename="000-ok.exr"' in first_body
-    assert b'name="meta"; filename="000-ok.json"' in first_body
+    assert b'name="frame"; filename="000-0-ok.exr"' in first_body
+    assert b'name="meta"; filename="000-0-ok.json"' in first_body
     assert b'"schema_version": 1' in first_body
     assert b'"burst_uuid": "11111111-1111-4111-8111-111111111111"' in first_body
     assert b'"burst_index": 0' in first_body
-    long_body = ScriptedIngestHandler.requests_seen[1]
+    trickle_static_body = ScriptedIngestHandler.requests_seen[1]
+    assert b'name="frame"; filename="000-a-trickle-static.exr"' in trickle_static_body
+    assert b'"capture_mode": "trickle"' in trickle_static_body
+    assert b'"burst_uuid"' not in trickle_static_body
+    trickle_pair_body = ScriptedIngestHandler.requests_seen[2]
+    assert b'name="frame"; filename="000-b-trickle-pair-tplus.exr"' in trickle_pair_body
+    assert b'"capture_mode": "trickle"' in trickle_pair_body
+    assert b'"burst_tier": "short"' in trickle_pair_body
+    assert b'"burst_index": 1' in trickle_pair_body
+    assert b'"hr_source": "none"' in trickle_pair_body
+    long_body = ScriptedIngestHandler.requests_seen[3]
     assert b'name="frame"; filename="001-long.exr"' in long_body
     assert b'"burst_tier": "long"' in long_body
     assert b'"hr_source": "none"' in long_body
     assert b'"burst_index": 12' in long_body
+    regular_body = ScriptedIngestHandler.requests_seen[4]
+    assert b'"capture_mode": "regular"' in regular_body
+    insane_body = ScriptedIngestHandler.requests_seen[5]
+    assert b'"capture_mode": "INSANE"' in insane_body
 
 
 def test_pending_cap_evicts_oldest_pairs_before_upload(tmp_path: Path) -> None:

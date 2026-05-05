@@ -42,7 +42,15 @@ typedef enum OssCaptureBurstTier {
     OSS_CAPTURE_TIER_LONG = 2,
 } OssCaptureBurstTier;
 
+typedef enum OssCaptureMode {
+    OSS_CAPTURE_MODE_TRICKLE = 0,
+    OSS_CAPTURE_MODE_LITE = 1,
+    OSS_CAPTURE_MODE_REGULAR = 2,
+    OSS_CAPTURE_MODE_INSANE = 3,
+} OssCaptureMode;
+
 typedef struct OssCaptureConfig {
+    OssCaptureMode mode;
     char     game_id[64];
     char     game_version[64];
     char     user_consent_token[160];
@@ -56,6 +64,29 @@ typedef struct OssCaptureConfig {
     double   long_stride_seconds;
     int      long_capture_hr;
     int      two_tier_enabled;
+    int      capture_lr;
+    int      capture_hr_on_t0;
+    int      capture_hr_on_tplus;
+    int      capture_depth;
+    int      capture_motion;
+    int      capture_normals;
+    int      capture_albedo;
+    int      capture_roughness;
+    int      capture_metallic;
+    int      capture_emissive;
+    int      fp32_depth_motion;
+    int      enable_supersample_gt;
+    int      enable_dlaa_capture;
+    int      enable_multi_dlss_mode;
+    int      enable_scene_cut_burst;
+    int      scene_cut_burst_n;
+    int      enable_static_frame_trigger;
+    double   static_motion_threshold_px;
+    double   static_dwell_seconds;
+    int      static_min_period_seconds;
+    int      enable_opportunistic_pair;
+    double   opportunistic_pair_motion_window_s;
+    int      opportunistic_pair_min_period_s;
     double   dedup_window_seconds;
     double   loading_gap_seconds;
     uint32_t max_motion_bucket_samples;
@@ -68,6 +99,7 @@ typedef struct OssCaptureCandidate {
     double   seconds_since_last_candidate;
     double   seconds_since_previous_candidate;
     float    motion_mean_magnitude_px;
+    double   motion_below_threshold_seconds;
     uint64_t perceptual_hash_64;
     uint32_t depth_degenerate;
     uint32_t motion_vectors_nan;
@@ -82,6 +114,11 @@ typedef struct OssCaptureDecision {
     OssCaptureBurstTier    burst_tier;
     char                   burst_tier_name[8];
     uint32_t               capture_hr;
+    uint32_t               capture_hr_on_t0;
+    uint32_t               capture_hr_on_tplus;
+    OssCaptureMode         capture_mode;
+    char                   capture_mode_name[8];
+    uint32_t               supersample_gt;
 } OssCaptureDecision;
 
 typedef struct OssCaptureBurstFrame {
@@ -92,6 +129,11 @@ typedef struct OssCaptureBurstFrame {
     OssCaptureBurstTier burst_tier;
     char     burst_tier_name[8];
     uint32_t capture_hr;
+    uint32_t capture_hr_on_t0;
+    uint32_t capture_hr_on_tplus;
+    OssCaptureMode capture_mode;
+    char     capture_mode_name[8];
+    uint32_t supersample_gt;
 } OssCaptureBurstFrame;
 
 typedef struct OssCaptureImageView {
@@ -107,11 +149,25 @@ typedef struct OssCaptureFramePayload {
     OssCaptureImageView depth_z;
     OssCaptureImageView motion_xy;
     OssCaptureImageView normals_xyz;
+    OssCaptureImageView albedo_rgb;
+    OssCaptureImageView roughness;
+    OssCaptureImageView metallic;
+    OssCaptureImageView emissive_rgb;
     OssCaptureBurstTier burst_tier;
+    OssCaptureMode capture_mode;
+    uint32_t capture_lr;
     uint32_t capture_hr;
+    uint32_t capture_depth;
+    uint32_t capture_motion;
+    uint32_t capture_normals;
+    uint32_t capture_albedo;
+    uint32_t capture_roughness;
+    uint32_t capture_metallic;
+    uint32_t capture_emissive;
 } OssCaptureFramePayload;
 
 OSS_CAPTURE_API OssCaptureConfig oss_capture_default_config(void);
+OSS_CAPTURE_API int oss_capture_apply_mode_preset(OssCaptureConfig* config, OssCaptureMode mode);
 OSS_CAPTURE_API int oss_capture_configure(const OssCaptureConfig* config);
 OSS_CAPTURE_API OssCaptureDecision oss_capture_consider_candidate(const OssCaptureCandidate* candidate);
 OSS_CAPTURE_API uint64_t oss_capture_phash64_rgb8(const uint8_t* rgb, uint32_t width, uint32_t height, uint32_t stride_bytes);
@@ -143,6 +199,9 @@ private:
     OssCaptureConfig config_{};
     double           last_short_event_time_ = -1.0e30;
     double           last_long_event_time_ = -1.0e30;
+    double           last_static_single_time_ = -1.0e30;
+    double           last_static_candidate_time_ = -1.0e30;
+    double           last_opportunistic_pair_time_ = -1.0e30;
     uint32_t         motion_buckets_[8]{};
 
     struct RecentHash {
