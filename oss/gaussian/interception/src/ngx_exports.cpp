@@ -25,6 +25,8 @@
 // =============================================================================
 #include "log.h"
 
+#include "../oss_capture.h"
+
 #include <Windows.h>
 
 // -----------------------------------------------------------------------------
@@ -130,11 +132,12 @@ NVSDK_NGX_D3D12_CreateFeature(ID3D12GraphicsCommandList* /*InCmdList*/,
 }
 
 __declspec(dllexport) NVSDK_NGX_Result NVSDK_CONV
-NVSDK_NGX_D3D12_EvaluateFeature(ID3D12GraphicsCommandList*     /*InCmdList*/,
-                                const NVSDK_NGX_Handle*        /*InFeatureHandle*/,
-                                const NVSDK_NGX_Parameter*     /*InParameters*/,
+NVSDK_NGX_D3D12_EvaluateFeature(ID3D12GraphicsCommandList*     InCmdList,
+                                const NVSDK_NGX_Handle*        InFeatureHandle,
+                                const NVSDK_NGX_Parameter*     InParameters,
                                 PFN_NVSDK_NGX_ProgressCallback /*InCallback*/) {
     StubLog("NVSDK_NGX_D3D12_EvaluateFeature");
+    oss_capture_on_ngx_evaluate_feature(InCmdList, InFeatureHandle, InParameters);
     return NVSDK_NGX_Result_Success;
 }
 

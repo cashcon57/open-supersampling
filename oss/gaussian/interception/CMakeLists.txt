@@ -75,6 +75,9 @@ endif()
 #  (see https://github.com/optiscaler/OptiScaler/wiki/Cyberpunk-2077).
 # -----------------------------------------------------------------------------
 set(INTERCEPTION_SOURCES
+    oss_capture.cpp
+    exr_writer.cpp
+    perceptual_hash.cpp
     src/dllmain.cpp
     src/dxgi_proxy.cpp
     src/ngx_exports.cpp
@@ -82,6 +85,7 @@ set(INTERCEPTION_SOURCES
     src/log.cpp)
 
 set(INTERCEPTION_HEADERS
+    oss_capture.h
     include/oss_gaussian_interception.h
     src/dxgi_proxy.h
     src/g_buffer_extractor.h
@@ -98,6 +102,7 @@ set_target_properties(oss_gaussian_interception PROPERTIES
 
 target_include_directories(oss_gaussian_interception
     PUBLIC  "${CMAKE_CURRENT_SOURCE_DIR}/include"
+            "${CMAKE_CURRENT_SOURCE_DIR}"
     PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 
 target_link_libraries(oss_gaussian_interception
@@ -106,6 +111,15 @@ target_link_libraries(oss_gaussian_interception
         d3d12
         dxgi
         shlwapi)
+
+find_package(OpenEXR CONFIG QUIET)
+if(TARGET OpenEXR::OpenEXR)
+    target_compile_definitions(oss_gaussian_interception PRIVATE OSS_CAPTURE_HAS_OPENEXR=1)
+    target_link_libraries(oss_gaussian_interception PRIVATE OpenEXR::OpenEXR)
+else()
+    message(WARNING "OpenEXR not found; oss_capture_write_exr builds the deterministic schema stub. "
+                    "Install OpenEXR on the Windows build host for real multi-channel EXR output.")
+endif()
 
 # .def file added by T2.3 will live at src/dxgi_proxy.def. Wire it conditionally:
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/dxgi_proxy.def")
@@ -139,4 +153,23 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_dxgi_proxy.cpp")
     add_test(
         NAME    test_dxgi_proxy
         COMMAND test_dxgi_proxy "$<TARGET_FILE:oss_gaussian_interception>")
+endif()
+
+set(ROOT_CAPTURE_TEST "${CMAKE_CURRENT_SOURCE_DIR}/../../../tests/capture/test_capture_unit.cpp")
+if(EXISTS "${ROOT_CAPTURE_TEST}")
+    add_executable(test_capture_unit
+        "${ROOT_CAPTURE_TEST}"
+        oss_capture.cpp
+        exr_writer.cpp
+        perceptual_hash.cpp
+        src/log.cpp)
+    target_include_directories(test_capture_unit
+        PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    if(TARGET OpenEXR::OpenEXR)
+        target_compile_definitions(test_capture_unit PRIVATE OSS_CAPTURE_HAS_OPENEXR=1)
+        target_link_libraries(test_capture_unit PRIVATE OpenEXR::OpenEXR)
+    endif()
+    add_test(NAME test_capture_unit COMMAND test_capture_unit)
 endif()

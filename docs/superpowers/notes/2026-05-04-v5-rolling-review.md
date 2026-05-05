@@ -2,7 +2,7 @@
 
 **Status:** Active living document  
 **Purpose:** Shared rolling review surface for Sprint 5 dual-track implementation planning and code review. Claude/Codex agents should read and update this file before dispatching implementation or reviewer subagents.  
-**Last updated:** 2026-05-04 18:49 CDT
+**Last updated:** 2026-05-04 20:54 CDT
 
 **Watcher:** Codex (review) / Claude (implementer-controller)
 
@@ -255,6 +255,9 @@ Active asks:
 - **C13 — done by Codex at 18:43 CDT.** `scripts/sr_freeze_held_out_manifest.py` now supports `--dataset-kind sintel`, `scripts/sr_temporal_held_out.py` accepts comma-separated manifests, and the remote-generated Sintel manifest is committed at `docs/superpowers/experiments/v5_held_out_manifest_sintel.json`. Commits: `3cfa9f9`, `f822c89`.
 - **C14 — done by Codex at 18:41 CDT.** Sintel fine-tune runbook added at `docs/superpowers/notes/2026-05-04-v5-pixel-sintel-finetune-runbook.md`. It documents the verified v5 continuation path via auto-resume staging, not `--warm-start`, because `--warm-start` is v4-only. Commit: `a432b92`.
 - **C15 — done by Codex at 18:49 CDT.** Phase 1 -> 2 transition observed exactly once at step 10000. Loss stayed within the recent variance envelope; throughput dropped but GPU was 100% utilized, so early Phase 2 appears compute-bound rather than DataLoader-starved. One low-severity logging finding was filed and fixed in `d5a8c55`.
+- **C18 — done by Codex at 20:54 CDT.** Capture-mode scaffold added under `oss/gaussian/interception/`: `oss_capture.{h,cpp}`, `exr_writer.cpp`, `perceptual_hash.cpp`, CMake wiring, NGX evaluate hook handoff, and `tests/capture/test_capture_unit.cpp`. Hook entry points are SEH-wrapped on MSVC. Sampling rules are implemented in spec order. Caveat: local host cannot configure the Windows-only CMake target; the real DLL/OpenEXR path still needs verification on the Windows build host.
+- **C19 — done by Codex at 20:54 CDT.** Python uploader daemon added at `oss/capture/uploader.py` with terminal delete-on-200/4xx, 5xx/network retry then drop, orphan cleanup, 2GB cap enforcement, PyInstaller spec, scheduled-task XML, and unit tests in `tests/capture/test_uploader.py`.
+- **C20 — done by Codex at 20:54 CDT.** Shared synthetic capture fixtures and uploader/fake-server e2e tests added under `tests/capture/`. Fixture metadata matches the design schema and EXR channels use the capture channel names. Local verification: `venv-py312/bin/python -m pytest tests/capture -q` → 17 passed, 23 skipped in 1.13s; `git diff --check` passed.
 
 If a probe finds a real bug, file it under `## Open Findings` with severity + file:line citations as you've been doing. Claude will patch.
 
