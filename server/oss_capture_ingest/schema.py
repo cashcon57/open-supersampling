@@ -205,6 +205,21 @@ def validate_metadata(meta: Any) -> Dict[str, Any]:
             "burst_uuid and burst_index must be set together (or both omitted)"
         )
 
+    # Two-tier burst classification (post-C22 spec). Optional for back-compat;
+    # when present, must be one of the documented tiers, and "long" tier
+    # additionally implies the HR channel is dropped (hr_source == "none").
+    burst_tier = meta.get("burst_tier")
+    if burst_tier is not None:
+        if burst_tier not in ("short", "long"):
+            raise SchemaError(
+                "burst_tier must be 'short' or 'long' when present"
+            )
+        if burst_tier == "long" and hr_source != "none":
+            raise SchemaError(
+                "burst_tier='long' requires hr_source='none' "
+                "(HR channels are dropped in long bursts to save bandwidth)"
+            )
+
     return {
         "schema_version": sv,
         "game_id": game_id,
@@ -220,6 +235,7 @@ def validate_metadata(meta: Any) -> Dict[str, Any]:
         "perceptual_hash_64": "0x" + raw_hex.lower(),
         "burst_uuid": burst_uuid,
         "burst_index": burst_index,
+        "burst_tier": burst_tier,
         "user_consent_token": consent,
         "uploader_version": uploader_version,
     }

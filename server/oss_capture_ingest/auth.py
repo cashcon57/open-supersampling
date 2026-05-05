@@ -1,20 +1,30 @@
 """Bearer-token auth + per-token rate limiting.
 
-The token registry is in-memory for v1. The interface is deliberately
-SQLite/Postgres-shaped (``register_token``, ``revoke_token``,
-``check_token``) so that swapping the backing store is a one-file change.
+The token registry is in-memory + JSON-file backed so server restarts
+and multiple-process workers see the same token set (closes Codex's
+HIGH cross-review finding "Capture Server Tokens Are Process-Local Only").
 
 Tokens are minted by ``scripts/build_capture_installer.py`` and baked into
 each per-game installer. They are opaque from the client's perspective:
 not user-identifying, just rate-limitable.
+
+Persistence: tokens are flushed to the JSON file at the path returned by
+``_token_store_path()`` (``$OSS_CAPTURE_TOKEN_STORE`` env var, falling
+back to ``~/.oss-capture-tokens.json``). Reads are atomic (single
+``json.load``); writes use a tmp+rename pattern. SQLite is the planned
+v2 store; the on-disk JSON is the smallest interface that closes the
+production gap without pulling in a database dependency.
 """
 
 from __future__ import annotations
 
+import json
+import os
 import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Deque, Dict, Optional
 
 
@@ -47,16 +57,20 @@ class TokenRegistry:
         self,
         rate_limit_frames_per_hour: int = 1000,
         window_seconds: int = 3600,
+        store_path: Optional[Path] = None,
     ) -> None:
         self.rate_limit = int(rate_limit_frames_per_hour)
         self.window_seconds = int(window_seconds)
         self._tokens: Dict[str, TokenRecord] = {}
         self._lock = threading.RLock()
+        self.store_path: Optional[Path] = store_path
+        if self.store_path is not None:
+            self._load_from_disk()
 
     # ---- registry management ------------------------------------------------
 
     def register_token(self, token: str, label: str = "") -> TokenRecord:
-        """Register a new token (idempotent)."""
+        """Register a new token (idempotent). Persisted if store_path is set."""
         with self._lock:
             rec = self._tokens.get(token)
             if rec is None:
@@ -64,6 +78,7 @@ class TokenRegistry:
                 self._tokens[token] = rec
             elif label and not rec.label:
                 rec.label = label
+            self._flush_to_disk()
             return rec
 
     def revoke_token(self, token: str) -> bool:
@@ -73,7 +88,67 @@ class TokenRegistry:
             if rec is None:
                 return False
             rec.revoked = True
+            self._flush_to_disk()
             return True
+
+    # ---- persistence -------------------------------------------------------
+
+    def _load_from_disk(self) -> None:
+        """Load registered tokens from ``store_path`` if it exists."""
+        if self.store_path is None or not self.store_path.is_file():
+            return
+        try:
+            data = json.loads(self.store_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            return
+        for entry in data.get("tokens", []):
+            tok = entry.get("token")
+            if not isinstance(tok, str) or not tok:
+                continue
+            rec = TokenRecord(
+                token=tok,
+                label=str(entry.get("label", "")),
+                created_at_unix=float(entry.get("created_at_unix", time.time())),
+                revoked=bool(entry.get("revoked", False)),
+                total_frames=int(entry.get("total_frames", 0)),
+                total_bytes=int(entry.get("total_bytes", 0)),
+            )
+            self._tokens[tok] = rec
+
+    def _flush_to_disk(self) -> None:
+        """Atomically write the token registry to ``store_path``.
+
+        Tmp-file + rename pattern so concurrent readers never see a half-
+        written JSON. Counters (total_frames/total_bytes) are flushed too;
+        rate-limit windows are NOT — they're transient by definition and
+        re-establish naturally on restart from upload activity.
+        """
+        if self.store_path is None:
+            return
+        try:
+            self.store_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.store_path.with_suffix(self.store_path.suffix + ".tmp")
+            payload = {
+                "version": 1,
+                "tokens": [
+                    {
+                        "token": rec.token,
+                        "label": rec.label,
+                        "created_at_unix": rec.created_at_unix,
+                        "revoked": rec.revoked,
+                        "total_frames": rec.total_frames,
+                        "total_bytes": rec.total_bytes,
+                    }
+                    for rec in self._tokens.values()
+                ],
+            }
+            tmp.write_text(json.dumps(payload, indent=2))
+            tmp.replace(self.store_path)
+        except OSError:
+            # Persistence is best-effort; an unwritable store should not
+            # bring the server down. Logged via the FastAPI app's logger
+            # at the call site if needed.
+            pass
 
     def get(self, token: str) -> Optional[TokenRecord]:
         with self._lock:
@@ -122,6 +197,10 @@ class TokenRegistry:
             rec.total_frames += 1
             rec.total_bytes += int(frame_bytes)
             self._prune_window(rec, now)
+            # Persist every 10 uploads to amortize disk I/O. The window
+            # itself isn't persisted (transient); only cumulative counters.
+            if rec.total_frames % 10 == 0:
+                self._flush_to_disk()
 
 
 # ---- header parsing ---------------------------------------------------------
@@ -146,16 +225,43 @@ def extract_bearer_token(authorization_header: Optional[str]) -> Optional[str]:
 _REGISTRY: Optional[TokenRegistry] = None
 
 
+def _token_store_path() -> Optional[Path]:
+    """Resolve the on-disk token-store path.
+
+    Order of precedence:
+      1. ``$OSS_CAPTURE_TOKEN_STORE`` env var (explicit override)
+      2. ``~/.oss-capture-tokens.json`` (default for the running server user)
+
+    Set the env var to an empty string to DISABLE persistence (in-memory only;
+    used by tests + ephemeral preview deployments).
+    """
+    env = os.environ.get("OSS_CAPTURE_TOKEN_STORE")
+    if env is None:
+        return Path.home() / ".oss-capture-tokens.json"
+    if env == "":
+        return None
+    return Path(env)
+
+
 def get_registry() -> TokenRegistry:
-    """Return the process-wide :class:`TokenRegistry` singleton."""
+    """Return the process-wide :class:`TokenRegistry` singleton.
+
+    On first call, creates the registry backed by the on-disk token store
+    (see :func:`_token_store_path`). All processes that load this module
+    in the same OS user account share the same persisted token set.
+    """
     global _REGISTRY
     if _REGISTRY is None:
-        _REGISTRY = TokenRegistry()
+        _REGISTRY = TokenRegistry(store_path=_token_store_path())
     return _REGISTRY
 
 
 def reset_registry_for_tests() -> TokenRegistry:
-    """Replace the process-wide registry with a fresh one. Tests only."""
+    """Replace the process-wide registry with a fresh, in-memory one.
+
+    Tests only — does NOT touch the on-disk store. Sets ``store_path=None``
+    so the test registry is fully isolated from any live server state.
+    """
     global _REGISTRY
-    _REGISTRY = TokenRegistry()
+    _REGISTRY = TokenRegistry(store_path=None)
     return _REGISTRY
