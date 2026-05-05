@@ -184,6 +184,27 @@ def validate_metadata(meta: Any) -> Dict[str, Any]:
     consent = _require_str(meta, "user_consent_token", max_len=128)
     uploader_version = _require_str(meta, "uploader_version", max_len=32)
 
+    # Burst-mode (post-ce9bf3b spec revision): each ACCEPT decision from the
+    # sampler enqueues N consecutive Present-frame captures sharing a
+    # ``burst_uuid`` with per-frame ``burst_index`` ∈ [0, N-1]. Optional for
+    # back-compat with older single-frame DLLs; required-when-present is
+    # enforced by Codex's C18+C21 wiring.
+    burst_uuid = meta.get("burst_uuid")
+    if burst_uuid is not None:
+        if not isinstance(burst_uuid, str) or not _UUID_RE.match(burst_uuid):
+            raise SchemaError("burst_uuid must be a UUID4 string when present")
+    burst_index = meta.get("burst_index")
+    if burst_index is not None:
+        if not isinstance(burst_index, int) or isinstance(burst_index, bool):
+            raise SchemaError("burst_index must be an int when present")
+        if burst_index < 0 or burst_index > 64:
+            raise SchemaError("burst_index must be in [0, 64]")
+    # Cross-field constraint: if one is set, both must be set.
+    if (burst_uuid is None) != (burst_index is None):
+        raise SchemaError(
+            "burst_uuid and burst_index must be set together (or both omitted)"
+        )
+
     return {
         "schema_version": sv,
         "game_id": game_id,
@@ -197,6 +218,8 @@ def validate_metadata(meta: Any) -> Dict[str, Any]:
         "jitter_offset_uv": jitter,
         "motion_mean_magnitude_px": motion_mag,
         "perceptual_hash_64": "0x" + raw_hex.lower(),
+        "burst_uuid": burst_uuid,
+        "burst_index": burst_index,
         "user_consent_token": consent,
         "uploader_version": uploader_version,
     }
