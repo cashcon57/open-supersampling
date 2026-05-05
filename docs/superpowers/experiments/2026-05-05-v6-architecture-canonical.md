@@ -130,6 +130,25 @@ ONE architecture across all vendors. Custom kernels for each vendor's primitives
 
 Wall-time estimate: 6-12 months of parallel engineering across the five backends. We don't shy away from this — it's exactly what every shipped ML upscaler (DLSS, XeSS-XMX, FSR 4) does internally.
 
+### Per-vendor inference precision
+
+Training is bf16 mixed precision (see §6). Shipping precision is per-vendor, picked to match each platform's matrix-engine native format. FP8 is the fast path where the tensor / matrix engine supports it natively; FP16 is the floor everywhere else; INT8 / dp4a is the fallback for Vulkan-compute-only paths with no matrix accelerator.
+
+| Hardware | Inference precision | Path | Speedup vs FP16 reference |
+|---|---|---|---|
+| NVIDIA Ada (RTX 40-series) / Blackwell (RTX 50-series) | **FP8** | TensorRT FP8 PTQ on tensor cores | ~2× |
+| NVIDIA Ampere (RTX 30) / Turing (RTX 20) | FP16 | TensorRT FP16 on tensor cores | baseline |
+| AMD RDNA4 (RX 9000+) | **FP8** | HIP / ROCm + matrix cores (FP8 native on RDNA4) | ~2× |
+| AMD RDNA3 (RX 7000) | FP16 | HIP / ROCm + matrix cores (RDNA3 has matrix but FP16-only) | baseline |
+| AMD RDNA2 (RX 6000, Steam Deck) | INT8 / dp4a | Vulkan compute, no matrix accelerator | varies |
+| Intel Arc B-series (Battlemage) | **FP8** | Level Zero + XMX FP8 native | ~2× |
+| Intel Arc A-series (Alchemist) | FP16 | Level Zero + XMX (FP16-only on A-series) | baseline |
+| Apple Silicon (M3+) | FP16 | Metal MPS + ANE (ANE does not expose FP8 as of 2026) | baseline |
+
+The FP8 path is what closes the gap to DLSS 4's 1.5-2 ms numbers. PTQ FP8 calibration typically costs 0.1-0.3 dB PSNR vs FP16 with proper calibration; that delta is acceptable in the v6 ship target band. INT8 PTQ on Ampere we already measured (`docs/superpowers/experiments/2026-05-03-trt-int8-quantization.md`) — quality gate passed (+0.46 dB PSNR, −0.010 LPIPS vs FP32) but speed regressed at most resolutions on the v4 model because INT8 overhead exceeded precision savings at v4's parameter count. v6 at HAT-Base size should benefit from FP8 PTQ where the v4 model didn't from INT8.
+
+The shipping pipeline is therefore: **bf16 train → FP16 ONNX export → vendor-specific quantization** (TRT FP8 / HIP FP8 / Level Zero FP8) + **vendor-specific compiled engine**. Distillation is orthogonal: Heavy → Standard → Pico is parameter scaling, run before quantization, with each tier then quantized independently per target vendor.
+
 ---
 
 ## 5. Loss recipe (carries from prior v6 thinking)
