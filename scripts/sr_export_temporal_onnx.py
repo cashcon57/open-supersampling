@@ -59,10 +59,15 @@ def main(argv: list[str] | None = None) -> int:
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with torch.no_grad():
+        # dynamo=True is required: the legacy TorchScript exporter has no
+        # symbolic export for ``aten::_upsample_bicubic2d_aa`` (the
+        # antialias=True bicubic interp used by the bicubic-skip warm-start
+        # path) at any opset. The dynamo path lowers it correctly.
         torch.onnx.export(
             model,
             (x, prev_hr, depth_curr, depth_prev, motion),
             args.output,
+            dynamo=True,
             opset_version=int(args.opset),
             input_names=[
                 "lr_inputs",
