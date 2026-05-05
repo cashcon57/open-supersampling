@@ -2,7 +2,7 @@
 
 > Vendor-agnostic open-source real-time game super-resolution and frame extrapolation.
 
-**Status:** Pre-alpha / active research. Single-frame upscaler trained and exported. Sprint 5 dual-track temporal **implementation is complete** (113 v5 tests passing); pixel-temporal training is **in flight** on the 3080 Ti host, Gaussian-temporal queued behind it. Held-out results pending. Not yet suitable for production use.
+**Status:** Pre-alpha / active research. Single-frame upscaler trained and exported. Sprint 5 dual-track temporal **implementation is complete**; pixel-temporal training is **in flight** on the 3080 Ti host (TartanAir w/ engine-aliased LR-synth, held-out env `oldtown`), Gaussian-temporal queued behind it. Sprint 7 community **OSS Capture Tool** designed today — one-click-install per-game DLL that lets users contribute real-game training data while they play. Held-out results pending. Not yet suitable for production use.
 
 ---
 
@@ -111,6 +111,7 @@ These numbers are honest and current. **The deliberate comparison is FSR 2/3 at 
 | **S5** | **v5 dual-track temporal** (current sprint) | ⏳ implementation complete; pixel training in flight on 3080 Ti; results pending closeout memo | one track meets success criteria, ships as v5 |
 | **S6** | Performance pass: distill, custom CUDA mega-kernel, vendor ports | 📐 design memos landed (vendor audit, CUDA mega-kernel, pico distill, ONNX export); not yet started | TRT FP16 latency cut ≥3× |
 | **S7** | Game integration: DXGI hook + NGX shim + Vulkan layer + OSS-FX | 📐 design memo landed; not yet started | runtime swap working in one DX12 title |
+| **S7-data** | **OSS Capture Tool** — community training-data pipeline (one-click-install per-game DLL + auto-upload + auto-delete) | 📐 design memo landed; tandem implementation in progress (Claude server-side, Codex client-side) | first contributor frame uploaded end-to-end through hosted ingest |
 
 ### Sprint 5 — current sprint
 
@@ -129,10 +130,15 @@ The current v4 is the strong single-frame baseline. Quality is now bottlenecked 
 - Local SR test suite is green after Codex review fixes (`113 passed, 1 skipped` as of 2026-05-04)
 
 **Phase 2 (in progress): training**
-- v5-pixel-temporal launched 2026-05-04 18:07 CDT on `<train-host>` (python PID 21192), warm-started from v4 step-385K, ETA ~22:50 CDT tonight
-- Pixel run is currently TartanAir-only because the remote Sintel tree is missing the separate `training/depth` package required by `SintelGaussianDataset`; runbook tracks the remediation
-- Gaussian training is queued until the pixel run completes, per the sequential-GPU directive ("sequential unless overlap is safe; test overlap first") for the shared RTX 3080 Ti
-- Checkpoints and metrics rolling under `<train-host-data>/checkpoints/srcnn-v5-pixel-temporal/`; held-out eval scheduled for the morning of 2026-05-05
+- v5-pixel-temporal currently running on `<train-host>` (python PID 2732 as of last bounce), warm-started from v4 step-385K. ETA ~05:00 CDT tomorrow (2026-05-05).
+- **Held-out env policy:** training excludes TartanAir env `oldtown` via `--held-out-envs oldtown`; the held-out manifest at `<train-host-data>/checkpoints/v5_held_out_manifest.json` draws all 64 pairs from `oldtown` only. Closes a data-leak gap from the original launch (which iterated the full TartanAir Easy split).
+- **LR-synth distribution match:** training, eval, and viz all run through `EngineAliasedLRSynth` with shared config (`enable_jitter=True, enable_taa_blur=True, enable_jpeg=False, jpeg_quality=85, blur_sigma=0.5`). Earlier versions of the train script left LR-synth off, training the model on too-clean LR vs the engine-aliased LR seen at eval; that's now fixed.
+- **Sintel:** `training/depth` package downloaded + extracted + junctioned today; v1 launch keeps `--sintel-root` off pending dual-manifest support, with a Sintel fine-tune follow-up runbook ready for after the main run.
+- Gaussian training is queued until the pixel run completes, per the sequential-GPU directive ("sequential unless overlap is safe; test overlap first") for the shared RTX 3080 Ti.
+- Live in-flight viz at `http://<tailnet-ip>:8080/` — 6-up `LR-bilinear · bicubic · v4-baseline · v5-temporal · GT · |err| heatmap` strip with timeline scrubber, plus PSNR/LPIPS charts annotated with bicubic/FSR 1-4/DLSS 2-4 published-benchmark reference lines.
+
+**Phase 2.5 (in flight): definitive comparison harness**
+- Codex C16 (`docs/superpowers/notes/2026-05-04-claude-codex-asks-r5.md`) implementing `scripts/sr_v5_race_compare.py` — multi-trajectory paired-Wilcoxon test across PSNR/LPIPS/temporal-stability + latency gate (Gaussian must explicitly beat pixel on ≥3/4 metrics, p<0.05, with latency ≤1.5× pixel). Auto-determines verdict against the spec race rule.
 
 **Phase 3: comparison + ship decision**
 - Same fixed held-out batch (TartanAir now; Sintel after the Depth subset is fetched or a tested no-depth fallback exists)
@@ -225,6 +231,9 @@ Three options ordered by engineering cost and performance ceiling:
 | **Metal frame interception (macOS)** | `oss/gaussian/ports/metal/` | ✓ scaffolded; not wired to real games |
 | **Custom CUDA mega-kernel** | (planned, S6) | 📐 design memo landed |
 | **Pico-tier distillation** | (planned, S6) | 📐 design memo landed |
+| **OSS Capture Tool — DLL** (game-side hook, capture mode) | `oss/gaussian/interception/` (planned) | 📐 design memo landed; Codex implementing C18 |
+| **OSS Capture Tool — uploader** (client-side daemon) | `oss/capture/uploader.py` (planned) | 📐 design memo landed; Codex implementing C19 |
+| **OSS Capture Tool — ingest server** (FastAPI + R2) | `server/oss_capture_ingest/` (planned) | 📐 design memo landed; Claude implementing in subagent |
 
 ---
 
@@ -287,6 +296,10 @@ Design memos and runbooks driving the current sprint and the next two:
 
 **v6 research direction (post-v5-race candidate):**
 - [specs/2026-05-04-v6-research-tracks-design.md](docs/superpowers/specs/2026-05-04-v6-research-tracks-design.md) — race-resolution gates, scenarios A/B, common productization, 6-month sequencing
+
+**OSS Capture Tool (community training data, S7-adjacent):**
+- [specs/2026-05-04-oss-capture-tool-design.md](docs/superpowers/specs/2026-05-04-oss-capture-tool-design.md) — one-click-install per-game DLL, sampling policy (≤500 MB/h), auto-upload + delete-immediately, FastAPI ingest + R2 layout, tandem implementation split
+- [d3d12-hook-design.md](docs/superpowers/d3d12-hook-design.md) — parent DLL hook architecture (Detours/MinHook + NGX spoofing) shared with S7 inference shim
 
 Sprint reference (high-level, predates the v5 implementation work):
 - [specs/oss-gaussian-sprint-1.md](docs/superpowers/specs/oss-gaussian-sprint-1.md) through [specs/oss-gaussian-sprint-7.md](docs/superpowers/specs/oss-gaussian-sprint-7.md)
