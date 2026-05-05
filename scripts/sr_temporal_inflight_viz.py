@@ -174,9 +174,34 @@ def _render_iteration(
 
     # Stack vertically across the n_pairs strips.
     composite = torch.cat(rendered_strips, dim=-2)
-    # Save as PNG.
-    from torchvision.utils import save_image
-    save_image(composite, out_path)
+
+    # Convert to PIL + draw bottom-right panel labels so each preview is
+    # self-identifying when viewed in isolation. Each panel is ``W_hr`` wide;
+    # labels go inside that panel's bottom-right corner with a dark scrim.
+    from PIL import Image, ImageDraw
+    arr = (composite.clamp(0.0, 1.0).permute(1, 2, 0).numpy() * 255).astype("uint8")
+    img = Image.fromarray(arr)
+    drawer = ImageDraw.Draw(img, mode="RGBA")
+    panel_labels = ["LR-bilinear", "bicubic", "v5-temporal", "GT"]
+    panel_w = img.width // len(panel_labels)
+    for i, label in enumerate(panel_labels):
+        # Estimate text width for default font (~6px per char).
+        text_w = 6 * len(label) + 12
+        text_h = 18
+        x_right = (i + 1) * panel_w - 6
+        x_left = x_right - text_w
+        # Per-strip Y stride: place at bottom of EACH stacked sub-strip so the
+        # label is visible even when scrubbing.
+        n_strips = len(rendered_strips)
+        strip_h = img.height // n_strips
+        for s in range(n_strips):
+            y_bottom = (s + 1) * strip_h - 6
+            y_top = y_bottom - text_h
+            # Dark scrim under the text for legibility on bright frames.
+            drawer.rectangle([(x_left, y_top), (x_right, y_bottom)], fill=(0, 0, 0, 160))
+            # Centre-align text inside the scrim box.
+            drawer.text((x_left + 6, y_top + 2), label, fill=(255, 255, 255, 255))
+    img.save(out_path, format="PNG", optimize=False)
     return out_path
 
 
