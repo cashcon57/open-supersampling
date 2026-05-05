@@ -144,12 +144,27 @@ def test_param_net_rejects_wrong_in_channels() -> None:
         net(bad)
 
 
-def test_param_net_initial_output_is_zero() -> None:
-    """Head is zero-initialised — first forward pass should be exactly zeros."""
+def test_param_net_initial_output_is_bounded() -> None:
+    """Head's initial forward pass is finite and bounded.
+
+    Pure zero init was abandoned in commit 6c02cc8 ("sprint4(network):
+    boost initial Gaussian scale to escape gsplat zero-grad") because exact
+    zero output put the rasterizer into a zero-gradient pathology -- gsplat
+    rejects zero-area Gaussians, no pixels rendered, no gradient flow back
+    to the param net. Init is now small-normal (std=1e-3 on weight,
+    std=0.05 on bias) plus a per-channel log_scale_init bias that puts
+    initial Gaussian areas in a sane range (~e^2 ~7 px on dedicated scale
+    channels).
+
+    This test pins the post-fix property: output is finite (no NaN/Inf)
+    and magnitudes stay within a range that won't break downstream
+    OutputHead decoding (the log_scale_init bias dominates at ~2.1).
+    """
     net = GaussianParamNetwork()
     x = torch.randn(1, net.in_channels, 32, 32)
     out = net(x)
-    assert torch.allclose(out, torch.zeros_like(out))
+    assert torch.isfinite(out).all()
+    assert out.abs().max().item() < 5.0
 
 
 @pytest.mark.parametrize("tier", sorted(TIER_CONFIGS))

@@ -30,7 +30,17 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "pytest-cov>=5.0", "ruff>=0.6"]
+dev = [
+    "pytest>=8.0", "pytest-cov>=5.0", "ruff>=0.6",
+    # setuptools provides pkg_resources, which pytorch-wavelets imports at
+    # module init. Removed from Python 3.12+ default install -- must be an
+    # explicit dependency or test collection fails (ImportError chain through
+    # oss/model/wavelet.py -> oss/model/oss_pico.py).
+    "setuptools>=68",
+    # pytorch-msssim is used by the Gaussian baseline benchmark suite
+    # (oss/gaussian/bench/run_baselines.py) and tested in tests/gaussian/test_baselines.py.
+    "pytorch-msssim>=1.0",
+]
 # Anthropic SDK for the OSS-Gaussian sprint review pipeline (--use-api).
 # Optional because the pipeline runs a heuristic dry-run by default.
 review   = ["anthropic>=0.40"]
