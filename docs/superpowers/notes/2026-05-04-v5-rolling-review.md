@@ -2,7 +2,7 @@
 
 **Status:** Active living document  
 **Purpose:** Shared rolling review surface for Sprint 5 dual-track implementation planning and code review. Claude/Codex agents should read and update this file before dispatching implementation or reviewer subagents.  
-**Last updated:** 2026-05-04 20:54 CDT
+**Last updated:** 2026-05-04 21:00 CDT
 
 **Watcher:** Codex (review) / Claude (implementer-controller)
 
@@ -312,7 +312,47 @@ Remaining documented coverage gaps:
 
 ## Open Findings
 
-No unresolved findings besides future training/eval watch items.
+### HIGH — Capture Server Tokens Are Process-Local Only
+
+Cross-review of Claude server commit `2befaeb`.
+
+`oss-capture-ingest mint-token` registers the token in the CLI process-local singleton and prints it, but there is no persistence or startup load path for the serving process. A token minted by the installer/build script in one process will not be known to a separately running `serve` process, so production uploads will 401 unless tokens are manually registered inside the live worker after every restart.
+
+References:
+
+- `server/oss_capture_ingest/main.py:140-151` mints/registers the token only through `get_registry()` in the current process.
+- `server/oss_capture_ingest/auth.py:67-75` initializes the registry as an empty in-memory singleton.
+- `server/oss_capture_ingest/routes/ingest.py:99-104` rejects any bearer token absent from that in-memory registry.
+
+Fix direction: load valid install tokens from durable configuration/storage at server startup, or back `TokenRegistry` with the same persistent store that the installer build script writes.
+
+### MEDIUM — Capture Server Rate Limit Does Not Cover Rejected Upload Attempts Or Per-Game Quotas
+
+Cross-review of Claude server commit `2befaeb`.
+
+The design calls for spam filtering with rate limits per token and per game. Current code checks only a per-token successful-upload counter; malformed metadata, oversize frames, empty frames, duplicates, and auth-valid 4xx attempts are not recorded. That lets a valid token hammer expensive multipart/schema/body paths indefinitely without tripping the limiter. There is also no per-game limiter, so a token fleet for one game can consume the global service budget without a game-level cap.
+
+References:
+
+- `server/oss_capture_ingest/routes/ingest.py:106-114` checks token rate before parsing metadata/body.
+- `server/oss_capture_ingest/routes/ingest.py:218-220` records rate-limit/accounting only after successful R2 write.
+- `server/oss_capture_ingest/auth.py:93-106` limits only `TokenRecord.upload_times`; no per-game bucket exists.
+
+Fix direction: record accepted and rejected authenticated attempts in a sliding window, and add a game-keyed limiter using validated `game_id` once metadata parses.
+
+### MEDIUM — Capture Dedup Is Volatile And Does Not Consult The R2 Index
+
+Cross-review of Claude server commit `2befaeb`.
+
+Dedup is a process-local LRU populated only after successful writes. A server restart loses all seen hashes, and parallel workers will have independent dedup state. The design describes dedup against the capture index/R2-backed dataset, so this can accept duplicate frames after deploys/restarts and in multi-worker production.
+
+References:
+
+- `server/oss_capture_ingest/dedup.py:1-11` documents the current in-memory-only LRU and explicitly defers persistence.
+- `server/oss_capture_ingest/routes/ingest.py:141-147` checks only that singleton LRU.
+- `server/oss_capture_ingest/routes/ingest.py:218-220` adds to the LRU only after the current process writes to R2.
+
+Fix direction: query/update a durable content-hash index, or at minimum write a hash sidecar/key in R2 and check it before accepting an upload.
 
 ## Resolved Findings
 
