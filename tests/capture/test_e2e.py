@@ -1,0 +1,95 @@
+from __future__ import annotations
+
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import os
+from pathlib import Path
+
+from oss.capture.uploader import UploadConfig, drain_once
+from tests.capture.test_fixtures import make_synthetic_capture
+
+
+class ScriptedIngestHandler(BaseHTTPRequestHandler):
+    statuses: list[int] = []
+    requests_seen: list[bytes] = []
+
+    def do_POST(self) -> None:  # noqa: N802 - stdlib hook name
+        length = int(self.headers.get("Content-Length", "0"))
+        ScriptedIngestHandler.requests_seen.append(self.rfile.read(length))
+        status = ScriptedIngestHandler.statuses.pop(0) if ScriptedIngestHandler.statuses else 200
+        self.send_response(status)
+        self.end_headers()
+        self.wfile.write(b"ok")
+
+    def log_message(self, format: str, *args: object) -> None:
+        return
+
+
+def _start_server(statuses: list[int]) -> tuple[ThreadingHTTPServer, str]:
+    ScriptedIngestHandler.statuses = list(statuses)
+    ScriptedIngestHandler.requests_seen = []
+    server = ThreadingHTTPServer(("127.0.0.1", 0), ScriptedIngestHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, f"http://127.0.0.1:{server.server_port}/ingest"
+
+
+def test_uploader_fake_server_roundtrip_deletes_terminal_and_exhausted_frames(tmp_path: Path) -> None:
+    pending = tmp_path / "pending"
+    ok = make_synthetic_capture(pending, session_uuid="session", frame_uuid="000-ok")
+    rejected = make_synthetic_capture(pending, session_uuid="session", frame_uuid="001-rejected")
+    exhausted = make_synthetic_capture(pending, session_uuid="session", frame_uuid="002-exhausted")
+    server, ingest_url = _start_server([200, 400, 500, 500])
+    try:
+        config = UploadConfig(
+            pending_dir=pending,
+            ingest_url=ingest_url,
+            install_token="test-token",
+            max_attempts=2,
+            backoff_seconds=(0.0, 0.0),
+        )
+        assert drain_once(config, sleep=lambda _: None) == 3
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    for capture in (ok, rejected, exhausted):
+        assert not capture.frame_path.exists()
+        assert not capture.meta_path.exists()
+
+    assert len(ScriptedIngestHandler.requests_seen) == 4
+    first_body = ScriptedIngestHandler.requests_seen[0]
+    assert b'name="frame"; filename="000-ok.exr"' in first_body
+    assert b'name="meta"; filename="000-ok.json"' in first_body
+    assert b'"schema_version": 1' in first_body
+
+
+def test_pending_cap_evicts_oldest_pairs_before_upload(tmp_path: Path) -> None:
+    pending = tmp_path / "pending"
+    oldest = make_synthetic_capture(pending, frame_uuid="000-oldest", payload_bytes=220, captured_at_unix=1)
+    newest = make_synthetic_capture(pending, frame_uuid="001-newest", payload_bytes=220, captured_at_unix=2)
+    os.utime(oldest.frame_path, (1, 1))
+    os.utime(oldest.meta_path, (1, 1))
+    os.utime(newest.frame_path, (2, 2))
+    os.utime(newest.meta_path, (2, 2))
+    newest_total = newest.frame_path.stat().st_size + newest.meta_path.stat().st_size
+    server, ingest_url = _start_server([200])
+    try:
+        config = UploadConfig(
+            pending_dir=pending,
+            ingest_url=ingest_url,
+            install_token="test-token",
+            max_pending_bytes=newest_total + 1,
+            max_attempts=1,
+            backoff_seconds=(0.0,),
+        )
+        assert drain_once(config, sleep=lambda _: None) == 1
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert not oldest.frame_path.exists()
+    assert not oldest.meta_path.exists()
+    assert not newest.frame_path.exists()
+    assert not newest.meta_path.exists()
+    assert len(ScriptedIngestHandler.requests_seen) == 1
