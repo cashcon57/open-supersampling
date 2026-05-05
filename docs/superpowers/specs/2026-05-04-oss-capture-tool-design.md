@@ -95,7 +95,7 @@ Four escalating modes. Each tier is **purpose-built** for what it does best at i
 
 | Mode | Bandwidth/h | Optimized for | Capture strategy | Why this is best ROI at this budget |
 |---|---|---|---|---|
-| **trickle** | ~50 MB | Single-frame SR + scene diversity | Static-camera-only single frames (LR + HR only, no G-buffers) | DLSS at static-camera peak ≈ best practical pseudo-GT. Zero motion noise. ~30 frames/h. Invisible burden. v3/v4 trained without G-buffers and hit 30 dB on this exact data shape. |
+| **trickle** | ~100 MB | Single-frame SR **and** temporal-pair SR at the maximum density that's invisible to the user | Mostly static singles (LR + HR + depth + motion + normals, every 5 min) + opportunistic motion pairs (HR on t only; t+1 is LR + G-buffers only, every 20 min) | "Invisible to user" is the constraint, MAX information density is the goal. G-buffers are cheap (depth+motion+normals ~1.75 MB per frame); HR is the expensive bit (~3 MB). Drop HR on the t+1 of each pair to fit BOTH single-frame AND temporal-pair training signal at the same invisible-burden budget. |
 | **lite** (default) | ~500 MB | v5 temporal SR (motion-aware) | Short pairs (N=2/80s) + long sequences (N=60/30 min, no HR) + opportunistic trickle frames (~10% of budget) | Temporal pairs need motion variety. Long sequences for recurrent rollout. Opportunistic trickle lifts even lite contributors into single-frame coverage for free. |
 | **regular** | ~2 GB | Material-aware temporal SR | + albedo + roughness, denser bursts (N=4/40s, N=60/10 min), boost capture probability on mixed-material scenes | Albedo + roughness lets the model learn glossy-vs-matte SR — strict superset of what DLSS sees. Material-diverse scenes get over-sampled (worth ~10% of budget). |
 | **INSANE** | ~20–50 GB | Beyond-DLSS quality | Full BRDF (+ metallic + emissive), 4-second long bursts (N=240/5 min), supersample-GT auto-trigger, FP32 depth/motion, optional DLAA capture, every-DLSS-mode pairing, scene-cut post-cut burst | supersample-GT removes the DLSS-quality ceiling — without it we're bounded by DLSS-as-pseudo-GT. With it we can EXCEED DLSS quality during training. |
@@ -104,25 +104,27 @@ Each contribution's metadata records `capture_mode` so the training pipeline can
 
 ### trickle — design rationale
 
-Cash's intuition was right: even at "basically nothing" bandwidth there's a real strategic purpose, AND we still need static-frame data for the single-frame SR backbone (which is what does the heavy lifting in every other tier on top of it).
+The constraint is **"invisible to the user"**, the goal is **maximum useful data extracted within that constraint**. ~100 MB/h sustained is invisible on any modern broadband connection; that's the budget we work within. Within it, we want as much training-relevant data as possible — NOT a single-purpose minimum.
 
-What makes trickle high-ROI:
+What makes trickle high-ROI within the invisible-burden budget:
 
-1. **DLSS HR is at peak quality** when the camera is stationary for ≥1.5 s. After ~8 frames of stationary input, DLSS's temporal accumulator converges to the per-pixel jitter-supersample of the LR — essentially the closest practical approximation of true GT short of full path tracing. Capturing here means our pseudo-GT supervision is as clean as it ever gets.
-2. **No motion blur in LR.** Static camera produces the cleanest possible LR input.
-3. **No motion-vector dependence.** Pure spatial-SR signal — trains the v4-style backbone, which still does the heavy lifting underneath every v5+ temporal head.
-4. **Easy to dedup.** Stationary frames are near-identical until the player moves; perceptual hash catches all redundant captures and we keep one per scene.
-5. **Opportunistic capture.** No fixed stride — capture only when "stationary camera + DLSS converged" both fire. Casual users contribute ~20–30 high-quality frames per 1-hour session at ZERO perceived cost.
+1. **DLSS HR is at peak quality** when the camera is stationary for ≥1.5 s. After ~8 frames of stationary input, DLSS's temporal accumulator converges to the per-pixel jitter-supersample of the LR — essentially the closest practical approximation of true GT short of full path tracing. Most of trickle's captures happen here so our pseudo-GT supervision is as clean as it ever gets.
+2. **G-buffers are cheap.** Depth + motion + normals together compress to ~1.75 MB per frame vs HR's ~3 MB. Keeping all G-buffers on every trickle capture costs almost nothing and gives the model strictly more conditioning information than DLSS sees.
+3. **HR is the budget-killer, not G-buffers.** Drop HR strategically (only on the t+1 of opportunistic motion pairs) to fit BOTH single-frame and temporal-pair training signal in the same budget.
+4. **Mostly singles, occasional pairs.** Captures every 5 min at static camera (LR + HR + depth + motion + normals = ~5.75 MB) plus one motion pair every 20 min (HR on t only; t+1 is LR + G-buffers = ~8.5 MB total per pair). ~96 MB/h.
+5. **Easy to dedup.** Stationary frames are near-identical until the player moves; perceptual hash catches all redundant captures and we keep one per scene.
+
+Casual users contribute ~17 single static frames + ~3 motion pairs per 1-hour session at ZERO perceived cost. Both single-frame SR training and v5-temporal pair training benefit from the same trickle contributor.
 
 ### Per-mode optimization details
 
 **trickle:**
 
-- Trigger: motion magnitude < 0.5 px for ≥ 1.5 s (ensures DLSS accumulator settled)
-- Channels: LR + HR only (no depth/motion/normals — the single-frame model doesn't need them at this tier; v4 trained without them and hit 30 dB)
-- Min period: 120 s between captures (caps to ~30/h even on a walking sim)
-- Aggressive dedup: drop if perceptual-hash distance < 10 from any frame captured in the last 30 min
-- Metadata `capture_mode = "trickle"`, `burst_tier = null` (single-frame)
+- **Two capture paths, both within ~96 MB/h total:**
+  - **Static singles (~70 MB/h):** trigger motion magnitude < 0.5 px for ≥ 1.5 s, min period 300 s between captures (~12/h). Channels: LR + HR + depth + motion + normals (~5.75 MB/frame). DLSS HR is at peak quality on these frames.
+  - **Opportunistic motion pairs (~26 MB/h):** trigger when a static-frame candidate is followed by a motion event within 5 s (i.e., player just started moving from a settled position). Min period 1200 s between pairs (~3/h). Capture LR + HR + depth + motion + normals on frame `t`, then LR + depth + motion + normals on `t+1` (HR dropped to save 3 MB). ~8.5 MB per pair.
+- Aggressive dedup: drop any capture if perceptual-hash distance < 10 from any frame captured in the last 30 min
+- Metadata: `capture_mode = "trickle"` always; static singles have `burst_*` fields absent; pairs have `burst_uuid`, `burst_index ∈ {0,1}`, `burst_tier = "short"`
 
 **lite:**
 

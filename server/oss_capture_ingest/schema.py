@@ -231,13 +231,19 @@ def validate_metadata(meta: Any) -> Dict[str, Any]:
                 "capture_mode must be 'trickle', 'lite', 'regular', or "
                 "'INSANE' when present"
             )
-        # trickle is single-frame (no burst). If trickle, burst_uuid +
-        # burst_index + burst_tier should all be absent.
+        # trickle has TWO capture paths: static singles (no burst fields)
+        # and opportunistic motion pairs (burst_index ∈ {0,1},
+        # burst_tier='short'). Reject anything else for trickle.
         if capture_mode == "trickle":
-            if burst_uuid is not None or burst_index is not None or burst_tier is not None:
+            if burst_index is not None and burst_index not in (0, 1):
                 raise SchemaError(
-                    "capture_mode='trickle' is single-frame; burst_uuid, "
-                    "burst_index, and burst_tier must all be absent"
+                    "capture_mode='trickle' opportunistic pairs are 2 frames; "
+                    "burst_index must be 0 or 1"
+                )
+            if burst_tier is not None and burst_tier != "short":
+                raise SchemaError(
+                    "capture_mode='trickle' supports only burst_tier='short' "
+                    "(opportunistic motion pairs); long bursts are lite+ only"
                 )
 
     return {
