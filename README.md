@@ -54,7 +54,19 @@ Source: [trt-int8-quantization](docs/superpowers/experiments/2026-05-03-trt-int8
 
 Steam Deck latency is unmeasured. Real Deck workloads upscale from 540p, 360p, or 240p up to Deck's native 800p (1280×800). Nothing in this table corresponds to a Deck workload, and v4 has not been benchmarked on Deck hardware. The Pico tier and hand-tuned Vulkan compute kernels (both v6) are prerequisites for that measurement.
 
-FSR 2/3 runs at roughly 0.7 to 1 ms in the same comparison band, on hand-tuned compute shaders with no ML. v4 is 20 to 40 times slower at higher quality. Closing that gap is what v6's per-vendor kernels are for.
+v4's current latency reflects stock TensorRT FP16 with no per-vendor kernel optimization. Closing the gap to vendor stacks is the entire point of the custom-kernel sprint planned for v6. The table below gives the budgets v6 is targeting parity or competitiveness with.
+
+| System | 1080p → 4K (typical) | 720p → 1440p (typical) | Hardware | Notes |
+|---|---|---|---|---|
+| FSR 2 / FSR 3 SR (compute shader) | ~0.7–1.0 ms | ~0.4–0.7 ms | RDNA2+, generic GPUs | hand-tuned shaders, no ML |
+| DLSS 2 / DLSS 3 SR (CNN) | ~1.5–2.5 ms | ~1.0–1.5 ms | RTX 20+ via NGX | tensor-core-resident MMA |
+| DLSS 4 SR (transformer, 2025) | ~3–4 ms | ~2–3 ms | RTX 30+ FP16 | ~4× compute of CNN model |
+| DLSS 4 SR (transformer, FP8 path) | ~1.5–2 ms | ~1.0–1.5 ms | RTX 40+ / RTX 50+ FP8 | tensor-core FP8 |
+| FSR 4 (ML, 2025) | ~1.5–2 ms | ~1.0–1.5 ms | RDNA4 only | hand-tuned matrix-core kernels |
+| XeSS XMX | ~2–3 ms | ~1.5–2 ms | Intel Arc | XMX matrix engines |
+| XeSS dp4a fallback | ~5–8 ms | ~3–5 ms | non-Arc, cross-vendor | graceful degradation |
+
+Numbers are approximate published or independently-measured ranges and vary by GPU SKU, scene, and exact resolution. Primary sources: NVIDIA DLSS technical blog, AMD GPUOpen FSR documentation, Intel XeSS whitepaper, Digital Foundry latency-analysis measurements.
 
 v5 quality numbers do not exist yet. Pixel-temporal training has not finished. Gaussian-temporal training has not started.
 
@@ -109,15 +121,17 @@ Cyberpunk 2077 is the initial validation target. Full design: [oss-capture-tool-
 
 ## Hardware tiers (v6)
 
-All three tiers share the v6 architecture, scaled. Distillation chain: Heavy → Standard → Pico.
+All three tiers share the v6 architecture, scaled. Distillation chain: Heavy → Standard → Pico. Latency targets below are ship goals, not current measurements. They are conditional on the per-vendor native-kernel work landing at vendor-stack optimization quality (CUDA + CUTLASS + tensor-core MMA on NVIDIA, HIP + rocWMMA on AMD desktop, Metal + ANE on Apple Silicon, Level Zero + XMX on Intel Arc, hand-tuned Vulkan compute for Steam Deck and matrix-accelerator-less hardware). Stock-runtime latency is several × these numbers; the gap closes through the custom-kernel sprint, not for free.
 
-| Tier | Backbone | Canvas | Target hardware | Latency target | Backend |
+| Tier | Backbone | Canvas | Target hardware | Ship target (conditional) | Backend |
 |---|---|---|---|---|---|
-| Pico | HAT-Tiny (~1M params) | ~1–2K Gaussians | Steam Deck, integrated GPUs, mobile dGPU | ~3 ms at 720p → 1080p | Vulkan compute |
-| Standard | HAT-Small (~5M params) | ~5K Gaussians | RTX 30+, RX 6700+, Arc, M2+ | ~5 ms at 1080p → 1440p | CUDA / HIP / Metal / Level Zero |
-| Heavy | HAT-Base (~15M params) | ~15K Gaussians | RTX 4080+, RX 7900+, M4 Max | ~10 ms at 1440p → 4K | same per-vendor path |
+| Pico | HAT-Tiny (~1M params) | ~1–2K Gaussians | Steam Deck, integrated GPUs, mobile dGPU | <2 ms at 720p → 1080p | hand-tuned Vulkan compute |
+| Standard | HAT-Small (~5M params) | ~5K Gaussians | RTX 30+, RX 6700+, Arc, M2+ | <3 ms at 1080p → 1440p | CUDA / HIP / Metal / Level Zero |
+| Heavy | HAT-Base (~15M params) | ~15K Gaussians | RTX 4080+, RX 7900+, M4 Max | <4 ms at 1440p → 4K | same per-vendor path |
 
-Quality modes (planned, in upscale ratio): Ultra Performance 33%, Performance 50%, Balanced 59%, Quality 67%, Ultra Quality 77%. OSAA is anti-aliasing at native resolution (100%).
+The targets bracket vendor parity: Pico undercuts FSR 2/3 in the Deck-class band where ML SR alternatives don't currently exist, Standard sits in DLSS 2/3 SR territory, and Heavy lands at DLSS 4 transformer territory. See the budget comparison table earlier in this README for context.
+
+Quality modes (planned, by upscale ratio): Ultra Performance 33%, Performance 50%, Balanced 59%, Quality 67%, Ultra Quality 77%. OSAA is anti-aliasing at native resolution (100%).
 
 ---
 

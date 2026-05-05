@@ -82,11 +82,15 @@ Frame extrapolation falls out for free: render the same canvas at α ∈ (0, 1) 
 
 ## 3. Three model tiers — same architecture, scaled
 
-| Tier | Backbone | Canvas | Target hardware | Inference budget | Storage |
+Latency targets below are ship goals, not current measurements. They are conditional on the per-vendor native-kernel sprint landing at vendor-stack optimization quality (CUDA + CUTLASS + tensor-core MMA on NVIDIA, HIP + rocWMMA on AMD desktop, Metal + ANE on Apple Silicon, Level Zero + XMX on Intel Arc, hand-tuned Vulkan compute for Deck-class hardware). Stock-runtime latency on the same models is several × the numbers below.
+
+| Tier | Backbone | Canvas | Target hardware | Ship target (conditional) | Storage |
 |---|---|---|---|---|---|
-| **Pico** | HAT-Tiny (~1M params) | ~1-2K Gaussians | Steam Deck, integrated GPUs, mobile dGPU | ~3 ms at 720p→1080p (Vulkan compute, no matrix accel) | ~12 MB |
-| **Standard** | HAT-Small (~5M params) | ~5K Gaussians | Mainstream desktop (RTX 30+, RX 6700+, Arc, M2+) | ~5 ms at 1080p→1440p | ~30 MB |
-| **Heavy** | HAT-Base (~15M params) | ~15K Gaussians | Enthusiast (RTX 4080+, RX 7900+, M4 Max) | ~10 ms at 1440p→4K | ~80 MB |
+| **Pico** | HAT-Tiny (~1M params) | ~1-2K Gaussians | Steam Deck, integrated GPUs, mobile dGPU | <2 ms at 720p→1080p (Vulkan compute, no matrix accel) | ~12 MB |
+| **Standard** | HAT-Small (~5M params) | ~5K Gaussians | Mainstream desktop (RTX 30+, RX 6700+, Arc, M2+) | <3 ms at 1080p→1440p | ~30 MB |
+| **Heavy** | HAT-Base (~15M params) | ~15K Gaussians | Enthusiast (RTX 4080+, RX 7900+, M4 Max) | <4 ms at 1440p→4K | ~80 MB |
+
+These targets bracket vendor parity. Pico undercuts FSR 2/3 (~0.7-1 ms compute shader) on Deck-class hardware where ML SR alternatives don't currently exist. Standard sits in DLSS 2/3 SR territory (~1.5-2.5 ms at 1080p→4K typical). Heavy lands at DLSS 4 transformer territory (~3-4 ms at 1080p→4K on RTX 30+ FP16, ~1.5-2 ms with FP8 on RTX 40+/50+). FSR 4 ML on RDNA4 is in similar territory to DLSS 2/3 (~1.5-2 ms at 1080p→4K). XeSS XMX is ~2-3 ms on Arc; XeSS dp4a fallback is ~5-8 ms cross-vendor.
 
 Distillation cascades **Heavy → Standard → Pico**. Same training data, same loss, same architecture, just sized.
 
