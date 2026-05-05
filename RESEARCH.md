@@ -10,6 +10,12 @@
 
 ## Abstract
 
+![v5-pixel-temporal in flight at training step 42K](docs/results/v5-pixel-temporal/in-flight/step-00042000.png)
+
+*In-flight visualization at v5-pixel-temporal training step 42,000 / 80,000 (~52%). Six-panel film strip:* `LR-bilinear  |  bicubic  |  v5-pixel-temporal  |  GT  |  |error|`. *Held-out batch from TartanAir env `oldtown` via `EngineAliasedLRSynth`. This figure is illustrative of in-progress training, not a final measurement; vendor comparisons (DLSS / FSR / XeSS) require apples-to-apples evaluation under the planned DLL-shim infrastructure (Sprint 7), which is unbuilt.*
+
+---
+
 OpenSuperSampling (OSS) is an open, vendor-agnostic alternative to proprietary real-time super-resolution stacks (DLSS, FSR, XeSS). The canonical v6 architecture is an online Gaussian-temporal super-resolver: a HAT-Base spatial backbone produces coarse high-resolution features from the current low-resolution frame plus engine G-buffers; these features cross-attend to a persistent canvas of 5K–15K 2D Gaussians, accumulated across frames and warped per-frame by an analytical sub-pixel transform with explicit covariance resampling in the manner of Zhou et al. (GS-STVSR, 2026). A Spatial-Temporal Variation Score (Yuan et al., NeurIPS 2025) drives score-based active pruning. Because the canvas is rendered through the same rasterizer at fractional time positions $\alpha \in (0, 1)$, frame extrapolation falls out as a one-tensor-add byproduct rather than a separate ML network. Three model tiers (Pico, Standard, Heavy) share one architecture, distilled, and target every major GPU vendor through per-vendor custom kernels. Integration is planned through DLL-shim drop-in for any title already supporting DLSS, FSR, or XeSS — no game-developer cooperation required. The project is pre-alpha; v4 single-frame baseline is trained, v5 temporal validation tracks are in training/queued, v6 implementation is not yet started.
 
 ---

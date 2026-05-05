@@ -54,6 +54,63 @@ How to read this file:
 **[Voronoi-HSI]** Zhang et al. (2026). *Voronoi-guided Bilateral 2D Gaussian Splatting for Arbitrary-Scale Hyperspectral Image Super-Resolution*. arXiv:2604.17727
 > Adjacent work — hyperspectral (remote-sensing) SR via Voronoi-partitioned 2D-GS with bilateral weighting. Different problem domain than RGB game SR; cited for completeness on the 2D-GS-for-arbitrary-scale-SR literature axis.
 
+**[upscale3dgs]** Niedermayr, Neuhauser, Westermann (2025). *Lightweight Gradient-Aware Upscaling of 3D Gaussian Splatting Images*. ICCV 2025. https://github.com/KeKsBoTer/upscale3dgs
+> Uses analytical image-space gradients of Gaussians for **bicubic spline interpolation upscaling** with low overhead; reports 3-4× rendering speedup vs full-res 3DGS, training-time integration improves reconstruction. Explicit temporal-stability claim. **Direct study target for OSS Pico tier** alongside GRAPE.
+
+**[GSASR]** Hu et al. (2025). *GSASR: Generalized and Efficient 2D Gaussian Splatting for Arbitrary-scale Super-Resolution*. ICCV 2025. https://github.com/ChrisDud0257/GSASR
+> Feed-forward predicts millions of image-conditioned 2D Gaussians for arbitrary scales (incl. ×6, ×12 OOD); **supports HAT-L encoders** — direct architectural overlap with v6's HAT backbone choice. Custom CUDA scale-aware 2D rasterizer. Active 2025, demo + weights released. **Primary OSS prior-art baseline for benchmarking v6 against.**
+
+**[GaussianSR-AAAI]** Hu et al. (2025). *High Fidelity 2D Gaussian Splatting for Arbitrary-Scale Image Super-Resolution*. AAAI 2025. https://github.com/tljxyys/GaussianSR
+> Per-pixel continuous Gaussian field for arbitrary-scale SR with a classifier dynamically assigning Gaussian kernels per pixel. Distinct from the SDS-prior 3D "GaussianSR".
+
+**[Sequence-Matters]** Lee et al. (2025). *Sequence-Matters: Harnessing Video Models in Super-Resolution*. AAAI 2025. https://github.com/Ko-Lani/Sequence-Matters
+> Adaptive-Length-Sequencing orders LR multi-view images into pseudo-video subsequences, then applies off-the-shelf VSR (no fine-tuning) to drive 3DGS-SR. Avoids the LR-3DGS-render artifacts SuperGaussian struggles with. Useful auxiliary path for OSS data augmentation in v6.1.
+
+**[S2Gaussian]** Wan et al. (2025). *S2Gaussian: Sparse-View Super-Resolution 3D Gaussian Splatting*. CVPR 2025. https://jeasco.github.io/S2Gaussian/
+> Two-stage pipeline (LR-GS densify → "Gaussian Shuffle Split" → HR-GS optimize) handling combined sparse-view + LR. Less directly relevant to streaming SR but documents densification/upscaling trade-offs.
+
+**[SplatSuRe]** Asthana et al. (2025). *SplatSuRe: Selective Super-Resolution for Multi-view Consistent 3DGS*. arXiv:2512.02172
+> Geometry-aware **selective** SR — applies 2D SR only in undersampled regions. Beats SRGS, GaussianSR, S2Gaussian, etc. on multi-view consistency. Selective-application principle applicable to v6 (apply expensive ops only where needed).
+
+**[SuperGS]** Pancw et al. (2024). *SuperGS: Multi-Resolution Feature Gaussian Splatting with Latent Feature Field*. arXiv:2410.02571
+> Multi-resolution Feature Gaussian Splatting + Gradient-guided Selective Splitting (GSS) for upsampling Gaussian primitives during HR optimization. Coarse-to-fine. Beihang group.
+
+**[SuperGaussian]** Adobe Research (2024). *SuperGaussian: Repurposing Video Models for 3D Super Resolution*. ECCV 2024. https://github.com/adobe-research/SuperGaussian
+> Uses pretrained video upsampling priors (RealBasicVSR, VideoGigaGAN) to upsample rendered novel views, then refits Gaussians. Modular, accepts NeRF / GS / mesh / RGB-D inputs.
+
+**[AAA-Gaussians]** Thomas et al. (2025). *AAA-Gaussians: Adaptive 3D Smoothing + Frustum-Bounded Anti-Aliasing*. ICCV 2025. https://github.com/DerThomy/AAA-Gaussians
+> Adaptive 3D smoothing filter + view-space frustum bounding; **eliminates popping artifacts**; full-3D-evaluated rasterizer (built on StopThePop). Directly applicable to OSS temporal-stability claim — popping is the artifact we most need to avoid in moving game cameras.
+
+**[AA-2DGS]** Younes et al. (2025). *Anti-Aliased 2D Gaussian Splatting*. NeurIPS 2025. https://github.com/maeyounes/AA-2DGS
+> World-space flat smoothing kernel + object-space Mip filtering for 2D-GS specifically. **OSS uses 2D Gaussians** so this is direct architectural reading.
+
+**[Analytic-Splatting]** Zhang et al. (2024). *Analytic-Splatting: Anti-Aliased 3DGS via Analytical Pixel-Area Integral*. ECCV 2024 Oral. https://github.com/lzhnb/Analytic-Splatting
+> Analytical integration of Gaussian density over pixel area for AA. Mathematical reference for OSS rasterizer-level AA.
+
+**[Mipmap-GS]** *Mipmap-GS: scale-consistency loss for 3DGS*. https://github.com/renaissanceee/Mipmap-GS
+> Plug-in scale-consistency loss; +9.25 dB zoom-in / +10.40 dB zoom-out on NeRF-synthetic. Loss recipe candidate for v6 multi-resolution training.
+
+**[MEGA]** Xie et al. (2025). *MEGA: Memory-Efficient 4D Gaussian Splatting*. ICCV 2025. https://github.com/Xinjie-Q/MEGA
+> Decomposes color into per-Gaussian DC + shared lightweight AC predictor (drops 144-coef SH); entropy-constrained deformation field. Aggressive memory reduction. Reference for OSS v6 canvas memory budget.
+
+**[4D-Rotor-Gaussians]** Wei et al. (2024). *4D-Rotor Gaussian Splatting*. SIGGRAPH 2024. https://github.com/weify627/4D-Rotor-Gaussians
+> Native 4D XYZT Gaussians with **geometric-algebra rotor** rotation representation (rotors generalize quaternions to 4D cleanly). Up to 583 FPS on RTX 4090. PKU. Reference for any v7+ extension to native-4D primitives.
+
+**[3DGStream]** Sun et al. (2024). *3DGStream: On-the-fly 4D Streaming*. CVPR 2024 Highlight. https://github.com/SJoJoK/3DGStream
+> Per-frame on-the-fly training in ~12s, 200 FPS rendering. Neural Transformation Cache (tiny-cuda-nn). Reference for online streaming case.
+
+**[GaussianVideo-cyberiada]** Bond et al. (2024). *GaussianVideo: Neural-ODE camera trajectory + 3DGS for video*. https://cyberiada.github.io/GaussianVideo/
+> Explicit **frame interpolation at arbitrary timesteps** + arbitrary spatial resampling. **Direct relevance to OSS-FX** — same α-conditioned rendering pattern. 44.21 PSNR @ 960×540, 93 FPS A40.
+
+**[vk_gaussian_splatting]** NVIDIA (2025). *Vulkan Gaussian Splatting Testbed: 3DGRT + 3DGUT + DLSS-RR Integration*. https://github.com/nvpro-samples/vk_gaussian_splatting
+> NVIDIA-published Vulkan testbed implementing **3DGRT (3D Gaussian Ray Tracing)**, **3DGUT (Unscented Transform)**, and **DLSS Ray Reconstruction integration for AA + upscaling + denoising of splats**. The closest existing reference for "DLSS-on-splats" — **OSS upper-bound benchmark target** when DLL-shim runtime exists.
+
+**[GSCodec_Studio]** Liu et al. (2025). *GSCodec_Studio: Modular static + dynamic GS compression*. https://github.com/JasonLSC/GSCodec_Studio
+> Modular framework on gsplat; integrates MPEG GSC tooling (PCC + video-codec wrappers). Reference experimental harness for v6+ canvas compression.
+
+**[3DGStream-survey]** OSS-curated (2026). *Existing Gaussian-Splatting Repos Survey for OSS*. `docs/research/2026-05-05-existing-gaussian-splatting-repos-survey.md`
+> 47 obscure-but-active GS repos categorized by relevance to OSS spatio-temporal SR, anti-aliasing, 4D temporal, engine integration, compression, PBR/RT, and mesh hybrids. Updated 2026-05-05.
+
 ---
 
 ## 2. Super-Resolution Architectures (Transformers, CNNs)

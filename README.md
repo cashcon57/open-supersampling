@@ -16,6 +16,12 @@ No closed weights. No SDK SLAs. No vendor lock-in. Pixel-based and Gaussian-base
 
 ## Current state (2026-05-04)
 
+### Visual snapshot — v5-pixel-temporal in flight
+
+![v5-pixel-temporal in flight at step 42K](docs/results/v5-pixel-temporal/in-flight/step-00042000.png)
+
+*Six-panel film strip from the in-flight viz daemon at training step 42,000 / 80,000 (~52%). Reading order:* `LR-bilinear  |  bicubic  |  v5-pixel-temporal  |  GT  |  |error|`. *In-flight illustration only — not a final measurement, not a vendor comparison. Apples-to-apples vendor benchmarks require the Sprint 7 DLL-shim infrastructure (unbuilt). See [docs/results/](docs/results/README.md) for gallery layout and regeneration.*
+
 ### What works
 
 - **OSS-SR** — 2× super-resolution CNN (`sr_cnn` / `simple` backbone, standard tier, ~605K params)
