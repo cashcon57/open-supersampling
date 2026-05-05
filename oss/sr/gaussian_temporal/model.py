@@ -36,10 +36,32 @@ from oss.sr.gaussian_temporal.transformer import GaussianMultiFrameTransformer
 
 
 class GaussianTemporalSRModel(nn.Module):
-    def __init__(self, in_channels: int = 12, scale: int = 2, max_count: int = 16384) -> None:
+    def __init__(
+        self,
+        in_channels: int = 12,
+        scale: int = 2,
+        max_count: int = 16384,
+        color_activation: str = "softplus",
+    ) -> None:
+        """
+        Args:
+            color_activation: ``"sigmoid"`` clamps fitter RGB to [0, 1]
+                (SDR-only — HDR values lossy-clipped to peak white).
+                ``"softplus"`` (default) outputs unbounded non-negative
+                values, supporting HDR linear-light input/output. SDR
+                training data still trains the model fine since softplus
+                stays linear-ish near 0 and saturates softly above; the
+                fitter just isn't artificially capped at 1.0 anymore.
+                Mirrors the convention in oss/gaussian/network/output_head.py.
+        """
         super().__init__()
+        if color_activation not in ("sigmoid", "softplus"):
+            raise ValueError(
+                f"color_activation must be 'sigmoid' or 'softplus'; got {color_activation!r}"
+            )
         self.scale = scale
         self.max_count = max_count
+        self.color_activation = color_activation
         self.encoder = GBufferEncoder(in_channels=in_channels, feat_dim=128, tile_size=16)
         # Per-frame fitter used to seed Gaussian colors from encoder features.
         # This keeps Phase 1 trainable while bypassing temporal attention.
@@ -86,8 +108,16 @@ class GaussianTemporalSRModel(nn.Module):
             raise ValueError(f"phase must be in {{1,2,3,4}}; got {phase}.")
 
         feats = self.encoder(lr_inputs)               # (1, 128, h/16, w/16)
+        # softplus by default: unbounded non-negative output supports HDR
+        # linear-light values >1.0; sigmoid path retained for SDR-only
+        # callers that explicitly want [0,1] clamping.
+        rgb_raw = self.fitter_rgb_head(feats)
+        rgb_activated = (
+            torch.sigmoid(rgb_raw) if self.color_activation == "sigmoid"
+            else F.softplus(rgb_raw)
+        )
         fitter_rgb_hr = F.interpolate(
-            torch.sigmoid(self.fitter_rgb_head(feats)),
+            rgb_activated,
             size=(h_hr, w_hr),
             mode="bilinear",
             align_corners=False,

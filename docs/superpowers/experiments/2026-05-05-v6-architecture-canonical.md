@@ -294,17 +294,33 @@ This makes the asset story align with industry direction. The OSS canvas is just
 
 ---
 
-## 14. Followups for v7+
+## 14. HDR migration plan (v6.0 partial → v6.1 full)
+
+HDR support was made shippable-with-caveats in commit `694a0f3` (sigmoid → softplus on the fitter RGB head). Architecture now accepts and produces unbounded non-negative linear-light values; only the training corpus is the bottleneck.
+
+| Phase | Change | Effort | Outcome |
+|---|---|---|---|
+| **v6.0 (now)** | softplus output + 8-bit sRGB training corpus | done | HDR-shippable at ~70-80% of SDR quality on same content |
+| **v6.1 — HDR data** | INSANE-mode HDR capture from HDR-rendered games + Hypersim re-rendered in linear scRGB FP16; retrain teacher on HDR mix | ~2-4 weeks data + retrain | competitive with DLSS HDR on rendered content |
+| **v6.2 — wide gamut** | BT.709 vs BT.2020 awareness; explicit linear-vs-sRGB transfer-function metadata in the canvas | ~1 week eng | correct color across HDR pipelines (PQ, HLG, scRGB) |
+| **v7+ — perceptual loss for HDR** | replace VGG-LPIPS (trained on SDR ImageNet) with HDR-aware perceptual loss; possibly tonemapped-LPIPS during training | research-grade | closes the perceptual-quality gap on HDR specifically |
+
+Risk: the cheap softplus-only fix may slightly regress SDR quality on the upper end of [0, 1] because training will pull bright values up under softplus's near-linear behavior at output > 0. Worth measuring on the held-out batch when v6 trains. If it regresses meaningfully, we add a runtime `color_activation` switch and ship two model variants (sigmoid-LDR / softplus-HDR) until v6.1 lands.
+
+---
+
+## 15. Followups for v7+
 
 - Per-Gaussian time-MLP heads for view-dependent appearance
 - Native 4D primitives if streaming context expands
 - Relightable Gaussians once INSANE-mode dataset accumulates
 - GRTX integration into OSS-RG track
 - glTF KHR_gaussian_splatting extension features beyond static loading
+- HDR-aware perceptual loss (per HDR migration plan §14)
 
 ---
 
-## 15. References
+## 16. References
 
 See `docs/research/2026-05-05-gaussian-temporal-research-deep-dive.md` for the worked-out math underlying every component above.
 

@@ -189,6 +189,7 @@ We list the known weaknesses of the current design, in decreasing order of expec
 - **Training corpus is currently TartanAir-easy-mode plus Hypersim.** AAA volumetric and transparency content (smoke, foliage, particle systems, hair, glass) is not well-represented. Generalization to that content will require the OSS Capture Tool community pipeline (Sprint 7-data) to accumulate real game captures, and is gated on contributor opt-in volume.
 - **Steam Deck is not yet viable.** RDNA 2 has no matrix accelerator. The v6 Pico tier targets Steam Deck through hand-tuned Vulkan compute, which is the same engineering pattern FSR 2 uses, but Pico is not yet implemented or trained.
 - **Six-month timeline-to-demo is optimistic.** The honest expected-case slip is to twelve months; the design memo acknowledges this explicitly.
+- **HDR support is partial.** As of commit `694a0f3` the gaussian-temporal model uses a softplus output activation, so HDR input/output flows through architecturally without clipping (sigmoid-clamping was removed). However, the entire training corpus (TartanAir, Hypersim, SRGD) is 8-bit sRGB. HDR-specific patterns — sun discs, neon, specular highlights, BT.2020 wide-gamut colors — are not well-represented in what the model has seen. Expected HDR quality is approximately 70–80% of SDR quality on the same content class: noticeably better than bicubic, behind DLSS HDR. v6.1 schedules retraining on HDR-encoded data via INSANE-mode capture of HDR-rendered games plus re-rendered Hypersim in linear scRGB to close this gap.
 
 ---
 
