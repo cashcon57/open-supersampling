@@ -1,0 +1,33 @@
+cff-version: 1.2.0
+message: "If you use OpenSuperSampling (OSS) in academic work, please cite it as below."
+title: "OpenSuperSampling: Open, Cross-Vendor Real-Time Game Super-Resolution and Frame Extrapolation"
+authors:
+  - family-names: Conway
+    given-names: Cash
+    affiliation: "OpenSuperSampling Project"
+type: software
+version: "0.2.0-dev"
+date-released: 2026-04-29
+url: "https://github.com/cashcon57/open-supersampling"
+repository-code: "https://github.com/cashcon57/open-supersampling"
+license: Apache-2.0
+keywords:
+  - super-resolution
+  - real-time-rendering
+  - gaussian-splatting
+  - temporal-super-resolution
+  - frame-extrapolation
+  - game-engine
+  - open-source
+  - cross-vendor
+abstract: >-
+  OpenSuperSampling is a pre-alpha open-source real-time game super-resolution
+  and frame-extrapolation system targeting cross-vendor deployment via custom
+  per-GPU-vendor kernels (CUDA, HIP, Metal, Level Zero, Vulkan compute). The
+  v6 architecture is covariance-resampled online Gaussian-temporal SR with a
+  HAT spatial backbone, persistent Gaussian canvas with engine-motion-vector
+  analytical sub-pixel warp, cross-attention pixel-Gaussian fusion, and
+  Spatial-Temporal Variation Score pruning. Frame extrapolation is provided
+  as a byproduct of alpha-conditioned canvas rendering at fractional time
+  positions. Game integration via DLL-shim drop-in compatible with any
+  DLSS/FSR/XeSS-supporting title — no developer cooperation required.
