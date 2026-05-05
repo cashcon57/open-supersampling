@@ -85,15 +85,16 @@ The architectural moat (why pixel-grid SR — DLSS, FSR, XeSS — provably canno
 
 ### Measured inference latency (RTX 3080 Ti, TensorRT FP16, narrow profile, single-frame v4)
 
-All numbers below are measured on the same RTX 3080 Ti host with TRT FP16 narrow-profile engines. Source experiment: [trt-int8-quantization](docs/superpowers/experiments/2026-05-03-trt-int8-quantization.md). The "Deck-target res" row is at the resolution Steam Deck would render at, but **not on Steam Deck hardware** — actual Deck latency on RDNA2 + Vulkan compute is unmeasured and will be substantially higher pending the Pico-tier model + hand-tuned Vulkan kernels (see [v6 canonical memo](docs/superpowers/experiments/2026-05-05-v6-architecture-canonical.md)).
+All numbers measured on RTX 3080 Ti with TRT FP16 narrow-profile engines. Source: [trt-int8-quantization](docs/superpowers/experiments/2026-05-03-trt-int8-quantization.md).
 
 | Input → Output | Median latency | Hardware | Path |
 |---|---|---|---|
 | 720p → 1440p | 15.6 ms (~64 fps headroom) | RTX 3080 Ti | TRT FP16 |
-| 800p → 1600p (Deck-target res) | 18.6 ms | RTX 3080 Ti | TRT FP16 |
 | 1080p → 4K | 37.6 ms (~27 fps headroom) | RTX 3080 Ti | TRT FP16 |
 
-**Comparison: FSR 2/3 at ~0.7–1 ms** (hand-tuned compute shaders, no ML). v4 is roughly 20–40× slower than the dominant non-ML upscaler in the same quality tier. Closing that gap is the second-half roadmap below. v5 temporal latency will be measured once a checkpoint hits the held-out gate; **actual Steam Deck latency requires the Pico-tier Vulkan-compute path that ships with v6.**
+**Steam Deck latency is unmeasured.** Real Deck workloads upscale **from** 540p / 360p / 240p **to** Deck's native 800p (1280×800), not 2× upscales above 800p. None of those configurations have been benchmarked on either the RTX 3080 Ti or actual Deck hardware. The Pico-tier model + hand-tuned Vulkan-compute kernels (v6) are prerequisites for measuring Deck latency on Deck hardware. See [v6 canonical memo](docs/superpowers/experiments/2026-05-05-v6-architecture-canonical.md).
+
+**Comparison: FSR 2/3 at ~0.7–1 ms** (hand-tuned compute shaders, no ML). v4 is roughly 20–40× slower than the dominant non-ML upscaler in the same quality tier. Closing that gap is the v6 / Sprint 6 roadmap. v5 temporal latency will be measured once a checkpoint hits the held-out gate.
 
 ### Known limits
 
