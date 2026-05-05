@@ -85,13 +85,15 @@ The architectural moat (why pixel-grid SR — DLSS, FSR, XeSS — provably canno
 
 ### Measured inference latency (RTX 3080 Ti, TensorRT FP16, narrow profile, single-frame v4)
 
-| Input → Output | Median latency |
-|---|---|
-| Steam Deck 800p | 18.6 ms |
-| 720p → 1440p | 15.6 ms (~64 fps headroom) |
-| 1080p → 4K | 37.6 ms (~27 fps headroom) |
+All numbers below are measured on the same RTX 3080 Ti host with TRT FP16 narrow-profile engines. Source experiment: [trt-int8-quantization](docs/superpowers/experiments/2026-05-03-trt-int8-quantization.md). The "Deck-target res" row is at the resolution Steam Deck would render at, but **not on Steam Deck hardware** — actual Deck latency on RDNA2 + Vulkan compute is unmeasured and will be substantially higher pending the Pico-tier model + hand-tuned Vulkan kernels (see [v6 canonical memo](docs/superpowers/experiments/2026-05-05-v6-architecture-canonical.md)).
 
-These numbers are honest and current. **The deliberate comparison is FSR 2/3 at ~0.7–1 ms** (hand-tuned compute shaders, no ML). We are roughly 20–40× slower than the dominant non-ML upscaler in the same quality tier. Closing that gap is the second-half roadmap below. v5 temporal latency will be measured once a checkpoint hits the held-out gate.
+| Input → Output | Median latency | Hardware | Path |
+|---|---|---|---|
+| 720p → 1440p | 15.6 ms (~64 fps headroom) | RTX 3080 Ti | TRT FP16 |
+| 800p → 1600p (Deck-target res) | 18.6 ms | RTX 3080 Ti | TRT FP16 |
+| 1080p → 4K | 37.6 ms (~27 fps headroom) | RTX 3080 Ti | TRT FP16 |
+
+**Comparison: FSR 2/3 at ~0.7–1 ms** (hand-tuned compute shaders, no ML). v4 is roughly 20–40× slower than the dominant non-ML upscaler in the same quality tier. Closing that gap is the second-half roadmap below. v5 temporal latency will be measured once a checkpoint hits the held-out gate; **actual Steam Deck latency requires the Pico-tier Vulkan-compute path that ships with v6.**
 
 ### Known limits
 
