@@ -105,6 +105,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="Max # alive Gaussians in the field.")
     p.add_argument("--max-area", type=float, default=64.0,
                    help="Hinge knee for covariance area regularization term.")
+    p.add_argument("--held-out-envs", type=str, nargs="*", default=None,
+                   help="TartanAir env names to exclude from training (held-out "
+                        "for eval). Mirrors the pixel trainer's flag.")
     return p.parse_args(argv)
 
 
@@ -257,6 +260,17 @@ def build_datasets(args: argparse.Namespace):
 
     if args.tartanair_root is not None:
         ds_t = TartanAirGaussianDataset(root=args.tartanair_root, scale=2.0)
+        if args.held_out_envs:
+            held_out = set(args.held_out_envs)
+            before = len(ds_t._items)
+            ds_t._items = [
+                t for t in ds_t._items
+                if not any(env in t[0].parts for env in held_out)
+            ]
+            log.info(
+                "tartanair held-out filter: %s -> dropped %d/%d items, %d remain",
+                sorted(held_out), before - len(ds_t._items), before, len(ds_t._items),
+            )
         ds_t = adapt_tartanair(ds_t)
         win_t = TrajectoryWindowDataset(ds_t, window=args.window)
         tartan_loader = DataLoader(
