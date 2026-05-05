@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+from email.message import Message
 from pathlib import Path
+from urllib import error
 
+import pytest
+
+import oss.capture.uploader as uploader
 from oss.capture.uploader import (
     CaptureFrame,
     UploadConfig,
@@ -51,6 +56,84 @@ def test_upload_with_retries_deletes_on_200_and_4xx(tmp_path: Path) -> None:
     assert not accepted.meta_path.exists()
     assert not rejected.frame_path.exists()
     assert not rejected.meta_path.exists()
+
+
+def test_429_does_not_delete_on_first_response(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    pending = tmp_path / "pending"
+    capture = make_synthetic_capture(pending)
+
+    def rate_limited(req, timeout):  # noqa: ANN001 - matches urllib hook.
+        headers = Message()
+        raise error.HTTPError(req.full_url, 429, "Too Many Requests", headers, None)
+
+    monkeypatch.setattr(uploader.request, "urlopen", rate_limited)
+
+    result = post_frame(
+        CaptureFrame(capture.frame_path, capture.meta_path),
+        "https://example.test/ingest",
+        "token",
+    )
+
+    assert result.status_code == 429
+    assert result.retryable is True
+    assert result.terminal is False
+    assert capture.frame_path.exists()
+    assert capture.meta_path.exists()
+
+
+def test_429_with_retry_after_header_uses_server_hint(tmp_path: Path) -> None:
+    pending = tmp_path / "pending"
+    capture = make_synthetic_capture(pending)
+    sleeps: list[float] = []
+    responses = [
+        UploadResult(429, terminal=False, retryable=True, retry_after_seconds=30.0),
+        UploadResult(200, terminal=True, retryable=False),
+    ]
+
+    def scripted(*_: object) -> UploadResult:
+        return responses.pop(0)
+
+    result = upload_with_retries(
+        CaptureFrame(capture.frame_path, capture.meta_path),
+        _config(pending),
+        post=scripted,
+        sleep=sleeps.append,
+    )
+
+    assert result.status_code == 200
+    assert sleeps == [30.0]
+    assert not capture.frame_path.exists()
+    assert not capture.meta_path.exists()
+
+
+def test_429_after_max_attempts_falls_back_to_delete(tmp_path: Path) -> None:
+    pending = tmp_path / "pending"
+    capture = make_synthetic_capture(pending)
+    attempts: list[int] = []
+    config = UploadConfig(
+        pending_dir=pending,
+        ingest_url="https://example.test/ingest",
+        install_token="token",
+        max_attempts=2,
+        backoff_seconds=(0.0, 0.0),
+    )
+
+    def always_limited(*_: object) -> UploadResult:
+        attempts.append(429)
+        return UploadResult(429, terminal=False, retryable=True, retry_after_seconds=0.0)
+
+    result = upload_with_retries(
+        CaptureFrame(capture.frame_path, capture.meta_path),
+        config,
+        post=always_limited,
+        sleep=lambda _: None,
+    )
+
+    assert result.status_code == 429
+    assert result.terminal is True
+    assert attempts == [429, 429]
+    assert not capture.frame_path.exists()
+    assert not capture.meta_path.exists()
 
 
 def test_upload_with_retries_drops_after_exhausted_5xx(tmp_path: Path) -> None:

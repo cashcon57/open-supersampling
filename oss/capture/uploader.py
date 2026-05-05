@@ -8,6 +8,7 @@ archive.
 from __future__ import annotations
 
 import argparse
+import email.utils
 import json
 import logging
 import mimetypes
@@ -16,6 +17,7 @@ import random
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterator, Sequence
 from urllib import error, request
@@ -50,6 +52,7 @@ class UploadResult:
     terminal: bool
     retryable: bool
     message: str = ""
+    retry_after_seconds: float | None = None
 
 
 def default_capture_root() -> Path:
@@ -161,6 +164,26 @@ def _multipart_body(frame: CaptureFrame, boundary: str) -> bytes:
     return b"".join(parts)
 
 
+def _parse_retry_after(value: str | None, *, now: datetime | None = None) -> float | None:
+    if not value:
+        return None
+    value = value.strip()
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        pass
+
+    try:
+        retry_at = email.utils.parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if retry_at.tzinfo is None:
+        retry_at = retry_at.replace(tzinfo=timezone.utc)
+    if now is None:
+        now = datetime.now(timezone.utc)
+    return max(0.0, (retry_at - now).total_seconds())
+
+
 def post_frame(frame: CaptureFrame, ingest_url: str, install_token: str, timeout: float = 30.0) -> UploadResult:
     boundary = f"oss-capture-{uuid.uuid4().hex}"
     body = _multipart_body(frame, boundary)
@@ -176,16 +199,26 @@ def post_frame(frame: CaptureFrame, ingest_url: str, install_token: str, timeout
         method="POST",
     )
 
+    retry_after_seconds: float | None = None
     try:
         with request.urlopen(req, timeout=timeout) as resp:
             status = int(resp.status)
+            retry_after_seconds = _parse_retry_after(resp.headers.get("Retry-After"))
     except error.HTTPError as exc:
         status = int(exc.code)
+        retry_after_seconds = _parse_retry_after(exc.headers.get("Retry-After"))
     except (OSError, TimeoutError) as exc:
         return UploadResult(None, terminal=False, retryable=True, message=str(exc))
 
     if 200 <= status < 300:
         return UploadResult(status, terminal=True, retryable=False)
+    if status == 429:
+        return UploadResult(
+            status,
+            terminal=False,
+            retryable=True,
+            retry_after_seconds=retry_after_seconds,
+        )
     if 400 <= status < 500:
         return UploadResult(status, terminal=True, retryable=False)
     return UploadResult(status, terminal=False, retryable=True)
@@ -206,7 +239,13 @@ def upload_with_retries(
             delete_frame_pair(frame)
             return last
         if attempt < attempts - 1:
-            delay = config.backoff_seconds[min(attempt, len(config.backoff_seconds) - 1)]
+            base_delay = config.backoff_seconds[min(attempt, len(config.backoff_seconds) - 1)]
+            if last.status_code == 429 and last.retry_after_seconds is not None:
+                delay = last.retry_after_seconds
+            elif last.status_code == 429:
+                delay = base_delay * 4.0
+            else:
+                delay = base_delay
             sleep(delay)
 
     LOGGER.warning(
