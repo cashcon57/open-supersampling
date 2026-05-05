@@ -95,6 +95,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         "held-out eval. Without this, eval on the same root will see "
                         "training frames; this is the documented v5 'TartanAir held-out "
                         "trajectory (not seen in training)' enforcement.")
+    # LR-synth flags: defaults match the manifest freezer's defaults so the
+    # training distribution matches the held-out eval distribution. Without
+    # these the dataset returns a too-clean box-downsample and the model
+    # never learns to recover from engine-aliasing artifacts (jitter / TAA
+    # blur / JPEG) that the eval + production both apply.
+    p.add_argument("--lr-synth", action="store_true", default=True,
+                   help="Apply EngineAliasedLRSynth to LR frames (default: True). "
+                        "Use --no-lr-synth to disable for ablation.")
+    p.add_argument("--no-lr-synth", action="store_false", dest="lr_synth",
+                   help="Disable EngineAliasedLRSynth (clean box-downsample LR).")
+    p.add_argument("--lr-synth-jitter", action="store_true", default=True)
+    p.add_argument("--lr-synth-taa-blur", action="store_true", default=True)
+    p.add_argument("--lr-synth-jpeg", action="store_true", default=False)
+    p.add_argument("--lr-synth-jpeg-quality", type=int, default=85)
+    p.add_argument("--lr-synth-blur-sigma", type=float, default=0.5)
     p.add_argument("--tier", default="standard",
                    choices=["pico", "lite", "standard"])
     p.add_argument("--backbone-kind", default="simple",
@@ -228,6 +243,7 @@ def build_datasets(args: argparse.Namespace):
     from torch.utils.data import DataLoader
 
     from oss.gaussian.data import (
+        EngineAliasedLRSynth,
         SintelGaussianDataset,
         TartanAirGaussianDataset,
     )
@@ -238,8 +254,29 @@ def build_datasets(args: argparse.Namespace):
     tartan_loader = None
     sintel_loader = None
 
+    # Build the LR-synth applied to BOTH datasets so train distribution
+    # matches eval/production. The manifest freezer must agree with these
+    # values for the held-out eval to be on the same distribution.
+    lr_synth_obj = None
+    if args.lr_synth:
+        lr_synth_obj = EngineAliasedLRSynth(
+            scale=2.0,
+            enable_jitter=args.lr_synth_jitter,
+            enable_taa_blur=args.lr_synth_taa_blur,
+            enable_jpeg=args.lr_synth_jpeg,
+            jpeg_quality=args.lr_synth_jpeg_quality,
+            blur_sigma=args.lr_synth_blur_sigma,
+        )
+        log.info(
+            "lr_synth: jitter=%s taa_blur=%s jpeg=%s jpeg_q=%d blur_sigma=%.2f",
+            args.lr_synth_jitter, args.lr_synth_taa_blur, args.lr_synth_jpeg,
+            args.lr_synth_jpeg_quality, args.lr_synth_blur_sigma,
+        )
+    else:
+        log.info("lr_synth: DISABLED (training on clean box-downsample LR)")
+
     if args.tartanair_root is not None:
-        ds_t = TartanAirGaussianDataset(root=args.tartanair_root, scale=2.0)
+        ds_t = TartanAirGaussianDataset(root=args.tartanair_root, scale=2.0, lr_synth=lr_synth_obj)
         # Held-out filter: drop any items whose environment is in the holdout
         # set. The TartanAir layout is ``<env>/<level>/<traj>/...``, so the env
         # is the first directory under the dataset root. Done in-place on the
@@ -266,7 +303,7 @@ def build_datasets(args: argparse.Namespace):
             collate_fn=default_collate_pair, drop_last=True,
         )
     if args.sintel_root is not None:
-        ds_s = SintelGaussianDataset(root=args.sintel_root, scale=2.0, pass_name="clean")
+        ds_s = SintelGaussianDataset(root=args.sintel_root, scale=2.0, pass_name="clean", lr_synth=lr_synth_obj)
         ds_s = adapt_sintel(ds_s)
         pair_s = SequentialPairDataset(ds_s)
         sintel_loader = DataLoader(
