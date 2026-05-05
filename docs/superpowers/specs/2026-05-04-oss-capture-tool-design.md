@@ -91,11 +91,24 @@ Cash directives:
 
 ## Capture sampling policy
 
-Network-respect bound: target <500 MB/hour of gameplay per user. With ~3 MB compressed per frame (LR 1080p + HR 4K + 4 G-buffers, EXR + zlib), that's <170 frames/hour ≈ 1 frame every 21 seconds.
+Network-respect bound: target <500 MB/hour of gameplay per user. With ~3 MB compressed per frame (LR 1080p + HR 4K + 4 G-buffers, EXR + zlib), that's <170 frames/hour.
+
+**Burst-mode capture (revised 2026-05-04 evening):** earlier draft sampled isolated single frames every 20s, but those are useless for temporal training because there's no (t, t+1) pair connected by motion vectors. Capture instead in BURSTS of N consecutive frames per event, stride M seconds between events.
+
+Defaults (configurable per-game via `/session/start`):
+
+| Use case | Burst N | Stride M | Frames/hour | MB/hour @ 3 MB/frame |
+|---|---|---|---|---|
+| Pixel-temporal (pairs) | 2 | 40s | 180 | 540 |
+| **Gaussian-temporal (windows of 5)** | **5** | **80s** | **225** | **675** |
+| OSS-FX α-extrapolation (4-frame) | 4 | 60s | 240 | 720 |
+| Hybrid default (4-frame burst) | 4 | 80s | 180 | 540 |
+
+A "burst" is N CONSECUTIVE swap-chain frames (no skipping). At 60fps that's N/60 seconds of gameplay = ~33–83 ms motion window. Enough variation between frame-0 and frame-N-1 for the temporal head's prev_hr→out_t+1 warp, the Gaussian transformer's history-attention, and the eventual OSS-FX α-conditioned intermediate-frame supervision.
 
 Sampling rules, in order:
 
-1. **Temporal stride.** Default: 1 candidate frame per 20 seconds of gameplay. Configurable per-game.
+1. **Stride gate.** Default: 1 burst event per 80 seconds of gameplay. Stride starts when the previous burst's last frame committed to disk.
 2. **Motion bucket.** Compute mean motion-vector magnitude on the candidate. Reject if it's the dominant bucket already over-represented this session (we want diverse motion, not 100 frames of the player standing still).
 3. **Perceptual dedup.** Compute a 64-bit perceptual hash (resized 8×8 grayscale, sign of DCT). Reject if Hamming distance < 5 from any frame captured in the last 5 minutes.
 4. **G-buffer sanity.** Reject if depth is degenerate (all zeros / all max), motion vectors are NaN, or RT format unsupported.
