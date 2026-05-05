@@ -220,6 +220,17 @@ def validate_metadata(meta: Any) -> Dict[str, Any]:
                 "(HR channels are dropped in long bursts to save bandwidth)"
             )
 
+    # Capture mode (post-C23 spec). Optional for back-compat; defaults to
+    # "lite" semantics on the server side. Stratifies training samples by
+    # bandwidth/feature tier so the dataset card can analyze quality
+    # contribution per mode.
+    capture_mode = meta.get("capture_mode")
+    if capture_mode is not None:
+        if capture_mode not in ("lite", "regular", "INSANE"):
+            raise SchemaError(
+                "capture_mode must be 'lite', 'regular', or 'INSANE' when present"
+            )
+
     return {
         "schema_version": sv,
         "game_id": game_id,
@@ -236,6 +247,7 @@ def validate_metadata(meta: Any) -> Dict[str, Any]:
         "burst_uuid": burst_uuid,
         "burst_index": burst_index,
         "burst_tier": burst_tier,
+        "capture_mode": capture_mode,
         "user_consent_token": consent,
         "uploader_version": uploader_version,
     }

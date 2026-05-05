@@ -89,6 +89,43 @@ Cash directives:
 └──────────────────────────────────────────────────────────┘
 ```
 
+## Capture modes (lite / regular / INSANE)
+
+Three escalating modes. Each new mode is a strict superset of the previous. Default install: `lite`.
+
+| Mode | Bandwidth/h | Short bursts | Long bursts | Channels | Special |
+|---|---|---|---|---|---|
+| **lite** | ~450 MB | N=2 / 80s | N=60 / 30 min | LR + HR + depth + motion + normals | none |
+| **regular** | ~2 GB | N=4 / 40s | N=60 / 10 min | + albedo + roughness | none |
+| **INSANE** | ~20–50 GB | N=8 / 20s | N=240 (4s @ 60fps) / 5 min | + albedo + roughness + metallic + emissive (full BRDF) | supersample-GT, FP32 depth/motion, optional DLAA capture, every-DLSS-mode pairing |
+
+Each contribution's metadata records `capture_mode` so the training pipeline can stratify samples by mode (and optionally weight them).
+
+### Why INSANE matters strategically
+
+INSANE-mode contributions are the data that lets OSS **exceed** DLSS quality, not just match it. Concretely:
+
+1. **Full BRDF G-buffer set.** DLSS sees pre-tonemap RGB + depth + motion. INSANE captures albedo + roughness + metallic + emissive in addition. A model with strictly more conditioning information than DLSS has a structural advantage on material-aware reconstruction (glossy vs matte vs emissive surfaces need different SR strategies).
+2. **Supersample-GT (auto-triggered).** When the camera+motion magnitude ≈ 0 for ≥1 s, accumulate 256 jittered-LR frames and reconstruct the TRUE HR offline (classic game-engine technique). DLSS-as-pseudo-GT caps us at DLSS quality; supersample-GT lets us EXCEED it during training.
+3. **Native-DLAA "true HR" baseline.** When the user has the GPU headroom, INSANE captures native-DLAA in parallel with the LR — DLAA is the closest practical approximation of "what should the model output look like." Strictly better supervision target than DLSS-output.
+4. **Every-DLSS-mode pairing.** When the game allows live mode swap, INSANE captures the same source LR upscaled by DLSS Quality / Balanced / Performance. Trains the model to understand the quality-vs-perf curve explicitly.
+5. **FP32 precision on depth + motion.** Lite normalizes to float16; INSANE keeps full HDR range. Matters for outdoor scenes (distant mountains + foreground in the same depth buffer).
+6. **4-second long bursts at full framerate.** 240-frame sequences for recurrent-rollout training at production-realistic horizons (vs lite's 60-frame, 1-second).
+
+### User-fraction expectations
+
+Realistic adoption split across the contributor base:
+
+- **lite:** 99% — broadband, casual install, default
+- **regular:** ~5% — enthusiasts with unlimited fiber, contributors who want to "level up"
+- **INSANE:** ~0.1% — data warriors with high-end GPUs + 1 Gbps+ uplink + storage budget
+
+INSANE doesn't need many users to be valuable: 10 INSANE contributors capturing 4 h/week each = ~3 TB/month of premium training data, which is more than enough to drive meaningful quality gains in v6+.
+
+### Mode UX
+
+Installer asks the user to pick a mode. Default `lite`. UI emphasises bandwidth cost honestly ("lite ~450 MB/h", "regular ~2 GB/h", "INSANE ~20–50 GB/h"). User can change mode after install via a tray-icon menu. Server records mode in metadata + dataset cards so we can analyze "what fraction of v6's quality came from INSANE-mode contributions" later.
+
 ## Capture sampling policy
 
 Network-respect bound: target <500 MB/hour of gameplay per user. With ~3 MB compressed per frame (LR 1080p + HR 4K + 4 G-buffers, EXR + zlib), that's <170 frames/hour.
