@@ -46,11 +46,18 @@ def export(ckpt_path: Path, out_path: Path, validate: bool = True):
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Export with dynamic batch + spatial axes
+    # Export with dynamic batch + spatial axes.
+    # dynamo=True is required: the legacy TorchScript exporter cannot
+    # trace the wavelet-stack circular padding (see
+    # ``oss/model/wavelet.py::SWT2D``) — pad-then-conv loses static kernel
+    # shape, and the legacy path raises SymbolicValueError("ONNX export
+    # of convolution for kernel of unknown shape"). The dynamo path
+    # correctly handles the dynamic shape and exports cleanly.
     torch.onnx.export(
         model,
         (color_lr, depth_lr, motion_lr, normals_lr, albedo_lr, history_hr, hidden_zero),
         str(out_path),
+        dynamo=True,
         # opset 18 (was 17): the Resize op used by upsample paths has no
         # v17 adapter in the current onnx-c-api version converter (see
         # `No Adapter To Version $17 for Resize`), so the exporter fails

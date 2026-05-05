@@ -29,7 +29,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--output", type=Path, required=True, help="Output ONNX path")
     p.add_argument("--lr-h", type=int, required=True, help="LR export height")
     p.add_argument("--lr-w", type=int, required=True, help="LR export width")
-    p.add_argument("--opset", type=int, default=17, help="ONNX opset (default: 17)")
+    p.add_argument("--opset", type=int, default=18, help="ONNX opset (default: 18)")
     p.add_argument("--device", default="cpu", help="Export device (default: cpu)")
     return p.parse_args(argv)
 

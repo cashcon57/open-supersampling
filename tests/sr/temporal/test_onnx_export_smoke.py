@@ -64,8 +64,11 @@ def test_temporal_onnx_export_synthetic_ckpt(tmp_path: Path) -> None:
             "64",
             "--lr-w",
             "64",
+            # opset 18 (was 17): aten::_upsample_bicubic2d_aa lacks an opset-17
+            # symbolic export in torch 2.6+. Bumping to 18 unblocks the legacy
+            # exporter path used by sr_export_temporal_onnx.py.
             "--opset",
-            "17",
+            "18",
             "--device",
             "cpu",
         ],
