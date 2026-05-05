@@ -36,8 +36,19 @@ class TokenRecord:
     label: str = ""
     created_at_unix: float = field(default_factory=lambda: time.time())
     revoked: bool = False
-    # rolling window of frame-upload timestamps for rate-limit accounting
+    # rolling window of SUCCESSFUL frame-upload timestamps (rate-limit
+    # accounting for accepted writes — bandwidth/stage cost).
     upload_times: Deque[float] = field(default_factory=deque)
+    # rolling window of ANY authenticated attempt (success OR rejection).
+    # Closes Codex's MEDIUM finding "Rate Limit Does Not Cover Rejected
+    # Upload Attempts": valid token with malformed meta/oversize/dedup
+    # rejections must still count against the budget so a misbehaving
+    # client can't hammer the server's parse/validate paths for free.
+    attempt_times: Deque[float] = field(default_factory=deque)
+    # per-game attempt windows — closes Codex's "no per-game limiter".
+    # Keyed by game_id (validated string from metadata). Each value is a
+    # rolling-window deque just like ``attempt_times``.
+    per_game_attempts: Dict[str, Deque[float]] = field(default_factory=dict)
     # cumulative counters (do not reset; used by /stats)
     total_frames: int = 0
     total_bytes: int = 0
@@ -58,9 +69,19 @@ class TokenRegistry:
         rate_limit_frames_per_hour: int = 1000,
         window_seconds: int = 3600,
         store_path: Optional[Path] = None,
+        # Authenticated-attempt budget per token (counts success + rejection).
+        # Default 5x the success limit so a small fraction of malformed/dup
+        # uploads is tolerated, but a malicious flood is throttled.
+        attempt_limit_per_hour: int = 5000,
+        # Per-(token, game_id) attempt budget. Default 2x the success limit
+        # per game — keeps a token-fleet for one game from consuming the
+        # global service budget.
+        per_game_attempt_limit_per_hour: int = 2000,
     ) -> None:
         self.rate_limit = int(rate_limit_frames_per_hour)
         self.window_seconds = int(window_seconds)
+        self.attempt_limit = int(attempt_limit_per_hour)
+        self.per_game_attempt_limit = int(per_game_attempt_limit_per_hour)
         self._tokens: Dict[str, TokenRecord] = {}
         self._lock = threading.RLock()
         self.store_path: Optional[Path] = store_path
@@ -166,10 +187,9 @@ class TokenRegistry:
             rec.upload_times.popleft()
 
     def check_rate(self, token: str, now: Optional[float] = None) -> bool:
-        """Return True if a frame upload is allowed under the rate limit.
-
-        Does not record the upload — call :meth:`record_upload` after a
-        successful write.
+        """Return True if a frame upload is allowed under the SUCCESSFUL-upload
+        rate limit (back-compat name; prefer :meth:`check_attempt` for the
+        cheap pre-parse gate that closes Codex's MED finding).
         """
         if now is None:
             now = time.time()
@@ -179,6 +199,87 @@ class TokenRegistry:
                 return False
             self._prune_window(rec, now)
             return len(rec.upload_times) < self.rate_limit
+
+    def check_attempt(self, token: str, now: Optional[float] = None) -> bool:
+        """Return True if any authenticated request is allowed (cheaper gate
+        than ``check_rate`` — covers parse/validate/dedup/oversize 4xx paths).
+
+        This is the gate that should be checked BEFORE multipart parsing.
+        Closes Codex's MED finding 'Rate Limit Does Not Cover Rejected
+        Upload Attempts'.
+        """
+        if now is None:
+            now = time.time()
+        with self._lock:
+            rec = self._tokens.get(token)
+            if rec is None or rec.revoked:
+                return False
+            cutoff = now - self.window_seconds
+            while rec.attempt_times and rec.attempt_times[0] < cutoff:
+                rec.attempt_times.popleft()
+            return len(rec.attempt_times) < self.attempt_limit
+
+    def check_per_game_attempt(
+        self,
+        token: str,
+        game_id: str,
+        now: Optional[float] = None,
+    ) -> bool:
+        """Return True if a per-(token, game_id) authenticated attempt is
+        allowed. Called AFTER metadata parses (game_id is in the validated
+        meta). Closes Codex's 'no per-game limiter' gap.
+        """
+        if now is None:
+            now = time.time()
+        with self._lock:
+            rec = self._tokens.get(token)
+            if rec is None or rec.revoked:
+                return False
+            window = rec.per_game_attempts.get(game_id)
+            if window is None:
+                return True  # first attempt for this (token, game) pair
+            cutoff = now - self.window_seconds
+            while window and window[0] < cutoff:
+                window.popleft()
+            return len(window) < self.per_game_attempt_limit
+
+    def record_attempt(
+        self,
+        token: str,
+        now: Optional[float] = None,
+    ) -> None:
+        """Record any authenticated request (success or rejection) against
+        the per-token attempt window. Always called once auth passes."""
+        if now is None:
+            now = time.time()
+        with self._lock:
+            rec = self._tokens.get(token)
+            if rec is None:
+                return
+            rec.attempt_times.append(now)
+            cutoff = now - self.window_seconds
+            while rec.attempt_times and rec.attempt_times[0] < cutoff:
+                rec.attempt_times.popleft()
+
+    def record_per_game_attempt(
+        self,
+        token: str,
+        game_id: str,
+        now: Optional[float] = None,
+    ) -> None:
+        """Record a per-(token, game_id) authenticated attempt. Called
+        once metadata parses + game_id is validated."""
+        if now is None:
+            now = time.time()
+        with self._lock:
+            rec = self._tokens.get(token)
+            if rec is None:
+                return
+            window = rec.per_game_attempts.setdefault(game_id, deque())
+            window.append(now)
+            cutoff = now - self.window_seconds
+            while window and window[0] < cutoff:
+                window.popleft()
 
     def record_upload(
         self,

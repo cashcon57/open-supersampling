@@ -103,15 +103,32 @@ def build_router(*, max_frame_bytes: int = MAX_FRAME_BYTES) -> APIRouter:
         if rec is None or rec.revoked:
             raise HTTPException(status_code=401, detail="unknown or revoked token")
 
-        # ---- rate limit --------------------------------------------------
+        # ---- attempt rate limit (cheap gate, BEFORE multipart parsing) ---
+        # Closes Codex's MED finding: every authenticated request (success
+        # or rejection) charges against this budget so a misbehaving client
+        # can't hammer the parse/validate paths for free.
+        if not registry.check_attempt(token):
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    f"attempt rate limit exceeded "
+                    f"({registry.attempt_limit} attempts/"
+                    f"{registry.window_seconds}s)"
+                ),
+            )
+        # ---- successful-upload rate limit (also cheap; hard cap) ---------
         if not registry.check_rate(token):
             raise HTTPException(
                 status_code=429,
                 detail=(
-                    f"rate limit exceeded "
+                    f"upload rate limit exceeded "
                     f"({registry.rate_limit} frames/{registry.window_seconds}s)"
                 ),
             )
+
+        # Charge the attempt before any further work — even a 400/409/413
+        # below should consume budget so we shed load fairly.
+        registry.record_attempt(token)
 
         # ---- metadata ----------------------------------------------------
         try:
@@ -122,6 +139,22 @@ def build_router(*, max_frame_bytes: int = MAX_FRAME_BYTES) -> APIRouter:
             normalized = validate_metadata(meta_obj)
         except SchemaError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
+
+        # ---- per-game attempt rate limit --------------------------------
+        # game_id is now validated; check the per-(token, game) budget.
+        # Closes Codex's 'no per-game limiter' gap.
+        game_id_val = normalized["game_id"]
+        if not registry.check_per_game_attempt(token, game_id_val):
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    f"per-game attempt rate limit exceeded for game "
+                    f"'{game_id_val}' "
+                    f"({registry.per_game_attempt_limit} attempts/"
+                    f"{registry.window_seconds}s)"
+                ),
+            )
+        registry.record_per_game_attempt(token, game_id_val)
 
         # ---- frame body --------------------------------------------------
         try:
