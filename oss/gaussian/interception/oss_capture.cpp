@@ -44,8 +44,48 @@ double stride_seconds(const OssCaptureConfig& config) {
     return config.capture_stride_seconds;
 }
 
-uint32_t burst_n(const OssCaptureConfig& config) {
+double short_stride_seconds(const OssCaptureConfig& config) {
+    if (config.stride_seconds > 0.0 &&
+        config.stride_seconds != 80.0 &&
+        config.short_stride_seconds == 80.0) {
+        return config.stride_seconds;
+    }
+    if (config.short_stride_seconds > 0.0) {
+        return config.short_stride_seconds;
+    }
+    return stride_seconds(config);
+}
+
+double long_stride_seconds(const OssCaptureConfig& config) {
+    return config.long_stride_seconds > 0.0 ? config.long_stride_seconds : 1800.0;
+}
+
+uint32_t short_burst_n(const OssCaptureConfig& config) {
+    if (config.burst_n > 0u &&
+        config.burst_n != 2u &&
+        config.short_burst_n == 2) {
+        return config.burst_n;
+    }
+    if (config.short_burst_n > 0) {
+        return static_cast<uint32_t>(config.short_burst_n);
+    }
     return std::max<uint32_t>(config.burst_n, 1u);
+}
+
+uint32_t long_burst_n(const OssCaptureConfig& config) {
+    return config.long_burst_n > 0 ? static_cast<uint32_t>(config.long_burst_n) : 60u;
+}
+
+const char* tier_name(OssCaptureBurstTier tier) {
+    switch (tier) {
+    case OSS_CAPTURE_TIER_SHORT:
+        return "short";
+    case OSS_CAPTURE_TIER_LONG:
+        return "long";
+    case OSS_CAPTURE_TIER_NONE:
+    default:
+        return "";
+    }
 }
 
 void make_burst_uuid(char out[37]) {
@@ -68,11 +108,21 @@ OssCaptureDecision reject(OssCaptureDecisionRule rule) {
     return decision;
 }
 
-OssCaptureDecision accept(const OssCaptureConfig& config) {
+void set_tier_name(char out[8], OssCaptureBurstTier tier) {
+    std::strncpy(out, tier_name(tier), 7u);
+    out[7] = '\0';
+}
+
+OssCaptureDecision accept(const OssCaptureConfig& config, OssCaptureBurstTier tier) {
     OssCaptureDecision decision{};
     decision.capture = 1u;
     decision.rule = OSS_CAPTURE_RULE_ACCEPT;
-    decision.burst_n = burst_n(config);
+    decision.burst_tier = tier;
+    set_tier_name(decision.burst_tier_name, tier);
+    decision.burst_n =
+        (tier == OSS_CAPTURE_TIER_LONG) ? long_burst_n(config) : short_burst_n(config);
+    decision.capture_hr =
+        (tier == OSS_CAPTURE_TIER_LONG) ? static_cast<uint32_t>(config.long_capture_hr != 0) : 1u;
     make_burst_uuid(decision.burst_uuid);
     return decision;
 }
@@ -90,10 +140,12 @@ void on_present_impl(void* swap_chain) {
         // CPU readback/write. The original Present still proceeds immediately.
         OSSG_LOG_TRACE(
             "capture",
-            "enqueue burst frame uuid=%s index=%u/%u",
+            "enqueue %s burst frame uuid=%s index=%u/%u capture_hr=%u",
+            burst_frame.burst_tier_name,
             burst_frame.burst_uuid,
             burst_frame.burst_index,
-            burst_frame.burst_n);
+            burst_frame.burst_n,
+            burst_frame.capture_hr);
         return;
     }
     OSSG_LOG_TRACE("capture", "Present observed for capture-mode backbuffer");
@@ -121,7 +173,8 @@ void on_ngx_evaluate_feature_impl(void* command_list, const void* ngx_handle, co
 CaptureSampler::CaptureSampler(const OssCaptureConfig& config) : config_(config) {}
 
 void CaptureSampler::Reset() {
-    last_accept_time_ = -1.0e30;
+    last_short_event_time_ = -1.0e30;
+    last_long_event_time_ = -1.0e30;
     std::fill(std::begin(motion_buckets_), std::end(motion_buckets_), 0u);
     std::fill(std::begin(recent_hashes_), std::end(recent_hashes_), RecentHash{});
     recent_count_ = 0;
@@ -129,8 +182,15 @@ void CaptureSampler::Reset() {
 }
 
 OssCaptureDecision CaptureSampler::Consider(const OssCaptureCandidate& candidate) {
-    // 1. Temporal stride: cap candidates before any expensive work.
-    if (candidate.seconds_since_last_candidate < stride_seconds(config_)) {
+    // 1. Tier stride gates. Long takes priority when both windows are open.
+    OssCaptureBurstTier tier = OSS_CAPTURE_TIER_NONE;
+    if (config_.two_tier_enabled &&
+        candidate.timestamp_seconds - last_long_event_time_ >= long_stride_seconds(config_)) {
+        tier = OSS_CAPTURE_TIER_LONG;
+    } else if (candidate.timestamp_seconds - last_short_event_time_ >= short_stride_seconds(config_)) {
+        tier = OSS_CAPTURE_TIER_SHORT;
+    }
+    if (tier == OSS_CAPTURE_TIER_NONE) {
         return reject(OSS_CAPTURE_RULE_TEMPORAL_STRIDE);
     }
 
@@ -166,11 +226,15 @@ OssCaptureDecision CaptureSampler::Consider(const OssCaptureCandidate& candidate
     }
 
     ++motion_buckets_[bucket];
-    last_accept_time_ = candidate.timestamp_seconds;
+    if (tier == OSS_CAPTURE_TIER_LONG) {
+        last_long_event_time_ = candidate.timestamp_seconds;
+    } else {
+        last_short_event_time_ = candidate.timestamp_seconds;
+    }
     recent_hashes_[recent_next_] = RecentHash{candidate.perceptual_hash_64, candidate.timestamp_seconds};
     recent_next_ = (recent_next_ + 1u) % std::size(recent_hashes_);
     recent_count_ = std::min<size_t>(recent_count_ + 1u, std::size(recent_hashes_));
-    return accept(config_);
+    return accept(config_, tier);
 }
 
 } // namespace oss_gaussian::capture
@@ -182,8 +246,14 @@ OssCaptureConfig oss_capture_default_config(void) {
     std::strncpy(cfg.game_id, "unknown-game", sizeof(cfg.game_id) - 1u);
     std::strncpy(cfg.game_version, "unknown", sizeof(cfg.game_version) - 1u);
     cfg.capture_stride_seconds = 80.0;
-    cfg.burst_n = 4u;
+    cfg.burst_n = 2u;
     cfg.stride_seconds = 80.0;
+    cfg.short_burst_n = 2;
+    cfg.short_stride_seconds = 80.0;
+    cfg.long_burst_n = 60;
+    cfg.long_stride_seconds = 1800.0;
+    cfg.long_capture_hr = 0;
+    cfg.two_tier_enabled = 0;
     cfg.dedup_window_seconds = 300.0;
     cfg.loading_gap_seconds = 30.0;
     cfg.max_motion_bucket_samples = 24u;
@@ -193,10 +263,12 @@ OssCaptureConfig oss_capture_default_config(void) {
 
 int oss_capture_configure(const OssCaptureConfig* config) {
     const double config_stride =
-        config ? (config->stride_seconds > 0.0 ? config->stride_seconds : config->capture_stride_seconds) : 0.0;
+        config ? oss_gaussian::capture::short_stride_seconds(*config) : 0.0;
     if (!config ||
         config_stride <= 0.0 ||
-        config->burst_n == 0u ||
+        oss_gaussian::capture::short_burst_n(*config) == 0u ||
+        oss_gaussian::capture::long_burst_n(*config) == 0u ||
+        oss_gaussian::capture::long_stride_seconds(*config) <= 0.0 ||
         config->dedup_hamming_threshold == 0u) {
         return 0;
     }
@@ -205,10 +277,14 @@ int oss_capture_configure(const OssCaptureConfig* config) {
     oss_gaussian::capture::g_enabled.store(true, std::memory_order_release);
     OSSG_LOG_INFO(
         "capture",
-        "capture-mode configured game_id=%s burst_n=%u stride=%.2fs",
+        "capture-mode configured game_id=%s short=(n=%u stride=%.2fs) long=(enabled=%d n=%u stride=%.2fs capture_hr=%d)",
         config->game_id,
-        config->burst_n,
-        config_stride);
+        oss_gaussian::capture::short_burst_n(*config),
+        oss_gaussian::capture::short_stride_seconds(*config),
+        config->two_tier_enabled,
+        oss_gaussian::capture::long_burst_n(*config),
+        oss_gaussian::capture::long_stride_seconds(*config),
+        config->long_capture_hr);
     return 1;
 }
 
@@ -224,6 +300,12 @@ OssCaptureDecision oss_capture_consider_candidate(const OssCaptureCandidate* can
         oss_gaussian::capture::g_active_burst.active = 1u;
         oss_gaussian::capture::g_active_burst.burst_index = 0u;
         oss_gaussian::capture::g_active_burst.burst_n = decision.burst_n;
+        oss_gaussian::capture::g_active_burst.burst_tier = decision.burst_tier;
+        oss_gaussian::capture::g_active_burst.capture_hr = decision.capture_hr;
+        std::strncpy(
+            oss_gaussian::capture::g_active_burst.burst_tier_name,
+            decision.burst_tier_name,
+            sizeof(oss_gaussian::capture::g_active_burst.burst_tier_name) - 1u);
         std::strncpy(
             oss_gaussian::capture::g_active_burst.burst_uuid,
             decision.burst_uuid,

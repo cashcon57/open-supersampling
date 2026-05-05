@@ -27,6 +27,10 @@ constexpr const char* kChannelNames[] = {
     "Normals.X", "Normals.Y", "Normals.Z",
 };
 
+bool should_write_hr(const OssCaptureFramePayload& payload) {
+    return payload.burst_tier != OSS_CAPTURE_TIER_LONG || payload.capture_hr != 0u;
+}
+
 bool valid_view(const OssCaptureImageView& view, uint32_t channels) {
     return view.pixels != nullptr && view.width > 0 && view.height > 0 && view.channels == channels;
 }
@@ -52,13 +56,19 @@ void insert_slice(Imf::FrameBuffer& fb, const char* name, const OssCaptureImageV
             static_cast<size_t>(view.channels * view.width * sizeof(float))));
 }
 
+const OssCaptureImageView& canvas_view(const OssCaptureFramePayload& payload) {
+    return should_write_hr(payload) ? payload.hr_rgb : payload.lr_rgb;
+}
+
 bool same_canvas(const OssCaptureFramePayload& payload) {
-    const uint32_t w = payload.hr_rgb.width;
-    const uint32_t h = payload.hr_rgb.height;
+    const OssCaptureImageView& canvas = canvas_view(payload);
+    const uint32_t w = canvas.width;
+    const uint32_t h = canvas.height;
     return payload.lr_rgb.width == w && payload.lr_rgb.height == h &&
            payload.depth_z.width == w && payload.depth_z.height == h &&
            payload.motion_xy.width == w && payload.motion_xy.height == h &&
-           payload.normals_xyz.width == w && payload.normals_xyz.height == h;
+           payload.normals_xyz.width == w && payload.normals_xyz.height == h &&
+           (!should_write_hr(payload) || (payload.hr_rgb.width == w && payload.hr_rgb.height == h));
 }
 #endif
 
@@ -70,8 +80,9 @@ int oss_capture_write_exr(const wchar_t* path, const OssCaptureFramePayload* pay
     if (!path || !payload) {
         return 0;
     }
+    const bool write_hr = should_write_hr(*payload);
     if (!valid_view(payload->lr_rgb, 3) ||
-        !valid_view(payload->hr_rgb, 3) ||
+        (write_hr && !valid_view(payload->hr_rgb, 3)) ||
         !valid_view(payload->depth_z, 1) ||
         !valid_view(payload->motion_xy, 2) ||
         !valid_view(payload->normals_xyz, 3)) {
@@ -87,9 +98,13 @@ int oss_capture_write_exr(const wchar_t* path, const OssCaptureFramePayload* pay
     if (!same_canvas(*payload)) {
         return 0;
     }
-    Imf::Header header(static_cast<int>(payload->hr_rgb.width), static_cast<int>(payload->hr_rgb.height));
+    const OssCaptureImageView& canvas = canvas_view(*payload);
+    Imf::Header header(static_cast<int>(canvas.width), static_cast<int>(canvas.height));
     header.compression() = Imf::ZIP_COMPRESSION;
     for (const char* channel : kChannelNames) {
+        if (!write_hr && (channel[0] == 'H' && channel[1] == 'R' && channel[2] == '.')) {
+            continue;
+        }
         insert_float_channel(header, channel);
     }
 
@@ -97,9 +112,11 @@ int oss_capture_write_exr(const wchar_t* path, const OssCaptureFramePayload* pay
     insert_slice(frame_buffer, "LR.R", payload->lr_rgb, 0);
     insert_slice(frame_buffer, "LR.G", payload->lr_rgb, 1);
     insert_slice(frame_buffer, "LR.B", payload->lr_rgb, 2);
-    insert_slice(frame_buffer, "HR.R", payload->hr_rgb, 0);
-    insert_slice(frame_buffer, "HR.G", payload->hr_rgb, 1);
-    insert_slice(frame_buffer, "HR.B", payload->hr_rgb, 2);
+    if (write_hr) {
+        insert_slice(frame_buffer, "HR.R", payload->hr_rgb, 0);
+        insert_slice(frame_buffer, "HR.G", payload->hr_rgb, 1);
+        insert_slice(frame_buffer, "HR.B", payload->hr_rgb, 2);
+    }
     insert_slice(frame_buffer, "Depth.Z", payload->depth_z, 0);
     insert_slice(frame_buffer, "Motion.X", payload->motion_xy, 0);
     insert_slice(frame_buffer, "Motion.Y", payload->motion_xy, 1);
@@ -109,7 +126,7 @@ int oss_capture_write_exr(const wchar_t* path, const OssCaptureFramePayload* pay
 
     Imf::OutputFile file(fs_path.string().c_str(), header);
     file.setFrameBuffer(frame_buffer);
-    file.writePixels(static_cast<int>(payload->hr_rgb.height));
+    file.writePixels(static_cast<int>(canvas.height));
     return 1;
 #else
     // Sprint-6 capture scaffold: OpenEXR/tinyexr is not yet vendored in this
@@ -123,11 +140,16 @@ int oss_capture_write_exr(const wchar_t* path, const OssCaptureFramePayload* pay
     out << "OSS_CAPTURE_EXR_V0\n";
     out << "compression=zip-level-5\n";
     for (const char* channel : kChannelNames) {
+        if (!write_hr && (channel[0] == 'H' && channel[1] == 'R' && channel[2] == '.')) {
+            continue;
+        }
         out << "channel=" << channel << "\n";
     }
     out << "payload-begin\n";
     write_view(out, payload->lr_rgb);
-    write_view(out, payload->hr_rgb);
+    if (write_hr) {
+        write_view(out, payload->hr_rgb);
+    }
     write_view(out, payload->depth_z);
     write_view(out, payload->motion_xy);
     write_view(out, payload->normals_xyz);

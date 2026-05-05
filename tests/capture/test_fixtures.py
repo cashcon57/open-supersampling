@@ -23,6 +23,7 @@ CAPTURE_CHANNELS = (
     "Normals.Y",
     "Normals.Z",
 )
+LONG_CAPTURE_CHANNELS = tuple(channel for channel in CAPTURE_CHANNELS if not channel.startswith("HR."))
 
 
 @dataclass(frozen=True)
@@ -41,6 +42,8 @@ def make_synthetic_capture(
     frame_uuid: str | None = None,
     burst_uuid: str | None = None,
     burst_index: int = 0,
+    burst_tier: str = "short",
+    include_hr: bool | None = None,
     lr_resolution: tuple[int, int] = (16, 9),
     scale: int = 2,
     payload_bytes: int | None = None,
@@ -55,7 +58,9 @@ def make_synthetic_capture(
     frame_path = session_dir / f"{frame_uuid}.exr"
     meta_path = session_dir / f"{frame_uuid}.json"
     hr_resolution = (lr_resolution[0] * scale, lr_resolution[1] * scale)
-    write_synthetic_exr(frame_path, lr_resolution=lr_resolution, hr_resolution=hr_resolution)
+    if include_hr is None:
+        include_hr = burst_tier != "long"
+    write_synthetic_exr(frame_path, lr_resolution=lr_resolution, hr_resolution=hr_resolution, include_hr=include_hr)
     if payload_bytes is not None:
         _resize_payload(frame_path, payload_bytes)
 
@@ -66,6 +71,8 @@ def make_synthetic_capture(
         frame_uuid=frame_uuid,
         burst_uuid=burst_uuid,
         burst_index=burst_index,
+        burst_tier=burst_tier,
+        include_hr=include_hr,
         lr_resolution=lr_resolution,
         hr_resolution=hr_resolution,
         captured_at_unix=captured_at_unix,
@@ -82,6 +89,8 @@ def make_metadata(
     frame_uuid: str,
     burst_uuid: str,
     burst_index: int,
+    burst_tier: str = "short",
+    include_hr: bool = True,
     lr_resolution: tuple[int, int] = (16, 9),
     hr_resolution: tuple[int, int] = (32, 18),
     captured_at_unix: int | None = None,
@@ -97,7 +106,8 @@ def make_metadata(
         "captured_at_unix": int(captured_at_unix if captured_at_unix is not None else time.time()),
         "lr_resolution": [int(lr_resolution[0]), int(lr_resolution[1])],
         "hr_resolution": [int(hr_resolution[0]), int(hr_resolution[1])],
-        "hr_source": "dlss-quality",
+        "burst_tier": burst_tier,
+        "hr_source": "dlss-quality" if include_hr else "none",
         "jitter_offset_uv": [0.25, 0.75],
         "motion_mean_magnitude_px": 4.5,
         "perceptual_hash_64": "0x0123456789abcdef",
@@ -111,6 +121,7 @@ def write_synthetic_exr(
     *,
     lr_resolution: tuple[int, int] = (16, 9),
     hr_resolution: tuple[int, int] = (32, 18),
+    include_hr: bool = True,
 ) -> None:
     """Write deterministic channel data using the capture EXR channel names.
 
@@ -141,7 +152,6 @@ def write_synthetic_exr(
 
     channels = {
         "LR": lr_rgb.astype(np.float32),
-        "HR": hr_rgb.astype(np.float32),
         "Depth": (1.0 + 99.0 * y.repeat(hr_w, axis=1))[..., None].astype(np.float32),
         "Motion": np.stack(
             [
@@ -158,13 +168,16 @@ def write_synthetic_exr(
             ]
         ),
     }
+    if include_hr:
+        channels["HR"] = hr_rgb.astype(np.float32)
     channel_names = {
         "LR": ["R", "G", "B"],
-        "HR": ["R", "G", "B"],
         "Depth": ["Z"],
         "Motion": ["X", "Y"],
         "Normals": ["X", "Y", "Z"],
     }
+    if include_hr:
+        channel_names["HR"] = ["R", "G", "B"]
     pyexr.write(path, channels, channel_names=channel_names, compression=pyexr.ZIP_COMPRESSION, compression_level=5)
 
 
@@ -204,6 +217,7 @@ def test_synthetic_capture_fixture_matches_pending_layout_and_schema(tmp_path: P
         "frame_uuid",
         "burst_uuid",
         "burst_index",
+        "burst_tier",
         "captured_at_unix",
         "lr_resolution",
         "hr_resolution",
@@ -222,3 +236,15 @@ def test_synthetic_exr_contains_capture_channels(tmp_path: Path) -> None:
 
     with pyexr.open(capture.frame_path) as exr:
         assert set(exr.channels) == set(CAPTURE_CHANNELS)
+
+
+def test_long_synthetic_exr_omits_hr_channels_and_marks_metadata(tmp_path: Path) -> None:
+    pyexr = _require_pyexr()
+    capture = make_synthetic_capture(tmp_path, burst_tier="long", burst_index=12)
+
+    metadata = json.loads(capture.meta_path.read_text(encoding="utf-8"))
+    assert metadata["burst_tier"] == "long"
+    assert metadata["burst_index"] == 12
+    assert metadata["hr_source"] == "none"
+    with pyexr.open(capture.frame_path) as exr:
+        assert set(exr.channels) == set(LONG_CAPTURE_CHANNELS)

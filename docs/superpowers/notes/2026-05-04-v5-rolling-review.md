@@ -2,7 +2,7 @@
 
 **Status:** Active living document  
 **Purpose:** Shared rolling review surface for Sprint 5 dual-track implementation planning and code review. Claude/Codex agents should read and update this file before dispatching implementation or reviewer subagents.  
-**Last updated:** 2026-05-04 21:15 CDT
+**Last updated:** 2026-05-04 21:33 CDT
 
 **Watcher:** Codex (review) / Claude (implementer-controller)
 
@@ -259,6 +259,7 @@ Active asks:
 - **C19 — done by Codex at 20:54 CDT.** Python uploader daemon added at `oss/capture/uploader.py` with terminal delete-on-200/4xx, 5xx/network retry then drop, orphan cleanup, 2GB cap enforcement, PyInstaller spec, scheduled-task XML, and unit tests in `tests/capture/test_uploader.py`.
 - **C20 — done by Codex at 20:54 CDT.** Shared synthetic capture fixtures and uploader/fake-server e2e tests added under `tests/capture/`. Fixture metadata matches the design schema and EXR channels use the capture channel names. Local verification: `venv-py312/bin/python -m pytest tests/capture -q` → 17 passed, 23 skipped in 1.13s; `git diff --check` passed.
 - **C21 — done by Codex at 21:15 CDT.** Burst-mode follow-up after spec patch `ce9bf3b`: `OssCaptureConfig` now has `burst_n` and `stride_seconds` with defaults `N=4`, `M=80s`; sampler ACCEPT decisions arm a burst and Present consumes N consecutive frames with shared `burst_uuid` plus per-frame `burst_index`. Shared fixture metadata now carries `burst_uuid` / `burst_index`; uploader behavior remains unchanged and uploads those JSON fields as-is. Verification: `venv-py312/bin/python -m pytest tests/capture -q -rs` → 17 passed, 23 skipped due missing `moto`; `clang++ -std=c++20 -Ioss/gaussian/interception -Ioss/gaussian/interception/src -fsyntax-only oss/gaussian/interception/oss_capture.cpp oss/gaussian/interception/perceptual_hash.cpp oss/gaussian/interception/exr_writer.cpp` passed; `git diff --check` passed.
+- **C22 — done by Codex at 21:33 CDT.** Two-tier burst client patch: default short tier is `N=2` every `80s` with full channels; long tier is configured as `N=60` every `1800s`, LR+G-buffers only (`long_capture_hr=0`), and `two_tier_enabled=0` for first dogfood opt-in. Long takes priority when both tiers are due. `OssCaptureBurstFrame`/decision state now carries `burst_tier` and `capture_hr`; `exr_writer.cpp` omits `HR.*` channels for long/no-HR payloads. Fixture JSON now includes `burst_tier`, and long fixtures set `hr_source="none"`. Verification: `venv-py312/bin/python -m pytest tests/capture -q -rs` → 18 passed, 23 skipped due missing `moto`; C++ syntax-only capture compile passed; `git diff --check` passed. Concurrent Claude server edits in `server/oss_capture_ingest/*` were left unstaged.
 
 If a probe finds a real bug, file it under `## Open Findings` with severity + file:line citations as you've been doing. Claude will patch.
 

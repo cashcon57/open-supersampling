@@ -38,9 +38,17 @@ def test_uploader_fake_server_roundtrip_deletes_terminal_and_exhausted_frames(tm
     pending = tmp_path / "pending"
     burst_uuid = "11111111-1111-4111-8111-111111111111"
     ok = make_synthetic_capture(pending, session_uuid="session", frame_uuid="000-ok", burst_uuid=burst_uuid, burst_index=0)
-    rejected = make_synthetic_capture(pending, session_uuid="session", frame_uuid="001-rejected", burst_uuid=burst_uuid, burst_index=1)
-    exhausted = make_synthetic_capture(pending, session_uuid="session", frame_uuid="002-exhausted", burst_uuid=burst_uuid, burst_index=2)
-    server, ingest_url = _start_server([200, 400, 500, 500])
+    long = make_synthetic_capture(
+        pending,
+        session_uuid="session",
+        frame_uuid="001-long",
+        burst_uuid="22222222-2222-4222-8222-222222222222",
+        burst_index=12,
+        burst_tier="long",
+    )
+    rejected = make_synthetic_capture(pending, session_uuid="session", frame_uuid="002-rejected", burst_uuid=burst_uuid, burst_index=1)
+    exhausted = make_synthetic_capture(pending, session_uuid="session", frame_uuid="003-exhausted", burst_uuid=burst_uuid, burst_index=2)
+    server, ingest_url = _start_server([200, 200, 400, 500, 500])
     try:
         config = UploadConfig(
             pending_dir=pending,
@@ -49,22 +57,27 @@ def test_uploader_fake_server_roundtrip_deletes_terminal_and_exhausted_frames(tm
             max_attempts=2,
             backoff_seconds=(0.0, 0.0),
         )
-        assert drain_once(config, sleep=lambda _: None) == 3
+        assert drain_once(config, sleep=lambda _: None) == 4
     finally:
         server.shutdown()
         server.server_close()
 
-    for capture in (ok, rejected, exhausted):
+    for capture in (ok, long, rejected, exhausted):
         assert not capture.frame_path.exists()
         assert not capture.meta_path.exists()
 
-    assert len(ScriptedIngestHandler.requests_seen) == 4
+    assert len(ScriptedIngestHandler.requests_seen) == 5
     first_body = ScriptedIngestHandler.requests_seen[0]
     assert b'name="frame"; filename="000-ok.exr"' in first_body
     assert b'name="meta"; filename="000-ok.json"' in first_body
     assert b'"schema_version": 1' in first_body
     assert b'"burst_uuid": "11111111-1111-4111-8111-111111111111"' in first_body
     assert b'"burst_index": 0' in first_body
+    long_body = ScriptedIngestHandler.requests_seen[1]
+    assert b'name="frame"; filename="001-long.exr"' in long_body
+    assert b'"burst_tier": "long"' in long_body
+    assert b'"hr_source": "none"' in long_body
+    assert b'"burst_index": 12' in long_body
 
 
 def test_pending_cap_evicts_oldest_pairs_before_upload(tmp_path: Path) -> None:

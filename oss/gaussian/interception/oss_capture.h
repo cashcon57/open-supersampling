@@ -36,6 +36,12 @@ typedef enum OssCaptureDecisionRule {
     OSS_CAPTURE_RULE_POST_LOADING_GUARD = 5,
 } OssCaptureDecisionRule;
 
+typedef enum OssCaptureBurstTier {
+    OSS_CAPTURE_TIER_NONE = 0,
+    OSS_CAPTURE_TIER_SHORT = 1,
+    OSS_CAPTURE_TIER_LONG = 2,
+} OssCaptureBurstTier;
+
 typedef struct OssCaptureConfig {
     char     game_id[64];
     char     game_version[64];
@@ -44,6 +50,12 @@ typedef struct OssCaptureConfig {
     double   capture_stride_seconds; // Compatibility alias; prefer stride_seconds.
     uint32_t burst_n;
     double   stride_seconds;
+    int      short_burst_n;
+    double   short_stride_seconds;
+    int      long_burst_n;
+    double   long_stride_seconds;
+    int      long_capture_hr;
+    int      two_tier_enabled;
     double   dedup_window_seconds;
     double   loading_gap_seconds;
     uint32_t max_motion_bucket_samples;
@@ -67,6 +79,9 @@ typedef struct OssCaptureDecision {
     OssCaptureDecisionRule rule;
     uint32_t               burst_n;
     char                   burst_uuid[37];
+    OssCaptureBurstTier    burst_tier;
+    char                   burst_tier_name[8];
+    uint32_t               capture_hr;
 } OssCaptureDecision;
 
 typedef struct OssCaptureBurstFrame {
@@ -74,6 +89,9 @@ typedef struct OssCaptureBurstFrame {
     uint32_t burst_index;
     uint32_t burst_n;
     char     burst_uuid[37];
+    OssCaptureBurstTier burst_tier;
+    char     burst_tier_name[8];
+    uint32_t capture_hr;
 } OssCaptureBurstFrame;
 
 typedef struct OssCaptureImageView {
@@ -89,6 +107,8 @@ typedef struct OssCaptureFramePayload {
     OssCaptureImageView depth_z;
     OssCaptureImageView motion_xy;
     OssCaptureImageView normals_xyz;
+    OssCaptureBurstTier burst_tier;
+    uint32_t capture_hr;
 } OssCaptureFramePayload;
 
 OSS_CAPTURE_API OssCaptureConfig oss_capture_default_config(void);
@@ -121,7 +141,8 @@ public:
 
 private:
     OssCaptureConfig config_{};
-    double           last_accept_time_ = -1.0e30;
+    double           last_short_event_time_ = -1.0e30;
+    double           last_long_event_time_ = -1.0e30;
     uint32_t         motion_buckets_[8]{};
 
     struct RecentHash {
