@@ -45,15 +45,14 @@ class TemporalSRModelStateless(nn.Module):
         depth_hr_prev: torch.Tensor,
         motion_lr: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        # Match TemporalSRModel.forward: backbone sees only RGB + zero
-        # G-buffer slots (with normals[2]=1.0 default-up) — that's the
-        # SRGD distribution v4 was trained on. Real G-buffers feed the
-        # warp + disocclusion paths only.
-        lr_for_backbone = torch.zeros_like(lr_inputs)
-        lr_for_backbone[:, :3] = lr_inputs[:, :3]
-        if lr_for_backbone.shape[1] >= 7:
-            lr_for_backbone[:, 6] = 1.0
-        current_sr = self.model.backbone(lr_for_backbone)
+        if self.model.zero_gbuffer_into_backbone:
+            lr_for_backbone = torch.zeros_like(lr_inputs)
+            lr_for_backbone[:, :3] = lr_inputs[:, :3]
+            if lr_for_backbone.shape[1] >= 7:
+                lr_for_backbone[:, 6] = 1.0
+            current_sr = self.model.backbone(lr_for_backbone)
+        else:
+            current_sr = self.model.backbone(lr_inputs)
         warped_prev = warp_prev_hr(prev_hr, motion_lr, scale=self.model.scale)
         disoccl = self.model.gate(
             depth_curr=depth_hr_curr,
@@ -86,11 +85,19 @@ class TemporalSRModelStateless(nn.Module):
         backbone_kind = saved.get("backbone_kind")
         if backbone_kind is None:
             backbone_kind = "rrdb" if saved.get("sr_backbone") == "rrdb" else "simple"
+        # New ckpts persist the flag explicitly. Legacy ckpts: infer from
+        # whether warm-start was used (warm-started runs need zeroing to
+        # match the v4-on-SRGD distribution; from-scratch runs do not).
+        if "zero_gbuffer_into_backbone" in saved:
+            zero_flag = bool(saved["zero_gbuffer_into_backbone"])
+        else:
+            zero_flag = bool(saved.get("warm_start"))
         model = TemporalSRModel(
             in_channels=in_channels,
             scale=scale,
             tier=tier,
             backbone_kind=backbone_kind,
+            zero_gbuffer_into_backbone=zero_flag,
         )
         model.load_state_dict(ck["temporal_model"])
         model = model.to(device).train(False)

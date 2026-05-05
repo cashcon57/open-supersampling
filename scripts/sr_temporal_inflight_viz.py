@@ -117,7 +117,16 @@ def _render_iteration(
     saved = ck.get("args", {})
     tier = saved.get("tier", "standard")
     backbone_kind = saved.get("backbone_kind", "simple")
-    model = TemporalSRModel(in_channels=12, scale=2, tier=tier, backbone_kind=backbone_kind).to(device)
+    if "zero_gbuffer_into_backbone" in saved:
+        zero_flag = bool(saved["zero_gbuffer_into_backbone"])
+    else:
+        # Legacy ckpts: warm-started runs zeroed G-buffer channels into
+        # the backbone; from-scratch runs did not.
+        zero_flag = bool(saved.get("warm_start"))
+    model = TemporalSRModel(
+        in_channels=12, scale=2, tier=tier, backbone_kind=backbone_kind,
+        zero_gbuffer_into_backbone=zero_flag,
+    ).to(device)
     if "temporal_model" in ck:
         model.load_state_dict(ck["temporal_model"])
     elif "sr_model" in ck:

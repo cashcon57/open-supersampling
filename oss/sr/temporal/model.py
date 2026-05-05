@@ -38,10 +38,17 @@ class TemporalSRModel(nn.Module):
         scale: int = 2,
         tier: str = "standard",
         backbone_kind: str = "simple",
+        zero_gbuffer_into_backbone: bool = False,
     ) -> None:
         super().__init__()
         self.scale = scale
         self.in_channels = in_channels
+        # Zero non-RGB channels into the backbone only when the backbone was
+        # trained on SRGD (which had no real G-buffers). For from-scratch
+        # training on data WITH real depth/motion/normals (e.g. TartanAir),
+        # leave this False so the backbone can actually learn from those
+        # channels. ``load_v4_warm_start`` flips this to True automatically.
+        self.zero_gbuffer_into_backbone = zero_gbuffer_into_backbone
         self.backbone = build_sr_model(
             model_kind=backbone_kind, tier=tier, in_channels=in_channels, scale=scale
         )
@@ -56,21 +63,18 @@ class TemporalSRModel(nn.Module):
         depth_hr_prev: torch.Tensor,
         motion_lr: torch.Tensor,
     ) -> torch.Tensor:
-        # The v4 backbone was trained on SRGD where channels 3-11 of the
-        # 12-channel input (depth, motion, normals, canvas) were ALL ZERO
-        # except normals[2]=1.0 (default "up" vector). Feeding TartanAir's
-        # real depth/motion/normals into those channels at warm-start time
-        # is a hard distribution shift — the conv1 weights against those
-        # channels were trained against a constant signal and produce
-        # garbage on real values. Match the training distribution: pass
-        # only RGB to the backbone, with a constant prior on the rest.
-        # The temporal head, warp, and disocclusion gate still see the
-        # real G-buffers via their dedicated arguments.
-        lr_for_backbone = torch.zeros_like(lr_inputs)
-        lr_for_backbone[:, :3] = lr_inputs[:, :3]
-        if lr_for_backbone.shape[1] >= 7:
-            lr_for_backbone[:, 6] = 1.0  # normals[2]: SRGD default "up"
-        current_sr = self.backbone(lr_for_backbone)
+        if self.zero_gbuffer_into_backbone:
+            # Match the SRGD training distribution v4 was warm-started from:
+            # backbone sees only RGB + a constant prior (normals[2]=1.0
+            # default-up). Real G-buffers still flow into warp + gate + head
+            # via their dedicated arguments.
+            lr_for_backbone = torch.zeros_like(lr_inputs)
+            lr_for_backbone[:, :3] = lr_inputs[:, :3]
+            if lr_for_backbone.shape[1] >= 7:
+                lr_for_backbone[:, 6] = 1.0
+            current_sr = self.backbone(lr_for_backbone)
+        else:
+            current_sr = self.backbone(lr_inputs)
         warped_prev = warp_prev_hr(prev_hr, motion_lr, scale=self.scale)
         disoccl = self.gate(
             depth_curr=depth_hr_curr, depth_prev=depth_hr_prev,
@@ -97,7 +101,10 @@ class TemporalSRModel(nn.Module):
         saved = ck.get("args", {})
         tier = saved.get("tier", "standard")
         backbone_kind = "rrdb" if saved.get("sr_backbone") == "rrdb" else "simple"
-        model = cls(in_channels=in_channels, scale=scale, tier=tier, backbone_kind=backbone_kind)
+        model = cls(
+            in_channels=in_channels, scale=scale, tier=tier, backbone_kind=backbone_kind,
+            zero_gbuffer_into_backbone=True,
+        )
         missing, unexpected = model.backbone.load_state_dict(ck["sr_model"], strict=True)
         if missing or unexpected:
             raise RuntimeError(f"v4 warm-start mismatch: missing={missing}, unexpected={unexpected}")

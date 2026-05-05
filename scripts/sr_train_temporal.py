@@ -509,13 +509,15 @@ def save_checkpoint(
     so the loader can disambiguate from a plain v4 ``sr_model`` checkpoint.
     """
     ckpt_path = output_dir / f"step-{step:08d}.pt"
+    saved_args = {
+        k: (str(v) if isinstance(v, Path) else v)
+        for k, v in vars(args).items()
+    }
+    saved_args["zero_gbuffer_into_backbone"] = bool(model.zero_gbuffer_into_backbone)
     payload: dict[str, Any] = {
         "step": step,
         "kind": "temporal",
-        "args": {
-            k: (str(v) if isinstance(v, Path) else v)
-            for k, v in vars(args).items()
-        },
+        "args": saved_args,
         "temporal_model": model.state_dict(),
         "optim": optim.state_dict(),
     }
