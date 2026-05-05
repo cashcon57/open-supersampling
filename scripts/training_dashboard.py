@@ -157,6 +157,13 @@ HTML = """<!DOCTYPE html>
     <div class="sub" id="eval-step-text">–</div>
   </div>
 
+  <div class="panel full">
+    <h2>In-flight comparison: <span style="color:#8b949e;font-weight:400;font-size:13px">LR-bilinear · bicubic · v5-temporal · GT</span></h2>
+    <div id="viz-meta" style="color:#8b949e;font-size:12px;margin-bottom:8px">loading…</div>
+    <input type="range" id="viz-scrubber" min="0" max="0" value="0" style="width:100%;margin-bottom:8px" disabled>
+    <img id="viz-img" alt="(no viz yet)" style="max-width:100%;border:1px solid #30363d;border-radius:4px;display:block">
+  </div>
+
   <div class="panel">
     <h2>PSNR vs bicubic over training</h2>
     <canvas id="chart-psnr"></canvas>
@@ -316,16 +323,68 @@ function renderEvalTable(scoreRows) {
   }
 }
 
+// Viz scrubber: list step-XXXXX.png files, latest first; slider scrubs the
+// timeline, defaults to the most recent. ``follow`` is true when the slider
+// is at max (so new ckpts auto-advance the image).
+let vizFiles = [];
+let vizFollow = true;
+
+function _fileToStep(fname) {
+  const m = fname.match(/step-(\d+)\.png/);
+  return m ? parseInt(m[1]) : -1;
+}
+
+function refreshViz(files) {
+  files = (files || []).slice().sort((a, b) => _fileToStep(a) - _fileToStep(b));
+  vizFiles = files;
+  const meta = document.getElementById('viz-meta');
+  const img = document.getElementById('viz-img');
+  const slider = document.getElementById('viz-scrubber');
+  if (!files.length) {
+    meta.textContent = 'no PNGs yet · viz loop renders one ~5 min after first ckpt';
+    img.removeAttribute('src');
+    img.alt = '(no viz yet)';
+    slider.disabled = true;
+    slider.max = 0;
+    return;
+  }
+  slider.disabled = false;
+  slider.max = files.length - 1;
+  if (vizFollow) {
+    slider.value = files.length - 1;
+  }
+  const idx = Math.min(parseInt(slider.value), files.length - 1);
+  const fname = files[idx];
+  const step = _fileToStep(fname);
+  img.src = '/viz/' + fname + '?_t=' + Date.now();
+  img.alt = 'step ' + step;
+  meta.textContent = 'step ' + step.toLocaleString() +
+                     ' · ' + files.length + ' ckpt(s) rendered · ' +
+                     (vizFollow ? 'following latest (drag slider to pin)' : 'pinned (move to right edge to follow)');
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const slider = document.getElementById('viz-scrubber');
+  if (slider) {
+    slider.addEventListener('input', () => {
+      vizFollow = (parseInt(slider.value) === parseInt(slider.max));
+      refreshViz(vizFiles);
+    });
+  }
+});
+
 async function refresh() {
   try {
-    const [info, metrics, score, logTail] = await Promise.all([
+    const [info, metrics, score, logTail, viz] = await Promise.all([
       fetchJSON('/api/info'),
       fetchJSON('/api/metrics'),
       fetchJSON('/api/score'),
       fetchText('/api/log'),
+      fetchJSON('/api/viz').catch(() => ({ files: [] })),
     ]);
 
     lastUpdate = Date.now();
+    refreshViz(viz && viz.files ? viz.files : []);
 
     const train = (metrics && metrics.train) || metrics || [];
     const scoreRows = score || [];
@@ -403,16 +462,29 @@ async function refresh() {
     renderEvalTable(scoreRows);
 
     // ---- Charts ----
-    const trainXY = (key) =>
-      train.map(r => ({ x: r.step, y: r[key] })).filter(p => p.y !== undefined && p.y !== null);
+    // Fallback: if a row doesn't have ``key`` but has alt aliases, use the
+    // first alias that exists. This handles v5-pixel-temporal rows whose
+    // keys are ``t_l1`` / ``t_ssim`` instead of ``l1`` / ``ssim``.
+    const trainXY = (key, ...aliases) => train.map(r => {
+      let v = r[key];
+      if ((v === undefined || v === null) && aliases.length) {
+        for (const a of aliases) {
+          if (r[a] !== undefined && r[a] !== null) { v = r[a]; break; }
+        }
+      }
+      return { x: r.step, y: v };
+    }).filter(p => p.y !== undefined && p.y !== null);
 
     setChart(charts.loss, [
       { label: 'loss', data: trainXY('loss'), borderColor: '#58a6ff', backgroundColor: '#58a6ff', tension: 0, pointRadius: 0 },
-      { label: 'l1', data: trainXY('l1'), borderColor: '#d29922', backgroundColor: '#d29922', tension: 0, pointRadius: 0 },
+      { label: 'l1 (or t_l1)', data: trainXY('l1', 't_l1'), borderColor: '#d29922', backgroundColor: '#d29922', tension: 0, pointRadius: 0 },
+      { label: 'tp1_l1', data: trainXY('tp1_l1'), borderColor: '#a371f7', backgroundColor: '#a371f7', tension: 0, pointRadius: 0 },
+      { label: 'tc', data: trainXY('tc'), borderColor: '#3fb950', backgroundColor: '#3fb950', tension: 0, pointRadius: 0 },
     ]);
 
     setChart(charts.ssim, [
-      { label: 'SSIM (train)', data: trainXY('ssim'), borderColor: '#3fb950', backgroundColor: '#3fb950', tension: 0, pointRadius: 0 },
+      { label: 'SSIM (or t_ssim)', data: trainXY('ssim', 't_ssim'), borderColor: '#3fb950', backgroundColor: '#3fb950', tension: 0, pointRadius: 0 },
+      { label: 'tp1_ssim', data: trainXY('tp1_ssim'), borderColor: '#a371f7', backgroundColor: '#a371f7', tension: 0, pointRadius: 0 },
     ]);
 
     setChart(charts.out, [
@@ -530,6 +602,30 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json(data)
             elif path == "/api/log":
                 self._send_text(self._read_log_tail(n_lines=200))
+            elif path == "/api/viz":
+                # Lists step-XXXXX.png files in <output_dir>/viz/, sorted ascending.
+                viz_dir = self.output_dir / "viz"
+                files: list[str] = []
+                if viz_dir.is_dir():
+                    files = sorted(p.name for p in viz_dir.glob("step-*.png"))
+                self._send_json({"files": files})
+            elif path.startswith("/viz/"):
+                # Serve a single PNG from <output_dir>/viz/.
+                fname = path[len("/viz/"):]
+                if "/" in fname or ".." in fname or not fname.endswith(".png"):
+                    self._send_text("bad path", status=400)
+                else:
+                    viz_path = self.output_dir / "viz" / fname
+                    if not viz_path.is_file():
+                        self._send_text("not found", status=404)
+                    else:
+                        body = viz_path.read_bytes()
+                        self.send_response(200)
+                        self.send_header("Content-Type", "image/png")
+                        self.send_header("Content-Length", str(len(body)))
+                        self.send_header("Cache-Control", "no-store")
+                        self.end_headers()
+                        self.wfile.write(body)
             else:
                 self._send_text("not found", status=404)
         except Exception as e:  # pragma: no cover — last-ditch error path
