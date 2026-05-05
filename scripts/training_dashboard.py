@@ -298,6 +298,10 @@ const UPSCALER_ESTIMATES = {
   dlss2:    { psnr: 30.0, lpips: 0.22, latency_ms: 0.4,  color: '#3fb950' },
   dlss3:    { psnr: 30.0, lpips: 0.22, latency_ms: 0.4,  color: '#56d364' },
   dlss4:    { psnr: 31.5, lpips: 0.17, latency_ms: 1.0,  color: '#7ee787' },
+  // OSS measured baselines (NOT estimates — actual held-out numbers from v3-vs-v4 A/B
+  // memo on CitySample, n=64, fixed-batch, shuffle=False, manual_seed=0).
+  oss_v3:   { psnr: 29.6, lpips: 0.40, latency_ms: 37.6, color: '#f0883e', kind: 'ours' },
+  oss_v4:   { psnr: 29.5, lpips: 0.31, latency_ms: 37.6, color: '#ff9b3c', kind: 'ours' },
 };
 
 // Phase markers — vertical lines on every step-axis chart at the
@@ -347,19 +351,30 @@ const upscalerRefPlugin = (metric) => ({
       ['bicubic', 'bicubic'], ['fsr1', 'FSR 1'], ['fsr2', 'FSR 2'],
       ['fsr3', 'FSR 3'], ['fsr4', 'FSR 4'], ['dlss1', 'DLSS 1'],
       ['dlss2', 'DLSS 2'], ['dlss3', 'DLSS 3'], ['dlss4', 'DLSS 4'],
+      ['oss_v3', 'OSS v3 (ours, measured)'], ['oss_v4', 'OSS v4 (ours, measured)'],
     ];
     for (const [k, label] of items) {
-      const v = UPSCALER_ESTIMATES[k][metric];
+      const e = UPSCALER_ESTIMATES[k];
+      const v = e[metric];
       if (v == null) continue;
       const yp = y.getPixelForValue(v);
       if (yp < y.top || yp > y.bottom) continue;
-      ctx.strokeStyle = UPSCALER_ESTIMATES[k].color;
+      // OSS lines are solid + thicker so 'ours' reads distinctly from competitors.
+      ctx.strokeStyle = e.color;
+      if (e.kind === 'ours') {
+        ctx.setLineDash([]);
+        ctx.lineWidth = 2;
+      } else {
+        ctx.setLineDash([3, 4]);
+        ctx.lineWidth = 1;
+      }
       ctx.beginPath();
       ctx.moveTo(x.left, yp);
       ctx.lineTo(x.right, yp);
       ctx.stroke();
-      ctx.fillStyle = UPSCALER_ESTIMATES[k].color;
-      ctx.fillText(label + ' (est)', x.right - 75, yp - 2);
+      ctx.fillStyle = e.color;
+      const suffix = e.kind === 'ours' ? '' : ' (est)';
+      ctx.fillText(label + suffix, x.right - 110, yp - 2);
     }
     ctx.restore();
   },
