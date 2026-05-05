@@ -57,6 +57,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="Inference device. Default cpu (avoids contention with training GPU).")
     p.add_argument("--once", action="store_true",
                    help="Render one iteration and exit (smoke / one-shot).")
+    p.add_argument("--ckpt-baseline", type=Path, default=None,
+                   help="Optional v4-baseline ckpt path; if provided, viz adds "
+                        "a v4-baseline column for direct A/B with v5-temporal.")
+    p.add_argument("--err-scale", type=float, default=0.2,
+                   help="Error heatmap normalization (per-channel L1 absolute "
+                        "error mapped to [0, err_scale] -> red colormap).")
     return p.parse_args(argv)
 
 
@@ -73,12 +79,19 @@ def _render_iteration(
     output_dir: Path,
     n_pairs: int,
     device: str,
+    ckpt_baseline: Path | None = None,
+    err_scale: float = 0.2,
 ) -> Path | None:
-    """Render a single 4-up comparison strip and write to viz/step-XXXXX.png."""
+    """Render a single 6-up comparison strip and write to viz/step-XXXXX.png.
+
+    Strip layout (left to right):
+      LR-bilinear | bicubic | v4-baseline | v5-temporal | GT | |error|
+    """
     import torch
     import torch.nn.functional as F
 
     from oss.gaussian.data import EngineAliasedLRSynth, TartanAirGaussianDataset
+    from oss.sr import build_sr_model
     from oss.sr.temporal import (
         SequentialPairDataset, TemporalSRModel,
         adapt_tartanair, make_first_frame_prev_hr,
@@ -99,7 +112,7 @@ def _render_iteration(
     if out_path.exists():
         return None  # already rendered this step
 
-    # Load model.
+    # Load v5-temporal model.
     ck = torch.load(ckpt_path, map_location=device, weights_only=False)
     saved = ck.get("args", {})
     tier = saved.get("tier", "standard")
@@ -110,6 +123,20 @@ def _render_iteration(
     elif "sr_model" in ck:
         model.backbone.load_state_dict(ck["sr_model"])
     model.train(False)
+
+    # Load v4-baseline single-frame model (optional column).
+    baseline = None
+    if ckpt_baseline is not None and ckpt_baseline.exists():
+        bck = torch.load(ckpt_baseline, map_location=device, weights_only=False)
+        bsaved = bck.get("args", {})
+        b_tier = bsaved.get("tier", "standard")
+        b_backbone = bsaved.get("sr_backbone", "simple")
+        b_kind = "rrdb" if b_backbone == "rrdb" else "simple"
+        baseline = build_sr_model(
+            model_kind=b_kind, tier=b_tier, in_channels=12, scale=2,
+        ).to(device)
+        baseline.load_state_dict(bck["sr_model"])
+        baseline.train(False)
 
     # Load manifest + dataset. Codex R5 review fixed three issues:
     #
@@ -199,8 +226,31 @@ def _render_iteration(
                                   mode="bilinear", align_corners=False).clamp(0.0, 1.0)
         gt_tp1 = ex_tp1.gt_hr_frame.unsqueeze(0).to(device).clamp(0.0, 1.0)
 
-        # Stack horizontally: [LR-up | bicubic | model temporal-on-t+1 | GT]
-        strip = torch.cat([lr_up_tp1[0], bicubic_tp1[0], out_tp1[0], gt_tp1[0]], dim=-1)
+        # v4-baseline column (single-frame; no temporal/prev_hr regime).
+        if baseline is not None:
+            with torch.no_grad():
+                base_out_tp1 = baseline(x12_tp1).clamp(0.0, 1.0)
+        else:
+            base_out_tp1 = bicubic_tp1  # fallback so strip width stays consistent
+
+        # Per-pixel L1 error between v5-temporal and GT, normalized to
+        # [0, err_scale] then mapped to a black->red->yellow gradient. Reveals
+        # WHERE the model fails (edges? dark regions? high-freq texture?).
+        # Channels-collapsed via mean so a single error magnitude per pixel.
+        err = (out_tp1[0] - gt_tp1[0]).abs().mean(dim=0, keepdim=True)  # (1, H, W)
+        err_norm = (err / max(err_scale, 1e-6)).clamp(0.0, 1.0)
+        # Hot-iron gradient: lo (black) -> mid (red) -> hi (yellow).
+        # red = clamp(2*x), green = clamp(2*x - 1), blue = 0
+        red = (err_norm * 2.0).clamp(0.0, 1.0)
+        green = (err_norm * 2.0 - 1.0).clamp(0.0, 1.0)
+        blue = torch.zeros_like(err_norm)
+        err_rgb = torch.cat([red, green, blue], dim=0)
+
+        # Stack horizontally: [LR-up | bicubic | v4 | v5-temporal | GT | |err|]
+        strip = torch.cat([
+            lr_up_tp1[0], bicubic_tp1[0], base_out_tp1[0],
+            out_tp1[0], gt_tp1[0], err_rgb,
+        ], dim=-1)
         rendered_strips.append(strip.cpu())
     if not rendered_strips:
         return None
@@ -215,7 +265,7 @@ def _render_iteration(
     arr = (composite.clamp(0.0, 1.0).permute(1, 2, 0).numpy() * 255).astype("uint8")
     img = Image.fromarray(arr)
     drawer = ImageDraw.Draw(img, mode="RGBA")
-    panel_labels = ["LR-bilinear", "bicubic", "v5-temporal", "GT"]
+    panel_labels = ["LR-bilinear", "bicubic", "v4-baseline", "v5-temporal", "GT", "|err| heatmap"]
     panel_w = img.width // len(panel_labels)
     for i, label in enumerate(panel_labels):
         # Estimate text width for default font (~6px per char).
@@ -271,6 +321,7 @@ def main(argv: list[str] | None = None) -> int:
                         ckpt_path=ckpt, manifest_path=args.manifest,
                         tartanair_root=args.tartanair_root, output_dir=args.output_dir,
                         n_pairs=args.n_pairs, device=args.device,
+                        ckpt_baseline=args.ckpt_baseline, err_scale=args.err_scale,
                     )
                     elapsed = time.monotonic() - t0
                     if out is None:

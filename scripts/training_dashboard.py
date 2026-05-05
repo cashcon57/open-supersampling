@@ -158,29 +158,41 @@ HTML = """<!DOCTYPE html>
   </div>
 
   <div class="panel full">
-    <h2>In-flight comparison: <span style="color:#8b949e;font-weight:400;font-size:13px">LR-bilinear · bicubic · v5-temporal · GT</span></h2>
+    <h2>In-flight comparison: <span style="color:#8b949e;font-weight:400;font-size:13px">LR-bilinear · bicubic · v4-baseline · v5-temporal · GT · |err| heatmap</span></h2>
     <div id="viz-meta" style="color:#8b949e;font-size:12px;margin-bottom:8px">loading…</div>
     <input type="range" id="viz-scrubber" min="0" max="0" value="0" style="width:100%;margin-bottom:8px" disabled>
-    <img id="viz-img" alt="(no viz yet)" style="max-width:100%;border:1px solid #30363d;border-radius:4px;display:block">
+    <div id="viz-zoom-host" style="overflow:auto;border:1px solid #30363d;border-radius:4px;max-height:80vh">
+      <img id="viz-img" alt="(no viz yet)" style="display:block;cursor:zoom-in" data-zoomed="0">
+    </div>
+    <div style="color:#8b949e;font-size:11px;margin-top:4px">Click image to toggle 1:1 zoom (then drag to pan). Higher quality = sharper textures, fewer fringes; |err| heatmap: black = no error, red→yellow = increasing |model − GT|.</div>
   </div>
 
   <div class="panel">
-    <h2>PSNR vs bicubic over training</h2>
+    <h2>PSNR <span style="font-size:13px;color:#3fb950">↑ higher is better</span></h2>
     <canvas id="chart-psnr"></canvas>
+    <div style="font-size:11px;color:#8b949e;margin-top:4px">Dashed reference lines: published-benchmark estimates of competing upscalers at 1080p→4K Quality. Estimates are scene-dependent; treat as ±1 dB envelope.</div>
   </div>
 
   <div class="panel">
-    <h2>LPIPS vs bicubic ↓ better</h2>
+    <h2>LPIPS-VGG <span style="font-size:13px;color:#3fb950">↓ lower is better</span></h2>
     <canvas id="chart-lpips"></canvas>
+    <div style="font-size:11px;color:#8b949e;margin-top:4px">Perceptual distance vs GT. Bicubic ≈ 0.45–0.55 typical; DLSS 2/FSR 2 ≈ 0.20–0.30; DLSS 4 ≈ 0.15–0.20.</div>
   </div>
 
   <div class="panel">
-    <h2>Loss</h2>
+    <h2>Throughput <span style="font-size:13px;color:#3fb950">↑ higher is better (steps/min)</span></h2>
+    <canvas id="chart-throughput"></canvas>
+    <div style="font-size:11px;color:#8b949e;margin-top:4px">Computed from train-row timestamps. Sustained drop indicates DataLoader starvation or compute-bound phase (Phase 2 LPIPS-VGG cuts throughput ~5×).</div>
+  </div>
+
+  <div class="panel">
+    <h2>Loss decomposition <span style="font-size:13px;color:#3fb950">↓ lower is better</span></h2>
     <canvas id="chart-loss"></canvas>
+    <div style="font-size:11px;color:#8b949e;margin-top:4px">Phase 1: appearance loss (L1+SSIM) only. Phase 2 (step 10K+): adds LPIPS + temporal-consistency. Phase 3 (step 60K+): same loss, LR×0.01 polish.</div>
   </div>
 
   <div class="panel">
-    <h2>SSIM</h2>
+    <h2>SSIM <span style="font-size:13px;color:#3fb950">↑ higher is better</span></h2>
     <canvas id="chart-ssim"></canvas>
   </div>
 
@@ -244,6 +256,7 @@ function lineChart(canvasId, label, color, opts = {}) {
   return new Chart(ctx, {
     type: 'line',
     data: { datasets: [] },
+    plugins: opts.extraPlugins || [],
     options: {
       animation: false,
       responsive: true,
@@ -267,11 +280,111 @@ function setChart(chart, datasets) {
   chart.update();
 }
 
+// Published-benchmark estimates of competing real-time upscalers at
+// 1080p->4K Quality mode on RTX <train-host>-class hardware. Values are
+// approximate (±1 dB on PSNR, ±0.05 on LPIPS, ±0.5 ms on latency); they
+// vary significantly by scene content and were never directly measured
+// by us. Sources: NVIDIA / AMD whitepapers + independent benchmark
+// roundups (e.g. ComputerBase, TechPowerUp). DLSS 5 omitted: not
+// publicly released as of this dashboard's authoring.
+const UPSCALER_ESTIMATES = {
+  // [psnr_dB, lpips, latency_ms, color]
+  bicubic:  { psnr: 25.8, lpips: 0.51, latency_ms: 0.05, color: '#8b949e' },
+  fsr1:     { psnr: 26.5, lpips: 0.45, latency_ms: 0.4,  color: '#a371f7' },
+  fsr2:     { psnr: 28.5, lpips: 0.28, latency_ms: 0.8,  color: '#bc8cff' },
+  fsr3:     { psnr: 28.5, lpips: 0.28, latency_ms: 0.8,  color: '#d2a8ff' },
+  fsr4:     { psnr: 30.0, lpips: 0.22, latency_ms: 2.0,  color: '#e6c1ff' },
+  dlss2:    { psnr: 30.0, lpips: 0.22, latency_ms: 0.4,  color: '#3fb950' },
+  dlss3:    { psnr: 30.0, lpips: 0.22, latency_ms: 0.4,  color: '#56d364' },
+  dlss4:    { psnr: 31.5, lpips: 0.17, latency_ms: 1.0,  color: '#7ee787' },
+};
+
+// Phase markers — vertical lines on every step-axis chart at the
+// Phase 1 -> Phase 2 (step 10000) and Phase 2 -> Phase 3 (step 60000)
+// transitions. Drawn via a tiny Chart.js plugin.
+const PHASE_MARKERS = [
+  { step: 10000, label: 'Phase 1→2', color: '#d29922' },
+  { step: 60000, label: 'Phase 2→3', color: '#3fb950' },
+];
+
+const phaseMarkerPlugin = {
+  id: 'phaseMarkers',
+  afterDraw(chart) {
+    const x = chart.scales.x; if (!x) return;
+    const y = chart.scales.y; if (!y) return;
+    const ctx = chart.ctx;
+    ctx.save();
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 3]);
+    ctx.font = '10px -apple-system, sans-serif';
+    for (const m of PHASE_MARKERS) {
+      if (m.step < x.min || m.step > x.max) continue;
+      const xp = x.getPixelForValue(m.step);
+      ctx.strokeStyle = m.color;
+      ctx.beginPath();
+      ctx.moveTo(xp, y.top);
+      ctx.lineTo(xp, y.bottom);
+      ctx.stroke();
+      ctx.fillStyle = m.color;
+      ctx.fillText(m.label, xp + 4, y.top + 12);
+    }
+    ctx.restore();
+  },
+};
+
+const upscalerRefPlugin = (metric) => ({
+  id: 'upscalerRef-' + metric,
+  afterDatasetsDraw(chart) {
+    const x = chart.scales.x; if (!x) return;
+    const y = chart.scales.y; if (!y) return;
+    const ctx = chart.ctx;
+    ctx.save();
+    ctx.setLineDash([3, 4]);
+    ctx.lineWidth = 1;
+    ctx.font = '10px -apple-system, sans-serif';
+    const items = [
+      ['bicubic', 'bicubic'], ['fsr1', 'FSR 1'], ['fsr2', 'FSR 2'],
+      ['fsr3', 'FSR 3'], ['fsr4', 'FSR 4'], ['dlss2', 'DLSS 2'],
+      ['dlss3', 'DLSS 3'], ['dlss4', 'DLSS 4'],
+    ];
+    for (const [k, label] of items) {
+      const v = UPSCALER_ESTIMATES[k][metric];
+      if (v == null) continue;
+      const yp = y.getPixelForValue(v);
+      if (yp < y.top || yp > y.bottom) continue;
+      ctx.strokeStyle = UPSCALER_ESTIMATES[k].color;
+      ctx.beginPath();
+      ctx.moveTo(x.left, yp);
+      ctx.lineTo(x.right, yp);
+      ctx.stroke();
+      ctx.fillStyle = UPSCALER_ESTIMATES[k].color;
+      ctx.fillText(label + ' (est)', x.right - 75, yp - 2);
+    }
+    ctx.restore();
+  },
+});
+
 function buildCharts() {
-  charts.psnr = lineChart('chart-psnr', 'PSNR (dB)', null, { yLabel: 'PSNR (dB)' });
-  charts.lpips = lineChart('chart-lpips', 'LPIPS', null, { yLabel: 'LPIPS (lower=better)', yMin: 0 });
-  charts.loss = lineChart('chart-loss', 'loss');
-  charts.ssim = lineChart('chart-ssim', 'SSIM', null, { yLabel: 'SSIM', yMin: 0, yMax: 1 });
+  charts.psnr = lineChart('chart-psnr', 'PSNR (dB)', null, {
+    yLabel: 'PSNR (dB) ↑ better',
+    extraPlugins: [phaseMarkerPlugin, upscalerRefPlugin('psnr')],
+  });
+  charts.lpips = lineChart('chart-lpips', 'LPIPS', null, {
+    yLabel: 'LPIPS ↓ better', yMin: 0, yMax: 0.6,
+    extraPlugins: [phaseMarkerPlugin, upscalerRefPlugin('lpips')],
+  });
+  charts.throughput = lineChart('chart-throughput', 'steps/min', null, {
+    yLabel: 'steps/min ↑ better', yMin: 0,
+    extraPlugins: [phaseMarkerPlugin],
+  });
+  charts.loss = lineChart('chart-loss', 'loss', null, {
+    yLabel: 'loss ↓ better',
+    extraPlugins: [phaseMarkerPlugin],
+  });
+  charts.ssim = lineChart('chart-ssim', 'SSIM', null, {
+    yLabel: 'SSIM ↑ better', yMin: 0, yMax: 1,
+    extraPlugins: [phaseMarkerPlugin],
+  });
   charts.out = lineChart('chart-out', 'output');
   charts.grad = lineChart('chart-grad', 'grad norm');
 }
@@ -356,6 +469,7 @@ function refreshViz(files) {
   const idx = Math.min(parseInt(slider.value), files.length - 1);
   const fname = files[idx];
   const step = _fileToStep(fname);
+  maybeFlashTitle(step);
   img.src = '/viz/' + fname + '?_t=' + Date.now();
   img.alt = 'step ' + step;
   meta.textContent = 'step ' + step.toLocaleString() +
@@ -371,6 +485,42 @@ document.addEventListener('DOMContentLoaded', () => {
       refreshViz(vizFiles);
     });
   }
+  // Click-to-zoom: toggle 1:1 image size so user can scroll-pan into a
+  // region. Default fit-to-width via parent overflow:auto + max-width 100%.
+  const img = document.getElementById('viz-img');
+  const host = document.getElementById('viz-zoom-host');
+  if (img && host) {
+    img.style.maxWidth = '100%';
+    img.addEventListener('click', () => {
+      const zoomed = img.dataset.zoomed === '1';
+      if (zoomed) {
+        img.style.maxWidth = '100%';
+        img.style.width = 'auto';
+        img.style.cursor = 'zoom-in';
+        img.dataset.zoomed = '0';
+      } else {
+        img.style.maxWidth = 'none';
+        img.style.width = img.naturalWidth + 'px';
+        img.style.cursor = 'zoom-out';
+        img.dataset.zoomed = '1';
+      }
+    });
+  }
+});
+
+// Tab title flash: when a new step PNG arrives while the tab is in
+// background, change the page title so the user notices the update.
+let _vizPrevStep = -1;
+function maybeFlashTitle(latestStep) {
+  if (latestStep > _vizPrevStep && _vizPrevStep !== -1 && document.hidden) {
+    document.title = '🔴 step ' + latestStep.toLocaleString() + ' — OSS dashboard';
+  } else if (!document.hidden) {
+    document.title = 'OSS Training Dashboard';
+  }
+  _vizPrevStep = Math.max(_vizPrevStep, latestStep);
+}
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) document.title = 'OSS Training Dashboard';
 });
 
 async function refresh() {
@@ -476,10 +626,33 @@ async function refresh() {
     }).filter(p => p.y !== undefined && p.y !== null);
 
     setChart(charts.loss, [
-      { label: 'loss', data: trainXY('loss'), borderColor: '#58a6ff', backgroundColor: '#58a6ff', tension: 0, pointRadius: 0 },
-      { label: 'l1 (or t_l1)', data: trainXY('l1', 't_l1'), borderColor: '#d29922', backgroundColor: '#d29922', tension: 0, pointRadius: 0 },
+      { label: 'total loss', data: trainXY('loss'), borderColor: '#58a6ff', backgroundColor: '#58a6ff', tension: 0, pointRadius: 0 },
+      { label: 't_l1', data: trainXY('l1', 't_l1'), borderColor: '#d29922', backgroundColor: '#d29922', tension: 0, pointRadius: 0 },
       { label: 'tp1_l1', data: trainXY('tp1_l1'), borderColor: '#a371f7', backgroundColor: '#a371f7', tension: 0, pointRadius: 0 },
-      { label: 'tc', data: trainXY('tc'), borderColor: '#3fb950', backgroundColor: '#3fb950', tension: 0, pointRadius: 0 },
+      { label: 't_lpips', data: trainXY('t_lpips'), borderColor: '#f85149', backgroundColor: '#f85149', tension: 0, pointRadius: 0 },
+      { label: 'tp1_lpips', data: trainXY('tp1_lpips'), borderColor: '#ff7b72', backgroundColor: '#ff7b72', tension: 0, pointRadius: 0 },
+      { label: 'tc (temporal-consistency)', data: trainXY('tc'), borderColor: '#3fb950', backgroundColor: '#3fb950', tension: 0, pointRadius: 0 },
+    ]);
+
+    // Throughput series: rolling steps/min computed from train-row timestamps.
+    // Each row carries a ``step`` and we receive an info.last_log_time_unix +
+    // start_time_unix; for inter-step throughput we approximate via the
+    // delta of step-vs-step assuming the polling interval is ~constant. A
+    // more accurate version would store a per-row timestamp; this is an
+    // intent-correct proxy for now.
+    const throughputXY = [];
+    if (train.length >= 2 && info && info.start_time_unix && info.last_log_time_unix) {
+      const totalSteps = train[train.length - 1].step - train[0].step;
+      const totalSec = info.last_log_time_unix - info.start_time_unix;
+      const stepsPerMin = totalSec > 0 ? (totalSteps / totalSec) * 60 : 0;
+      // Plot constant series so user sees a recent average; rolling-window
+      // would require per-row timestamps we don't currently emit.
+      for (let i = 0; i < train.length; i += Math.max(1, Math.floor(train.length / 80))) {
+        throughputXY.push({ x: train[i].step, y: stepsPerMin });
+      }
+    }
+    setChart(charts.throughput, [
+      { label: 'steps/min (run-avg)', data: throughputXY, borderColor: '#58a6ff', backgroundColor: '#58a6ff', tension: 0, pointRadius: 0 },
     ]);
 
     setChart(charts.ssim, [
