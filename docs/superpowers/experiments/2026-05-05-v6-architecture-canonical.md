@@ -7,6 +7,9 @@
 - `docs/superpowers/specs/2026-05-04-v5-gaussian-temporal-design.md` — Sprint 5 v5-gaussian-temporal architecture (the validation step)
 - `docs/superpowers/notes/2026-05-04-s7-game-integration-design.md` — DXGI hook + NGX shim (how v6 reaches users without dev cooperation)
 
+**Implementation roadmap (read before starting v6 code):**
+- `docs/research/2026-05-05-v6-external-baselines-integration-plan.md` — concrete sequenced action items derived from deep-reads of GSASR, AAA-Gaussians, AA-2DGS, Analytic-Splatting, vk_gaussian_splatting, GaussianVideo. Five-component plan (fusion module from GSASR, HAT-L warm-start, four-paper AA stack, NVIDIA upper-bound benchmark, GaussianVideo B-spline FX trajectory) with effort estimates and dependency chain.
+
 ---
 
 ## 0. The pitch in one sentence
