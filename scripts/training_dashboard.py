@@ -1303,7 +1303,19 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if not path.exists():
             return default
         try:
-            return json.loads(path.read_text())
+            text = path.read_text()
+            try:
+                return json.loads(text)
+            except json.JSONDecodeError:
+                # v6 writes metrics.json as JSON Lines for append-only
+                # crash-safety. Expose the same shape the frontend already
+                # accepts for legacy bare train-row arrays.
+                rows = [
+                    json.loads(line)
+                    for line in text.splitlines()
+                    if line.strip()
+                ]
+                return rows if rows else default
         except json.JSONDecodeError:
             # Mid-write race — just retry next poll.
             return default

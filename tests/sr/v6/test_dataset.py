@@ -176,19 +176,13 @@ def test_mixed_dataset_single_source(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _read_metrics_json(path: Path) -> dict:
+def _read_metrics_json(path: Path) -> list[dict]:
     import json as _json
-    return _json.loads(path.read_text())
+    return [_json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
 
-def test_sr_train_v6_smoke_passes_construction(tmp_path: Path) -> None:
-    """`--smoke` must construct V6Model successfully and exit zero.
-
-    Before the V6Model orchestrator landed (commit before this test was
-    last updated), --smoke exited on a NotImplementedError stub. Now
-    V6Model is real; --smoke must reach the construction-only success
-    path which writes a metrics.json sentinel and exits cleanly.
-    """
+def test_sr_train_v6_smoke_runs_training_loop(tmp_path: Path) -> None:
+    """`--smoke` must run the v6 training loop and exit zero."""
     repo_root = Path(__file__).resolve().parents[3]
     script = repo_root / "scripts" / "sr_train_v6.py"
     assert script.is_file(), f"script not found at {script}"
@@ -203,10 +197,9 @@ def test_sr_train_v6_smoke_passes_construction(tmp_path: Path) -> None:
     assert res.returncode == 0, (
         f"smoke failed: code={res.returncode}\nstdout={res.stdout}\nstderr={res.stderr}"
     )
-    assert "V6Model construction smoke passed" in combined or "smoke OK" in combined, (
-        f"expected v6-smoke-construction success message; got:\n{combined}"
-    )
+    assert "v6 training:" in combined and "final_step=5" in combined
     metrics_path = out_dir / "metrics.json"
     assert metrics_path.exists(), "metrics.json was not created"
     metrics = _read_metrics_json(metrics_path)
-    assert metrics["status"] in ("v6-smoke-construction-only", "v6-model-stub")
+    assert [row["step"] for row in metrics] == [1, 2, 3, 4, 5]
+    assert (out_dir / "step-00000005.pt").exists()
