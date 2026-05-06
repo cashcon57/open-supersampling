@@ -21,11 +21,20 @@ charts (the HTML pulls Chart.js from cdn.jsdelivr.net at page load).
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import socketserver
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
+
+
+RUN_DIR_PATTERNS = (
+    "srcnn-v*-temporal*",
+    "srcnn-v6-*",
+    "srcnn-v5-pixel-temporal*",
+    "srcnn-v5-gaussian-temporal*",
+)
 
 # ---------------------------------------------------------------------------
 # HTML page (single file, no build step). Chart.js is CDN-loaded.
@@ -59,6 +68,16 @@ HTML = """<!DOCTYPE html>
          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
   h1 { font-size: 20px; margin: 0 0 8px 0; }
   .sub { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
+  .topbar { display: flex; align-items: flex-start; justify-content: space-between;
+            gap: 16px; margin-bottom: 24px; }
+  .topbar .sub { margin-bottom: 0; }
+  .run-picker { display: flex; align-items: center; gap: 8px; white-space: nowrap;
+                color: var(--muted); font-size: 12px; }
+  .run-picker select {
+    background: #21262d; color: var(--fg); border: 1px solid var(--border);
+    border-radius: 4px; padding: 5px 28px 5px 8px; font-family: var(--mono);
+    font-size: 12px; max-width: min(52vw, 520px);
+  }
   .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
   .panel { background: var(--panel); border: 1px solid var(--border);
            border-radius: 8px; padding: 16px; }
@@ -113,8 +132,16 @@ HTML = """<!DOCTYPE html>
 </head>
 <body>
 
-<h1><span class="status-dot" id="status-dot"></span>OSS Training Dashboard</h1>
-<div class="sub" id="header-sub">loading…</div>
+<div class="topbar">
+  <div>
+    <h1><span class="status-dot" id="status-dot"></span>OSS Training Dashboard</h1>
+    <div class="sub" id="header-sub">loading…</div>
+  </div>
+  <div class="run-picker">
+    <label for="run-select">run</label>
+    <select id="run-select"><option value="">loading…</option></select>
+  </div>
+</div>
 
 <div class="grid">
 
@@ -304,9 +331,11 @@ HTML = """<!DOCTYPE html>
 <script>
 const POLL_MS = 10_000;
 const STALE_MS = 60_000;
+const RUN_STORAGE_KEY = 'oss-training-dashboard-run';
 
 let charts = {};
 let lastUpdate = null;
+let currentRun = new URLSearchParams(window.location.search).get('run') || '';
 
 const fmt = {
   num(x, d = 2) { return x === null || x === undefined || Number.isNaN(x) ? '–' : Number(x).toFixed(d); },
@@ -689,6 +718,68 @@ async function fetchText(url) {
   return r.text();
 }
 
+function withRun(url) {
+  const u = new URL(url, window.location.origin);
+  if (currentRun) u.searchParams.set('run', currentRun);
+  return u.pathname + u.search;
+}
+
+async function initRunPicker() {
+  const select = document.getElementById('run-select');
+  if (!select) return;
+  try {
+    const payload = await fetchJSON('/api/runs');
+    const runs = (payload && payload.runs) || [];
+    const names = new Set(runs.map(r => r.name));
+    const queryRun = new URLSearchParams(window.location.search).get('run') || '';
+    const storedRun = localStorage.getItem(RUN_STORAGE_KEY) || '';
+    if (queryRun && names.has(queryRun)) {
+      currentRun = queryRun;
+    } else if (!queryRun && storedRun && names.has(storedRun)) {
+      currentRun = storedRun;
+    } else {
+      currentRun = payload.default_run || (runs[0] && runs[0].name) || '';
+    }
+    if (currentRun) localStorage.setItem(RUN_STORAGE_KEY, currentRun);
+
+    while (select.firstChild) select.removeChild(select.firstChild);
+    if (!runs.length) {
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = '(no matching runs)';
+      select.appendChild(opt);
+      select.disabled = true;
+      return;
+    }
+    select.disabled = false;
+    for (const run of runs) {
+      const opt = document.createElement('option');
+      opt.value = run.name;
+      const bits = [];
+      if (run.has_train_log) bits.push('metrics');
+      if (run.has_score_log) bits.push('score');
+      if (run.has_viz) bits.push('viz');
+      opt.textContent = bits.length ? `${run.name} (${bits.join(', ')})` : run.name;
+      select.appendChild(opt);
+    }
+    select.value = currentRun;
+    select.addEventListener('change', () => {
+      const run = select.value;
+      localStorage.setItem(RUN_STORAGE_KEY, run);
+      const next = new URL(window.location.href);
+      next.searchParams.set('run', run);
+      window.location.href = next.toString();
+    });
+  } catch (e) {
+    while (select.firstChild) select.removeChild(select.firstChild);
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = '(run scan failed)';
+    select.appendChild(opt);
+    select.disabled = true;
+  }
+}
+
 function renderEvalTable(scoreRows) {
   const tbody = document.querySelector('#eval-table tbody');
   // Clear existing rows safely.
@@ -758,7 +849,7 @@ function refreshViz(files) {
   const fname = files[idx];
   const step = _fileToStep(fname);
   maybeFlashTitle(step);
-  img.src = '/viz/' + fname + '?_t=' + Date.now();
+  img.src = withRun('/viz/' + fname + '?_t=' + Date.now());
   img.alt = 'step ' + step;
   meta.textContent = 'step ' + step.toLocaleString() +
                      ' · ' + files.length + ' ckpt(s) rendered · ' +
@@ -814,11 +905,11 @@ document.addEventListener('visibilitychange', () => {
 async function refresh() {
   try {
     const [info, metrics, score, logTail, viz] = await Promise.all([
-      fetchJSON('/api/info'),
-      fetchJSON('/api/metrics'),
-      fetchJSON('/api/score'),
-      fetchText('/api/log'),
-      fetchJSON('/api/viz').catch(() => ({ files: [] })),
+      fetchJSON(withRun('/api/info')),
+      fetchJSON(withRun('/api/metrics')),
+      fetchJSON(withRun('/api/score')),
+      fetchText(withRun('/api/log')),
+      fetchJSON(withRun('/api/viz')).catch(() => ({ files: [] })),
     ]);
 
     lastUpdate = Date.now();
@@ -1002,7 +1093,7 @@ async function refresh() {
 
 buildCharts();
 _wireResetZoomOnDblClick();
-refresh();
+initRunPicker().finally(refresh);
 setInterval(refresh, POLL_MS);
 </script>
 </body>
@@ -1013,6 +1104,53 @@ setInterval(refresh, POLL_MS);
 # ---------------------------------------------------------------------------
 # Server
 # ---------------------------------------------------------------------------
+
+
+def _matches_run_dir(path: Path) -> bool:
+    return path.is_dir() and any(fnmatch.fnmatch(path.name, pat) for pat in RUN_DIR_PATTERNS)
+
+
+def _safe_mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def _run_last_modified(run_dir: Path) -> float:
+    mtimes = [_safe_mtime(run_dir)]
+    for name in ("metrics.json", "score_log.json"):
+        mtimes.append(_safe_mtime(run_dir / name))
+    ckpts = list(run_dir.glob("step-*.pt"))
+    if ckpts:
+        mtimes.append(max(_safe_mtime(p) for p in ckpts))
+    viz_dir = run_dir / "viz"
+    if viz_dir.is_dir():
+        pngs = list(viz_dir.glob("step-*.png"))
+        mtimes.append(_safe_mtime(viz_dir))
+        if pngs:
+            mtimes.append(max(_safe_mtime(p) for p in pngs))
+    return max(mtimes)
+
+
+def discover_runs(parent: Path) -> list[dict]:
+    runs: list[dict] = []
+    if not parent.is_dir():
+        return runs
+    for child in parent.iterdir():
+        if not _matches_run_dir(child):
+            continue
+        viz_dir = child / "viz"
+        runs.append({
+            "name": child.name,
+            "path": str(child.resolve()),
+            "last_modified": _run_last_modified(child),
+            "has_train_log": (child / "metrics.json").is_file(),
+            "has_viz": viz_dir.is_dir() and any(viz_dir.glob("step-*.png")),
+            "has_score_log": (child / "score_log.json").is_file(),
+        })
+    runs.sort(key=lambda r: (float(r["last_modified"]), r["name"]), reverse=True)
+    return runs
 
 
 class DashboardHandler(BaseHTTPRequestHandler):
@@ -1053,14 +1191,21 @@ class DashboardHandler(BaseHTTPRequestHandler):
         return
 
     def do_GET(self) -> None:  # noqa: N802
-        path = urlparse(self.path).path
+        parsed = urlparse(self.path)
+        path = parsed.path
         try:
             if path in ("/", "/index.html"):
                 self._send_html(HTML)
+            elif path == "/api/runs":
+                runs = discover_runs(self.output_dir.parent)
+                default_run = runs[0]["name"] if runs else self.output_dir.name
+                self._send_json({"runs": runs, "default_run": default_run})
             elif path == "/api/info":
-                self._send_json(self._build_info())
+                output_dir = self._resolve_request_output_dir(parsed.query)
+                self._send_json(self._build_info(output_dir))
             elif path == "/api/metrics":
-                data = self._read_json("metrics.json", default=[])
+                output_dir = self._resolve_request_output_dir(parsed.query)
+                data = self._read_json(output_dir, "metrics.json", default=[])
                 if isinstance(data, dict) and isinstance(data.get("train"), list):
                     train = data["train"]
                     cap = 2000
@@ -1069,27 +1214,31 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         data = {**data, "train": train[::step][-cap:] + train[-1:]}
                 self._send_json(data)
             elif path == "/api/score":
-                data = self._read_json("score_log.json", default=None)
+                output_dir = self._resolve_request_output_dir(parsed.query)
+                data = self._read_json(output_dir, "score_log.json", default=None)
                 if data is None:
-                    metrics = self._read_json("metrics.json", default={})
+                    metrics = self._read_json(output_dir, "metrics.json", default={})
                     data = metrics.get("score", []) if isinstance(metrics, dict) else []
                 self._send_json(data)
             elif path == "/api/log":
-                self._send_text(self._read_log_tail(n_lines=200))
+                output_dir = self._resolve_request_output_dir(parsed.query)
+                self._send_text(self._read_log_tail(output_dir, n_lines=200))
             elif path == "/api/viz":
+                output_dir = self._resolve_request_output_dir(parsed.query)
                 # Lists step-XXXXX.png files in <output_dir>/viz/, sorted ascending.
-                viz_dir = self.output_dir / "viz"
+                viz_dir = output_dir / "viz"
                 files: list[str] = []
                 if viz_dir.is_dir():
                     files = sorted(p.name for p in viz_dir.glob("step-*.png"))
                 self._send_json({"files": files})
             elif path.startswith("/viz/"):
+                output_dir = self._resolve_request_output_dir(parsed.query)
                 # Serve a single PNG from <output_dir>/viz/.
                 fname = path[len("/viz/"):]
                 if "/" in fname or ".." in fname or not fname.endswith(".png"):
                     self._send_text("bad path", status=400)
                 else:
-                    viz_path = self.output_dir / "viz" / fname
+                    viz_path = output_dir / "viz" / fname
                     if not viz_path.is_file():
                         self._send_text("not found", status=404)
                     else:
@@ -1102,13 +1251,55 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         self.wfile.write(body)
             else:
                 self._send_text("not found", status=404)
+        except PermissionError as e:
+            self._send_json({"error": str(e)}, status=403)
+        except FileNotFoundError as e:
+            self._send_json({"error": str(e)}, status=404)
         except Exception as e:  # pragma: no cover — last-ditch error path
             self._send_text(f"server error: {e}", status=500)
 
     # ---- helpers ----
 
-    def _read_json(self, name: str, default):
-        path = self.output_dir / name
+    def _resolve_request_output_dir(self, query: str) -> Path:
+        params = parse_qs(query, keep_blank_values=False)
+        run_values = params.get("run", [])
+        run_name = run_values[-1] if run_values else None
+        if run_name is None:
+            runs = discover_runs(self.output_dir.parent)
+            if runs:
+                return (self.output_dir.parent / runs[0]["name"]).resolve()
+            return self.output_dir
+
+        if "/" in run_name or "\\" in run_name or run_name in ("", ".", ".."):
+            raise PermissionError("denied run selector")
+        candidate = (self.output_dir.parent / run_name).resolve()
+        parent = self.output_dir.parent.resolve()
+        try:
+            candidate.relative_to(parent)
+        except ValueError as e:
+            raise PermissionError("denied run selector") from e
+        if not _matches_run_dir(candidate):
+            raise PermissionError("denied run selector")
+        if not candidate.is_dir():
+            raise FileNotFoundError(f"run not found: {run_name}")
+        return candidate
+
+    def _log_file_for_output_dir(self, output_dir: Path) -> Path:
+        if output_dir == self.output_dir:
+            return self.log_file
+        candidates = [
+            output_dir / "train.log",
+            output_dir / "training.log",
+            self.log_file.parent / f"{output_dir.name}.log",
+            self.log_file.parent / f"{output_dir.name}.txt",
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+        return output_dir / "train.log"
+
+    def _read_json(self, output_dir: Path, name: str, default):
+        path = output_dir / name
         if not path.exists():
             return default
         try:
@@ -1117,23 +1308,26 @@ class DashboardHandler(BaseHTTPRequestHandler):
             # Mid-write race — just retry next poll.
             return default
 
-    def _read_log_tail(self, n_lines: int) -> str:
-        if not self.log_file.exists():
-            return f"(log file not found: {self.log_file})"
+    def _read_log_tail(self, output_dir: Path, n_lines: int) -> str:
+        log_file = self._log_file_for_output_dir(output_dir)
+        if not log_file.exists():
+            return f"(log file not found: {log_file})"
         try:
-            with self.log_file.open(encoding="utf-8", errors="replace") as f:
+            with log_file.open(encoding="utf-8", errors="replace") as f:
                 lines = f.readlines()
         except Exception as e:
             return f"(log read error: {e})"
         return "".join(lines[-n_lines:])
 
-    def _build_info(self) -> dict:
+    def _build_info(self, output_dir: Path) -> dict:
+        log_file = self._log_file_for_output_dir(output_dir)
         info: dict = {
-            "output_dir": str(self.output_dir),
-            "log_file": str(self.log_file),
+            "output_dir": str(output_dir),
+            "log_file": str(log_file),
+            "run": output_dir.name,
         }
         # Try to surface max_steps + max_time_seconds + score_every from the latest checkpoint args.
-        ckpts = sorted(self.output_dir.glob("step-*.pt")) if self.output_dir.exists() else []
+        ckpts = sorted(output_dir.glob("step-*.pt")) if output_dir.exists() else []
         if ckpts:
             try:
                 import torch  # type: ignore[import-not-found]
@@ -1147,16 +1341,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
             except Exception:
                 pass
         # Log timestamps for liveness.
-        if self.log_file.exists():
-            stat = self.log_file.stat()
+        if log_file.exists():
+            stat = log_file.stat()
             info["last_log_mtime_unix"] = stat.st_mtime
 
         # Try to estimate elapsed from log first/last timestamps.
-        if self.log_file.exists():
+        if log_file.exists():
             try:
                 first_line = None
                 last_line = None
-                with self.log_file.open(encoding="utf-8", errors="replace") as f:
+                with log_file.open(encoding="utf-8", errors="replace") as f:
                     for line in f:
                         if first_line is None and line.startswith("20"):
                             first_line = line

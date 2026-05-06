@@ -60,6 +60,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--ckpt-baseline", type=Path, default=None,
                    help="Optional v4-baseline ckpt path; if provided, viz adds "
                         "a v4-baseline column for direct A/B with v5-temporal.")
+    p.add_argument("--ckpt-v5-gaussian", type=Path, default=None,
+                   help="Optional v5-gaussian-temporal ckpt path; with --ckpt-v6, "
+                        "adds a v5-Gaussian comparison column.")
+    p.add_argument("--ckpt-v6", type=Path, default=None,
+                   help="Optional v6 ckpt path; when provided, viz adds a v6 "
+                        "comparison column using oss.sr.v6.model.V6Model.")
     p.add_argument("--err-scale", type=float, default=0.2,
                    help="Error heatmap normalization (per-channel L1 absolute "
                         "error mapped to [0, err_scale] -> red colormap).")
@@ -71,6 +77,76 @@ def _latest_ckpt(output_dir: Path) -> Path | None:
     return ckpts[-1] if ckpts else None
 
 
+def _load_v6_model(ckpt_path: Path, device: str):
+    import torch
+    from oss.sr.v6.model import V6Config, V6Model
+
+    ck = torch.load(ckpt_path, map_location=device, weights_only=False)
+    args = ck.get("args", {}) if isinstance(ck, dict) else {}
+    cfg_data = ck.get("v6_config", {}) if isinstance(ck, dict) else {}
+    if not isinstance(cfg_data, dict):
+        cfg_data = {}
+    backbone = args.get("backbone", cfg_data.get("backbone", "hat-l"))
+    in_channels = int(args.get("in_channels", cfg_data.get("in_channels", 9)))
+    scale = int(args.get("scale", cfg_data.get("scale", 2)))
+    color_activation = args.get(
+        "color_activation", cfg_data.get("color_activation", "softplus")
+    )
+    model = V6Model(V6Config(
+        backbone=backbone,
+        in_channels=in_channels,
+        scale=scale,
+        color_activation=color_activation,
+    )).to(device)
+
+    state = None
+    if isinstance(ck, dict):
+        for key in ("v6_model", "model", "model_state_dict", "state_dict"):
+            if key in ck:
+                state = ck[key]
+                break
+    if state is None and isinstance(ck, dict) and all(hasattr(v, "shape") for v in ck.values()):
+        state = ck
+    if state is not None:
+        model.load_state_dict(state, strict=False)
+    model.train(False)
+    return model
+
+
+def _load_v5_gaussian_engine(ckpt_path: Path, device: str):
+    from oss.sr.inference import GaussianTemporalSRInferenceEngine
+
+    return GaussianTemporalSRInferenceEngine.from_checkpoint(
+        ckpt_path, device=device, fp16=False, scene_cut_motion_threshold=32.0,
+    )
+
+
+def _comparison_panels(
+    *,
+    lr_up,
+    bicubic,
+    baseline,
+    pixel,
+    gt,
+    err_rgb,
+    gaussian=None,
+    v6=None,
+):
+    if v6 is None:
+        return (
+            [lr_up, bicubic, baseline, pixel, gt, err_rgb],
+            ["LR-bilinear", "bicubic", "v4-baseline", "v5-temporal", "GT", "|err| heatmap"],
+        )
+    panels = [lr_up, bicubic, pixel]
+    labels = ["LR-bilinear", "bicubic", "v5-pixel-temporal"]
+    if gaussian is not None:
+        panels.append(gaussian)
+        labels.append("v5-Gaussian")
+    panels.extend([v6, gt, err_rgb])
+    labels.extend(["v6", "GT", "|err| heatmap"])
+    return panels, labels
+
+
 def _render_iteration(
     *,
     ckpt_path: Path,
@@ -80,6 +156,8 @@ def _render_iteration(
     n_pairs: int,
     device: str,
     ckpt_baseline: Path | None = None,
+    ckpt_v5_gaussian: Path | None = None,
+    ckpt_v6: Path | None = None,
     err_scale: float = 0.2,
 ) -> Path | None:
     """Render a single 6-up comparison strip and write to viz/step-XXXXX.png.
@@ -146,6 +224,14 @@ def _render_iteration(
         ).to(device)
         baseline.load_state_dict(bck["sr_model"])
         baseline.train(False)
+
+    gaussian_engine = None
+    if ckpt_v6 is not None and ckpt_v5_gaussian is not None and ckpt_v5_gaussian.exists():
+        gaussian_engine = _load_v5_gaussian_engine(ckpt_v5_gaussian, device)
+
+    v6_model = None
+    if ckpt_v6 is not None and ckpt_v6.exists():
+        v6_model = _load_v6_model(ckpt_v6, device)
 
     # Load manifest + dataset. Codex R5 review fixed three issues:
     #
@@ -235,6 +321,42 @@ def _render_iteration(
                                   mode="bilinear", align_corners=False).clamp(0.0, 1.0)
         gt_tp1 = ex_tp1.gt_hr_frame.unsqueeze(0).to(device).clamp(0.0, 1.0)
 
+        gauss_out_tp1 = None
+        if gaussian_engine is not None:
+            with torch.no_grad():
+                gaussian_engine.reset()
+                _ = gaussian_engine(
+                    lr_inputs=x12_t, motion_lr=motion_t_lr.unsqueeze(0),
+                ).clamp(0.0, 1.0)
+                gauss_out_tp1 = gaussian_engine(
+                    lr_inputs=x12_tp1, motion_lr=motion_t_lr.unsqueeze(0),
+                ).clamp(0.0, 1.0)
+
+        v6_out_tp1 = None
+        if v6_model is not None:
+            in_channels = int(v6_model.cfg.in_channels)
+            if in_channels > x12_tp1.shape[1]:
+                raise ValueError(
+                    f"v6 ckpt expects {in_channels} channels, but viz can supply "
+                    f"only {x12_tp1.shape[1]}"
+                )
+            with torch.no_grad():
+                v6_model.reset_state(device=torch.device(device))
+                _ = v6_model(
+                    lr_inputs=x12_t[:, :in_channels],
+                    motion_lr=None,
+                    depth_hr_curr=depth_hr_t,
+                    depth_hr_prev=depth_hr_t,
+                    frame_index=0,
+                )
+                v6_out_tp1 = v6_model(
+                    lr_inputs=x12_tp1[:, :in_channels],
+                    motion_lr=motion_t_lr.unsqueeze(0),
+                    depth_hr_curr=depth_hr_tp1,
+                    depth_hr_prev=depth_hr_t,
+                    frame_index=1,
+                ).clamp(0.0, 1.0)
+
         # v4-baseline column (single-frame; no temporal/prev_hr regime).
         # MUST match the SRGD training distribution v4 was trained against
         # (depth/motion/normals = 0, normals[2]=1.0). Feeding TartanAir's
@@ -254,7 +376,8 @@ def _render_iteration(
         # [0, err_scale] then mapped to a black->red->yellow gradient. Reveals
         # WHERE the model fails (edges? dark regions? high-freq texture?).
         # Channels-collapsed via mean so a single error magnitude per pixel.
-        err = (out_tp1[0] - gt_tp1[0]).abs().mean(dim=0, keepdim=True)  # (1, H, W)
+        err_source = v6_out_tp1 if v6_out_tp1 is not None else out_tp1
+        err = (err_source[0] - gt_tp1[0]).abs().mean(dim=0, keepdim=True)  # (1, H, W)
         err_norm = (err / max(err_scale, 1e-6)).clamp(0.0, 1.0)
         # Hot-iron gradient: lo (black) -> mid (red) -> hi (yellow).
         # red = clamp(2*x), green = clamp(2*x - 1), blue = 0
@@ -263,11 +386,17 @@ def _render_iteration(
         blue = torch.zeros_like(err_norm)
         err_rgb = torch.cat([red, green, blue], dim=0)
 
-        # Stack horizontally: [LR-up | bicubic | v4 | v5-temporal | GT | |err|]
-        strip = torch.cat([
-            lr_up_tp1[0], bicubic_tp1[0], base_out_tp1[0],
-            out_tp1[0], gt_tp1[0], err_rgb,
-        ], dim=-1)
+        panels, panel_labels = _comparison_panels(
+            lr_up=lr_up_tp1[0],
+            bicubic=bicubic_tp1[0],
+            baseline=base_out_tp1[0],
+            pixel=out_tp1[0],
+            gaussian=gauss_out_tp1[0] if gauss_out_tp1 is not None else None,
+            v6=v6_out_tp1[0] if v6_out_tp1 is not None else None,
+            gt=gt_tp1[0],
+            err_rgb=err_rgb,
+        )
+        strip = torch.cat(panels, dim=-1)
         rendered_strips.append(strip.cpu())
     if not rendered_strips:
         return None
@@ -282,7 +411,6 @@ def _render_iteration(
     arr = (composite.clamp(0.0, 1.0).permute(1, 2, 0).numpy() * 255).astype("uint8")
     img = Image.fromarray(arr)
     drawer = ImageDraw.Draw(img, mode="RGBA")
-    panel_labels = ["LR-bilinear", "bicubic", "v4-baseline", "v5-temporal", "GT", "|err| heatmap"]
     panel_w = img.width // len(panel_labels)
     for i, label in enumerate(panel_labels):
         # Estimate text width for default font (~6px per char).
@@ -338,7 +466,10 @@ def main(argv: list[str] | None = None) -> int:
                         ckpt_path=ckpt, manifest_path=args.manifest,
                         tartanair_root=args.tartanair_root, output_dir=args.output_dir,
                         n_pairs=args.n_pairs, device=args.device,
-                        ckpt_baseline=args.ckpt_baseline, err_scale=args.err_scale,
+                        ckpt_baseline=args.ckpt_baseline,
+                        ckpt_v5_gaussian=args.ckpt_v5_gaussian,
+                        ckpt_v6=args.ckpt_v6,
+                        err_scale=args.err_scale,
                     )
                     elapsed = time.monotonic() - t0
                     if out is None:
