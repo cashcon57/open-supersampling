@@ -60,6 +60,12 @@ class CheapCompositeLoss(nn.Module):
         }
 
 
+class NonFiniteCompositeLoss(nn.Module):
+    def forward(self, pred, target, fake_logits, step, **_kwargs):
+        loss = pred.sum() * pred.new_tensor(float("nan"))
+        return loss, {"total": float("nan")}
+
+
 class TinyDiscriminator(nn.Module):
     def __init__(self):
         super().__init__()
@@ -334,6 +340,28 @@ def test_canvas_continues_inside_trajectory():
 
     assert parts["canvas_count_at_frame1_start"] > 0.0
     assert g.frame_start_counts[:2] == [0, 1]
+
+
+def test_nonfinite_train_step_clears_grads_and_skips_update():
+    g = TinyGenerator()
+    d = TinyDiscriminator()
+    opt_g = torch.optim.AdamW(g.parameters(), lr=1e-2)
+    opt_d = torch.optim.AdamW(d.parameters(), lr=1e-2)
+    ema = EMAModel(g, decay=0.999)
+
+    before = [p.detach().clone() for p in g.parameters()]
+    for p in g.parameters():
+        p.grad = torch.ones_like(p)
+
+    parts = train_v6.train_step(
+        g, d, NonFiniteCompositeLoss(), opt_g, opt_d, ema,
+        _tiny_batch(), step=1, args=_tiny_args(),
+    )
+
+    assert parts["loss_total"] != parts["loss_total"]
+    assert all(p.grad is None for p in g.parameters())
+    for old, new in zip(before, g.parameters()):
+        assert torch.equal(old, new)
 
 
 def test_canvas_resets_between_trajectories():

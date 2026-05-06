@@ -27,10 +27,9 @@ Design notes
   unit-tested for round-trip accuracy. We use ``haar`` here (not ``db2`` like
   the legacy ``oss/train/losses.py``) per the v6 spec — haar's two-tap
   high-pass is the cheap default for explicit high-frequency supervision.
-- bf16 safety: all internal arithmetic stays in the input dtype. The VGG /
-  LPIPS modules are float32-only (torchvision pretrained), so we cast the
-  inputs to float32 before forwarding through them and cast the resulting
-  scalar back to the target dtype.
+- bf16 safety: reductions that square HDR-valued tensors run in fp32 with
+  autocast disabled. The VGG / LPIPS modules are float32-only (torchvision
+  pretrained), so we cast the inputs to float32 before forwarding through them.
 """
 from __future__ import annotations
 
@@ -61,8 +60,9 @@ def charbonnier_loss(
     Drop-in replacement for L1 with smoother gradients near zero. Per the
     v6 memo §5: roughly +0.1-0.2 dB vs raw L1 on photoreal SR.
     """
-    diff = pred - target
-    return torch.sqrt(diff * diff + eps * eps).mean()
+    with torch.autocast(device_type=pred.device.type, enabled=False):
+        diff = pred.float() - target.float()
+        return torch.sqrt(diff.square() + eps * eps).mean()
 
 
 # ---------------------------------------------------------------------------
@@ -81,6 +81,7 @@ _SOBEL_Y = torch.tensor(
 def _sobel_grad_magnitude(x: torch.Tensor) -> torch.Tensor:
     """Per-channel Sobel gradient magnitude. Output same spatial size as ``x``."""
     B, C, H, W = x.shape
+    x = x.float()
     sx = _SOBEL_X.to(device=x.device, dtype=x.dtype)
     sy = _SOBEL_Y.to(device=x.device, dtype=x.dtype)
     kx = sx[None, None, :, :].expand(C, 1, 3, 3).contiguous()
@@ -92,7 +93,10 @@ def _sobel_grad_magnitude(x: torch.Tensor) -> torch.Tensor:
 
 def sobel_edge_loss(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
     """L1 between Sobel gradient magnitudes of ``pred`` and ``target``."""
-    return (_sobel_grad_magnitude(pred) - _sobel_grad_magnitude(target)).abs().mean()
+    with torch.autocast(device_type=pred.device.type, enabled=False):
+        return (
+            _sobel_grad_magnitude(pred) - _sobel_grad_magnitude(target)
+        ).abs().mean()
 
 
 # ---------------------------------------------------------------------------

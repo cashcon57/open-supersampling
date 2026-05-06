@@ -258,6 +258,7 @@ class V6Model(nn.Module):
         if self.cfg.color_activation == "sigmoid":
             rgb_hr = torch.sigmoid(rgb_hr)
         else:
+            rgb_hr = rgb_hr.clamp(-30.0, 30.0)
             rgb_hr = F.softplus(rgb_hr)
 
         # Persistent per-rank state must NOT carry autograd across frames.

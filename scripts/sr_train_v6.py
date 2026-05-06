@@ -446,6 +446,41 @@ def _set_requires_grad(module: torch.nn.Module, enabled: bool) -> None:
         p.requires_grad_(enabled)
 
 
+def _zero_optimizers(*optimizers: torch.optim.Optimizer) -> None:
+    for optim in optimizers:
+        optim.zero_grad(set_to_none=True)
+
+
+def _has_global_nonfinite(tensor: torch.Tensor) -> bool:
+    local_bad = int(not bool(torch.isfinite(tensor).all().detach().item()))
+    flag = torch.tensor(local_bad, device=tensor.device, dtype=torch.int32)
+    if _is_distributed():
+        import torch.distributed as dist
+
+        if dist.is_available() and dist.is_initialized():
+            dist.all_reduce(flag, op=dist.ReduceOp.MAX)
+    return bool(flag.detach().cpu().item())
+
+
+def _has_global_nonfinite_grad(
+    parameters: list[torch.nn.Parameter],
+    *,
+    ref: torch.Tensor,
+) -> bool:
+    local_bad = 0
+    for p in parameters:
+        if p.grad is not None and not torch.isfinite(p.grad).all():
+            local_bad = 1
+            break
+    flag = torch.tensor(local_bad, device=ref.device, dtype=torch.int32)
+    if _is_distributed():
+        import torch.distributed as dist
+
+        if dist.is_available() and dist.is_initialized():
+            dist.all_reduce(flag, op=dist.ReduceOp.MAX)
+    return bool(flag.detach().cpu().item())
+
+
 # ---------------------------------------------------------------------------
 # Optimizer / scheduler
 # ---------------------------------------------------------------------------
@@ -721,13 +756,19 @@ def train_step(
             target_prev = target[:, frame_idx]
     assert total_g_loss is not None
     g_loss = total_g_loss
-    if not torch.isfinite(g_loss):
+    if _has_global_nonfinite(g_loss):
+        _zero_optimizers(optim_g, optim_d)
         return {"loss_total": float("nan")}
     (g_loss * float(loss_scale)).backward()
+    generator_params = [p for p in generator.parameters() if p.requires_grad]
+    if _has_global_nonfinite_grad(generator_params, ref=g_loss):
+        _zero_optimizers(optim_g, optim_d)
+        return {"loss_total": float("nan")}
     if step_optim:
-        torch.nn.utils.clip_grad_norm_(
-            [p for p in generator.parameters() if p.requires_grad], max_norm=1.0,
-        )
+        grad_norm_g = torch.nn.utils.clip_grad_norm_(generator_params, max_norm=1.0)
+        if _has_global_nonfinite(grad_norm_g):
+            _zero_optimizers(optim_g, optim_d)
+            return {"loss_total": float("nan")}
         optim_g.step()
 
     d_loss = preds[-1].new_zeros(())
@@ -738,13 +779,25 @@ def train_step(
             real_logits = discriminator(torch.cat(targets, dim=0))
             fake_logits_d = discriminator(torch.cat([p.detach() for p in preds], dim=0))
             d_loss = gan_hinge_d_loss(real_logits, fake_logits_d)
-        if not torch.isfinite(d_loss):
+        if _has_global_nonfinite(d_loss):
+            _zero_optimizers(optim_g, optim_d)
             return {"loss_total": float("nan")}
         (d_loss * float(loss_scale)).backward()
+        discriminator_params = [
+            p for p in discriminator.parameters()
+            if p.requires_grad
+        ]
+        if _has_global_nonfinite_grad(discriminator_params, ref=d_loss):
+            _zero_optimizers(optim_g, optim_d)
+            return {"loss_total": float("nan")}
         if step_optim:
-            torch.nn.utils.clip_grad_norm_(
-                [p for p in discriminator.parameters() if p.requires_grad], max_norm=1.0,
+            grad_norm_d = torch.nn.utils.clip_grad_norm_(
+                discriminator_params,
+                max_norm=1.0,
             )
+            if _has_global_nonfinite(grad_norm_d):
+                _zero_optimizers(optim_g, optim_d)
+                return {"loss_total": float("nan")}
             optim_d.step()
         d_fired = True
     _set_requires_grad(discriminator, True)
@@ -1015,6 +1068,7 @@ def main(argv: list[str] | None = None) -> int:
             step += 1
             final_step = step
             accum_parts: dict[str, float] = {}
+            bad_step = False
 
             for micro_idx in range(args.grad_accum):
                 raw_batch, iterator = _next_batch(loader, iterator, step)
@@ -1041,6 +1095,18 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 for k, v in parts.items():
                     accum_parts[k] = accum_parts.get(k, 0.0) + float(v)
+                if not math.isfinite(parts.get("loss_total", float("nan"))):
+                    bad_step = True
+                    break
+
+            if bad_step:
+                if is_main:
+                    log.warning(
+                        "non-finite loss at step %d; cleared gradients and skipped "
+                        "remaining updates/metrics for this step",
+                        step,
+                    )
+                continue
 
             last_parts = {
                 k: v / float(args.grad_accum)
@@ -1048,9 +1114,13 @@ def main(argv: list[str] | None = None) -> int:
             }
             if not math.isfinite(last_parts.get("loss_total", float("nan"))):
                 if is_main:
-                    log.error("non-finite loss at step %d: %r", step, last_parts)
-                _ddp_cleanup()
-                return 4
+                    log.warning(
+                        "non-finite accumulated loss at step %d; skipped "
+                        "optimizer/EMA/metrics for this step: %r",
+                        step,
+                        last_parts,
+                    )
+                continue
 
             sched_g.step(step)
             sched_d.step(step)
