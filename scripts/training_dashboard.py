@@ -2097,10 +2097,30 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 info["model_kind"] = args.get("model_kind")
             except Exception:
                 pass
-        # Log timestamps for liveness.
+        # Pre-checkpoint fallback for max_steps: parse the trainer's
+        # startup banner. Both v5 and v6 trainers log a line of the
+        # form "v6 trainer starting | ... steps=300000 ..." right after
+        # init. Sniff the first ~100 lines of the log if no ckpt yet.
+        if not info.get("max_steps") and log_file.exists():
+            try:
+                with log_file.open(encoding="utf-8", errors="replace") as f:
+                    head = "".join(line for _, line in zip(range(100), f))
+                m = re.search(r"steps=(\d+)", head)
+                if m:
+                    info["max_steps"] = int(m.group(1))
+            except Exception:
+                pass
+        # Log timestamps for liveness. If train.log doesn't exist
+        # (e.g. Mac-side mirror without log sync), fall back to
+        # metrics.json mtime so the "training active" signal still
+        # fires when training is writing rows.
         if log_file.exists():
             stat = log_file.stat()
             info["last_log_mtime_unix"] = stat.st_mtime
+        else:
+            metrics_path = output_dir / "metrics.json"
+            if metrics_path.exists():
+                info["last_log_mtime_unix"] = metrics_path.stat().st_mtime
 
         # Try to estimate elapsed from log first/last timestamps.
         if log_file.exists():

@@ -45,6 +45,13 @@ while :; do
     scp -B -p -q "$REMOTE_HOST:$REMOTE_ROOT/$run/metrics.json" "$local_dir/" 2>/dev/null || true
     scp -B -p -q "$REMOTE_HOST:$REMOTE_ROOT/$run/score_log.json" "$local_dir/" 2>/dev/null || true
 
+    # train.log — the dashboard uses its mtime to compute the
+    # "training active" liveness signal and parses the header for
+    # max_steps. Lives at <train-host-data>\logs\<run>.log on the windows host
+    # convention. Mirror it to <local_dir>/train.log so the
+    # dashboard's --log-file argument resolves.
+    scp -B -p -q "$REMOTE_HOST:<train-host-data>/logs/$run.log" "$local_dir/train.log" 2>/dev/null || true
+
     # viz/*.png — only pull files that don't exist locally already.
     # Use a remote ls + per-file check so we don't repeat large transfers.
     remote_viz=$(ssh -o BatchMode=yes "$REMOTE_HOST" \
