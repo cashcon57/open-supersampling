@@ -130,9 +130,44 @@ class TartanAirGaussianDataset(GaussianDataset):
 
     def __getitem__(self, idx: int) -> GaussianTrainingExample:
         frame_path, depth_path, flow_path = self._items[idx]
-        hr = _load_png(frame_path)
-        depth_hr = _load_npy_chw(depth_path, channels=1)
-        flow_hr = _load_npy_chw(flow_path, channels=2)
+        try:
+            hr = _load_png(frame_path)
+            depth_hr = _load_npy_chw(depth_path, channels=1)
+            flow_hr = _load_npy_chw(flow_path, channels=2)
+        except (ValueError, OSError) as e:
+            # Defensive: a single corrupt file in a 200 GB dataset
+            # would otherwise kill the whole training run. Log + try
+            # the next index. Caps at 10 retries to avoid an infinite
+            # loop on systemic dataset corruption.
+            import logging
+            log = logging.getLogger("oss.gaussian.data.tartanair")
+            log.warning(
+                "skipping corrupt TartanAir sample idx=%d (%s): %s",
+                idx, frame_path, e,
+            )
+            n = len(self._items)
+            for offset in range(1, 11):
+                next_idx = (idx + offset) % n
+                next_frame, next_depth, next_flow = self._items[next_idx]
+                try:
+                    hr = _load_png(next_frame)
+                    depth_hr = _load_npy_chw(next_depth, channels=1)
+                    flow_hr = _load_npy_chw(next_flow, channels=2)
+                    frame_path, depth_path, flow_path = (
+                        next_frame, next_depth, next_flow,
+                    )
+                    break
+                except (ValueError, OSError) as e2:
+                    log.warning(
+                        "skipping corrupt TartanAir sample idx=%d: %s",
+                        next_idx, e2,
+                    )
+                    continue
+            else:
+                raise RuntimeError(
+                    f"10 consecutive corrupt TartanAir samples starting at idx={idx} "
+                    f"— dataset is broken, not a one-off; bail out."
+                ) from e
 
         lr = (
             self.lr_synth.synthesize(hr, idx)
