@@ -144,6 +144,96 @@ class Pretty:
         self.out.flush()
 
 
+def render_html(text: str, keep_mcp: bool = False) -> str:
+    """Convert a codex-exec log body into an HTML <pre>-friendly fragment.
+
+    Returns one big string of <span class="codex-XXX">...</span> wrapped
+    lines plus <hr class="codex-section codex-section-XXX" /> dividers.
+    Intended to be embedded inside a <pre> tag in the OSS training
+    dashboard, which provides the matching CSS classes.
+    """
+    import html as _html
+
+    out: list[str] = []
+    mode = HEADER
+
+    def html_escape(s: str) -> str:
+        return _html.escape(s, quote=False)
+
+    def line_class_for_mode(m: str) -> str:
+        return {
+            HEADER: "codex-header",
+            PROMPT: "codex-prompt",
+            REASON: "codex-reason",
+            EXEC: "codex-exec",
+            RESULT: "codex-result",
+        }.get(m, "codex-other")
+
+    def diff_html(line: str) -> str:
+        esc = html_escape(line)
+        if line.startswith("+++"):
+            return f'<span class="codex-diff-add-hd">{esc}</span>'
+        if line.startswith("---") and not line.startswith("----"):
+            return f'<span class="codex-diff-rm-hd">{esc}</span>'
+        if line.startswith("@@"):
+            return f'<span class="codex-diff-hunk">{esc}</span>'
+        if line[:1] == "+":
+            return f'<span class="codex-diff-add">{esc}</span>'
+        if line[:1] == "-":
+            return f'<span class="codex-diff-rm">{esc}</span>'
+        return f'<span class="codex-result">{esc}</span>'
+
+    def section_html(label: str, kind: str) -> str:
+        return (
+            f'<span class="codex-section codex-section-{kind}">'
+            f'┌─[ {html_escape(label)} ]'
+            f'</span>'
+        )
+
+    for raw in text.splitlines():
+        if not keep_mcp and MCP_ERROR_RE.search(raw):
+            continue
+        line = raw
+
+        # Mode transitions.
+        if line == "user" and mode == HEADER:
+            out.append(section_html("USER PROMPT", "prompt"))
+            mode = PROMPT
+            continue
+        if line == "codex":
+            out.append(section_html("REASONING", "reason"))
+            mode = REASON
+            continue
+        if line == "exec":
+            out.append(section_html("EXEC", "exec"))
+            mode = EXEC
+            continue
+
+        m_ok = SUCCESS_RE.match(line)
+        m_err = EXIT_RE.match(line)
+        if m_ok and mode in (EXEC, RESULT):
+            out.append(section_html(f"RESULT (ok in {m_ok.group(1)}ms)", "ok"))
+            mode = RESULT
+            continue
+        if m_err and mode in (EXEC, RESULT):
+            out.append(
+                section_html(
+                    f"RESULT (exit {m_err.group(1)} in {m_err.group(2)}ms)",
+                    "err",
+                )
+            )
+            mode = RESULT
+            continue
+
+        if mode == RESULT:
+            out.append(diff_html(line))
+        else:
+            cls = line_class_for_mode(mode)
+            out.append(f'<span class="{cls}">{html_escape(line)}</span>')
+
+    return "\n".join(out)
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("path", nargs="?",

@@ -23,10 +23,23 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import json
+import os
 import socketserver
+import sys
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+
+# Importable HTML renderer for /tmp/codex-*.log content (lives next door).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+try:
+    from codex_log_pretty import render_html as _render_codex_html  # type: ignore[import-not-found]
+except Exception:  # pragma: no cover — optional, dashboard still works without
+    _render_codex_html = None  # type: ignore[assignment]
+
+
+CODEX_LOG_DIR = Path("/tmp")
+CODEX_LOG_GLOB = "codex-*.log"
 
 
 RUN_DIR_PATTERNS = (
@@ -114,6 +127,42 @@ HTML = """<!DOCTYPE html>
   .log { font-family: var(--mono); font-size: 12px; white-space: pre-wrap;
          background: #0d1117; border: 1px solid var(--border); border-radius: 4px;
          padding: 12px; max-height: 360px; overflow-y: auto; line-height: 1.5; }
+  .codex-log {
+    font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-word;
+    background: #0d1117; border: 1px solid var(--border); border-radius: 4px;
+    padding: 12px; max-height: 480px; overflow-y: auto; line-height: 1.45;
+    color: var(--fg); display: block;
+  }
+  .codex-log .codex-section {
+    display: block; padding: 6px 0 2px 0; margin-top: 8px;
+    border-top: 1px solid #1b2129; font-weight: 600; letter-spacing: 0.3px;
+  }
+  .codex-log .codex-section-prompt { color: #58a6ff; }
+  .codex-log .codex-section-reason { color: #79c0ff; }
+  .codex-log .codex-section-exec   { color: #d29922; }
+  .codex-log .codex-section-ok     { color: #3fb950; }
+  .codex-log .codex-section-err    { color: #f85149; }
+  .codex-log .codex-header { display: block; color: #6e7681; opacity: 0.7; }
+  .codex-log .codex-prompt { display: block; color: #79c0ff; opacity: 0.8; }
+  .codex-log .codex-reason { display: block; color: #79c0ff; }
+  .codex-log .codex-exec   { display: block; color: #ffdf5d; }
+  .codex-log .codex-result { display: block; color: var(--fg); }
+  .codex-log .codex-diff-add    { display: block; color: #56d364; }
+  .codex-log .codex-diff-rm     { display: block; color: #ff7b72; }
+  .codex-log .codex-diff-add-hd { display: block; color: #3fb950; font-weight: 700; }
+  .codex-log .codex-diff-rm-hd  { display: block; color: #f85149; font-weight: 700; }
+  .codex-log .codex-diff-hunk   { display: block; color: #d2a8ff; font-weight: 700; }
+  .codex-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+                   margin-bottom: 8px; font-size: 12px; color: var(--muted); }
+  .codex-toolbar select {
+    background: #21262d; color: var(--fg); border: 1px solid var(--border);
+    border-radius: 4px; padding: 4px 8px; font-family: var(--mono); font-size: 12px;
+    max-width: min(60vw, 480px);
+  }
+  .codex-toolbar label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+  .codex-toolbar .meta { margin-left: auto; font-family: var(--mono); font-size: 11px; }
+  .codex-toolbar .pid-alive { color: var(--good); }
+  .codex-toolbar .pid-dead  { color: var(--muted); }
   .full { grid-column: 1 / -1; }
   canvas { max-height: 280px; }
   .err { color: var(--bad); font-family: var(--mono); }
@@ -324,6 +373,20 @@ HTML = """<!DOCTYPE html>
   <div class="panel full">
     <h2>Log tail</h2>
     <div class="log" id="log-tail">loading…</div>
+  </div>
+
+  <div class="panel full">
+    <div class="panel-head">
+      <h2>Codex live log</h2>
+      <div class="codex-toolbar">
+        <label for="codex-file-select">file</label>
+        <select id="codex-file-select"><option value="">(no codex logs found)</option></select>
+        <label><input type="checkbox" id="codex-tail-toggle" checked /> auto-scroll</label>
+        <label><input type="checkbox" id="codex-pause-toggle" /> pause</label>
+        <span class="meta" id="codex-meta">–</span>
+      </div>
+    </div>
+    <pre class="codex-log" id="codex-log">select a codex log file to start streaming…</pre>
   </div>
 
 </div>
@@ -1095,6 +1158,86 @@ buildCharts();
 _wireResetZoomOnDblClick();
 initRunPicker().finally(refresh);
 setInterval(refresh, POLL_MS);
+
+// ============================================================
+// Codex live log panel — independent poller, faster cadence.
+// ============================================================
+const CODEX_POLL_MS = 2500;
+const CODEX_FILE_KEY = 'oss-training-dashboard-codex-file';
+let codexCurrentFile = localStorage.getItem(CODEX_FILE_KEY) || '';
+
+async function refreshCodexFileList() {
+  try {
+    const data = await fetchJSON('/api/codex-logs');
+    const files = (data && data.files) || [];
+    const sel = document.getElementById('codex-file-select');
+    if (!sel) return;
+    const prev = sel.value || codexCurrentFile;
+    if (files.length === 0) {
+      sel.innerHTML = '<option value="">(no codex logs found)</option>';
+      sel.value = '';
+      codexCurrentFile = '';
+      return;
+    }
+    sel.innerHTML = files.map(f => {
+      const tag = f.alive ? '● live' : '○ done';
+      const ageS = Math.max(0, Math.floor((Date.now() / 1000) - f.mtime));
+      const kb = (f.size / 1024).toFixed(0);
+      return `<option value="${f.name}">${tag} · ${f.name} · ${kb}KB · ${ageS}s</option>`;
+    }).join('');
+    if (prev && files.some(f => f.name === prev)) {
+      sel.value = prev;
+      codexCurrentFile = prev;
+    } else {
+      // Default to the most recently-modified live file, else the most
+      // recent overall.
+      const live = files.find(f => f.alive);
+      const pick = (live || files[0]).name;
+      sel.value = pick;
+      codexCurrentFile = pick;
+      localStorage.setItem(CODEX_FILE_KEY, pick);
+    }
+  } catch (e) { /* leave as-is */ }
+}
+
+async function refreshCodexLog() {
+  const pause = document.getElementById('codex-pause-toggle');
+  if (pause && pause.checked) return;
+  const fname = codexCurrentFile;
+  if (!fname) return;
+  try {
+    const data = await fetchJSON('/api/codex-log?file=' + encodeURIComponent(fname));
+    const pre = document.getElementById('codex-log');
+    const meta = document.getElementById('codex-meta');
+    if (!pre) return;
+    if (data && data.error) {
+      pre.textContent = '(error: ' + data.error + ')';
+      if (meta) meta.textContent = fname + ' — error';
+      return;
+    }
+    const tail = document.getElementById('codex-tail-toggle');
+    const wantTail = !tail || tail.checked;
+    const atBottom = wantTail || (pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 8);
+    pre.innerHTML = data.html || '';
+    if (atBottom) pre.scrollTop = pre.scrollHeight;
+    if (meta) {
+      const kb = (data.size / 1024).toFixed(0);
+      const trunc = data.truncated ? ' (tail of last 512KB)' : '';
+      meta.textContent = `${data.name} · ${kb}KB${trunc}`;
+    }
+  } catch (e) { /* leave previous */ }
+}
+
+document.getElementById('codex-file-select').addEventListener('change', (e) => {
+  codexCurrentFile = e.target.value;
+  if (codexCurrentFile) localStorage.setItem(CODEX_FILE_KEY, codexCurrentFile);
+  refreshCodexLog();
+});
+
+// Initial render + polling.
+refreshCodexFileList().then(refreshCodexLog);
+setInterval(() => { refreshCodexFileList(); }, 10_000);
+setInterval(refreshCodexLog, CODEX_POLL_MS);
 </script>
 </body>
 </html>
@@ -1223,6 +1366,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
             elif path == "/api/log":
                 output_dir = self._resolve_request_output_dir(parsed.query)
                 self._send_text(self._read_log_tail(output_dir, n_lines=200))
+            elif path == "/api/codex-logs":
+                self._send_json(self._list_codex_logs())
+            elif path == "/api/codex-log":
+                params = parse_qs(parsed.query, keep_blank_values=False)
+                fname_values = params.get("file", [])
+                fname = fname_values[-1] if fname_values else ""
+                payload = self._read_codex_log(fname)
+                self._send_json(payload)
             elif path == "/api/viz":
                 output_dir = self._resolve_request_output_dir(parsed.query)
                 # Lists step-XXXXX.png files in <output_dir>/viz/, sorted ascending.
@@ -1330,6 +1481,102 @@ class DashboardHandler(BaseHTTPRequestHandler):
         except Exception as e:
             return f"(log read error: {e})"
         return "".join(lines[-n_lines:])
+
+    # ---- codex live-log helpers ----
+
+    def _list_codex_logs(self) -> dict:
+        """Return summary of /tmp/codex-*.log files (name, size, mtime, alive)."""
+        if not CODEX_LOG_DIR.is_dir():
+            return {"files": []}
+        try:
+            paths = sorted(CODEX_LOG_DIR.glob(CODEX_LOG_GLOB),
+                           key=lambda p: p.stat().st_mtime, reverse=True)
+        except Exception:
+            return {"files": []}
+        # Active codex PIDs (best-effort, macOS / linux compatible).
+        active_cmdlines = self._codex_active_cmdlines()
+        files = []
+        for p in paths:
+            try:
+                st = p.stat()
+            except Exception:
+                continue
+            stem = p.stem  # e.g. "codex-v6model-stage2"
+            alive = any(stem in cmd for cmd in active_cmdlines)
+            files.append({
+                "name": p.name,
+                "size": int(st.st_size),
+                "mtime": st.st_mtime,
+                "alive": alive,
+            })
+        return {"files": files}
+
+    def _codex_active_cmdlines(self) -> list[str]:
+        """Best-effort list of running codex-exec command lines (used to flag
+        which logs map to a still-running process). Returns [] on failure."""
+        try:
+            import subprocess
+            res = subprocess.run(
+                ["pgrep", "-fl", "codex exec"],
+                capture_output=True, text=True, timeout=2,
+            )
+            if res.returncode != 0:
+                return []
+            return [line.strip() for line in res.stdout.splitlines() if line.strip()]
+        except Exception:
+            return []
+
+    def _read_codex_log(self, fname: str) -> dict:
+        """Return rendered HTML of a /tmp/codex-*.log file (capped to last
+        ~512 KB so the browser doesn't choke on multi-MB logs)."""
+        if not fname or "/" in fname or "\\" in fname or ".." in fname:
+            return {"error": "bad filename"}
+        if not fname.startswith("codex-") or not fname.endswith(".log"):
+            return {"error": "not a codex log"}
+        path = CODEX_LOG_DIR / fname
+        if not path.is_file():
+            return {"error": "not found"}
+        try:
+            st = path.stat()
+            size = int(st.st_size)
+            # Cap at 4 MB — beyond that, browsers start to chug. Most codex
+            # logs come in well under that.
+            cap = 4 * 1024 * 1024
+            with path.open("rb") as f:
+                if size > cap:
+                    f.seek(size - cap)
+                    raw = f.read()
+                    text = raw.decode("utf-8", errors="replace")
+                    # The state machine only renders correctly if it starts
+                    # at a known mode boundary. Walk forward to the next
+                    # 'codex' / 'exec' line; everything before it is
+                    # pre-truncation context that would render mid-stream.
+                    lines = text.splitlines(keepends=True)
+                    start = 0
+                    for idx, ln in enumerate(lines):
+                        s = ln.rstrip("\n")
+                        if s == "codex" or s == "exec":
+                            start = idx
+                            break
+                    text = "".join(lines[start:])
+                    truncated = True
+                else:
+                    text = f.read().decode("utf-8", errors="replace")
+                    truncated = False
+        except Exception as e:
+            return {"error": f"read error: {e}"}
+        if _render_codex_html is not None:
+            html = _render_codex_html(text, keep_mcp=False)
+        else:
+            import html as _html
+            html = _html.escape(text)
+        return {
+            "name": fname,
+            "size": size,
+            "mtime": st.st_mtime,
+            "truncated": truncated,
+            "html": html,
+        }
 
     def _build_info(self, output_dir: Path) -> dict:
         log_file = self._log_file_for_output_dir(output_dir)
