@@ -120,6 +120,33 @@ def _metric_rows(output_dir: Path) -> list[dict]:
     return [json.loads(line) for line in (output_dir / "metrics.json").read_text().splitlines()]
 
 
+def _save_synthetic_v5_teacher_ckpt(path: Path) -> Path:
+    from oss.sr.temporal import TemporalSRModel
+
+    model = TemporalSRModel(
+        in_channels=12,
+        scale=2,
+        tier="pico",
+        backbone_kind="simple",
+        zero_gbuffer_into_backbone=True,
+    )
+    torch.save(
+        {
+            "kind": "temporal",
+            "args": {
+                "in_channels": 12,
+                "scale": 2,
+                "tier": "pico",
+                "backbone_kind": "simple",
+                "zero_gbuffer_into_backbone": True,
+            },
+            "temporal_model": model.state_dict(),
+        },
+        path,
+    )
+    return path
+
+
 def test_smoke_no_bf16_flag_recognized(tmp_path):
     repo = Path(__file__).resolve().parents[3]
     code = textwrap.dedent(
@@ -185,7 +212,8 @@ def test_smoke_runs_five_steps_checkpoints_and_metrics(tmp_path, cheap_trainer):
         for key in (
             "step", "loss_total", "loss_charbonnier", "loss_lpips",
             "loss_msvgg", "loss_wavelet", "loss_sobel", "loss_gan_g",
-            "loss_gan_d", "loss_tc", "lr_g", "lr_d", "ema_decay",
+            "loss_gan_d", "loss_tc", "loss_v5_kd", "lambda_v5_kd",
+            "lr_g", "lr_d", "ema_decay",
         ):
             assert key in row
     assert (tmp_path / "step-00000002.pt").exists()
@@ -209,6 +237,42 @@ def test_early_checkpoint_step(tmp_path, cheap_trainer):
 
     assert rc == 0
     assert (tmp_path / "step-00000002.pt").exists()
+
+
+def test_smoke_v5_teacher_kd_decays_to_zero(tmp_path, cheap_trainer):
+    ckpt = _save_synthetic_v5_teacher_ckpt(tmp_path / "v5-teacher.pt")
+
+    rc = train_v6.main([
+        "--output-dir", str(tmp_path / "run"),
+        "--smoke",
+        "--device", "cpu",
+        "--backbone", "hat-tiny",
+        "--patch-size", "32",
+        "--batch-size", "1",
+        "--grad-accum", "1",
+        "--max-steps", "2",
+        "--v5-teacher-ckpt", str(ckpt),
+        "--v5-teacher-decay-end", "2",
+    ])
+
+    assert rc == 0
+    rows = _metric_rows(tmp_path / "run")
+    assert rows[0]["step"] == 1
+    assert rows[0]["lambda_v5_kd"] > 0.0
+    assert rows[0]["loss_v5_kd"] > 0.0
+    assert rows[1]["step"] == 2
+    assert rows[1]["lambda_v5_kd"] == 0.0
+    assert rows[1]["loss_v5_kd"] == 0.0
+
+
+def test_missing_v5_teacher_ckpt_warns_and_disables(tmp_path, caplog):
+    missing = tmp_path / "missing-v5.pt"
+
+    with caplog.at_level(logging.WARNING, logger="oss.sr.v6.train"):
+        teacher = train_v6.load_v5_teacher(missing, device="cpu")
+
+    assert teacher is None
+    assert "v5 teacher checkpoint not found" in caplog.text
 
 
 def _loopback_bind_available() -> tuple[bool, str]:

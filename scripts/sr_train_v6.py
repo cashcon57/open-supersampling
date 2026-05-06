@@ -140,6 +140,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    default=None)
     p.add_argument("--warm-start", type=Path, default=None,
                    help="HAT-L SA1B warm-start ckpt (from GSASR) — optional.")
+    p.add_argument("--v5-teacher-ckpt", type=Path, default=None,
+                   help="Frozen v5-pixel-temporal checkpoint for decaying KD.")
+    p.add_argument("--v5-teacher-lambda-init", type=float, default=0.5,
+                   help="Initial weight for v5-teacher L1 distillation.")
+    p.add_argument("--v5-teacher-decay-end", type=int, default=50_000,
+                   help="Global step where v5-teacher KD decays to zero.")
 
     p.add_argument("--ckpt-every", type=int, default=5_000)
     p.add_argument("--first-ckpt-step", type=int, default=100,
@@ -759,6 +765,118 @@ def read_metrics_jsonl(path: Path) -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
+# v5-teacher KD helpers
+# ---------------------------------------------------------------------------
+
+
+def load_v5_teacher(
+    ckpt_path: Path | None,
+    *,
+    device: str | torch.device,
+) -> Optional[torch.nn.Module]:
+    """Load a frozen v5 pixel-temporal teacher, or disable KD on missing path."""
+    if ckpt_path is None:
+        return None
+    ckpt_path = Path(ckpt_path)
+    if not ckpt_path.exists():
+        log.warning("v5 teacher checkpoint not found: %s; disabling KD", ckpt_path)
+        return None
+
+    from oss.sr.temporal import TemporalSRModel
+
+    ck: dict[str, Any] = torch.load(ckpt_path, map_location=device, weights_only=False)
+    saved = ck.get("args", {})
+    in_channels = int(saved.get("in_channels", 12))
+    scale = int(saved.get("scale", 2))
+    tier = saved.get("tier", "standard")
+    backbone_kind = saved.get("backbone_kind")
+    if backbone_kind is None:
+        backbone_kind = "rrdb" if saved.get("sr_backbone") == "rrdb" else "simple"
+    if "zero_gbuffer_into_backbone" in saved:
+        zero_flag = bool(saved["zero_gbuffer_into_backbone"])
+    else:
+        zero_flag = bool(saved.get("warm_start"))
+
+    model = TemporalSRModel(
+        in_channels=in_channels,
+        scale=scale,
+        tier=tier,
+        backbone_kind=backbone_kind,
+        zero_gbuffer_into_backbone=zero_flag,
+    )
+    if "temporal_model" in ck:
+        model.load_state_dict(ck["temporal_model"])
+    elif "sr_model" in ck:
+        model.backbone.load_state_dict(ck["sr_model"])
+    else:
+        raise KeyError(
+            f"{ckpt_path} has no temporal_model or sr_model key "
+            f"(got {list(ck.keys())})"
+        )
+    model = model.to(device).train(False)
+    for p in model.parameters():
+        p.requires_grad_(False)
+    return model
+
+
+def v5_teacher_lambda(args: argparse.Namespace, step: int) -> float:
+    decay_end = int(getattr(args, "v5_teacher_decay_end", 50_000))
+    if decay_end <= 0:
+        return 0.0
+    lambda_init = float(getattr(args, "v5_teacher_lambda_init", 0.5))
+    return max(0.0, lambda_init * (1.0 - float(step) / float(decay_end)))
+
+
+def _v5_teacher_input(lr_inputs: torch.Tensor, in_channels: int) -> torch.Tensor:
+    """Convert v6's 9ch stack to v5's 12ch stack by appending zero canvas."""
+    c = int(lr_inputs.shape[1])
+    if c == in_channels:
+        return lr_inputs
+    if c == 9 and in_channels == 12:
+        canvas = lr_inputs.new_zeros(lr_inputs.shape[0], 3, *lr_inputs.shape[-2:])
+        return torch.cat([lr_inputs, canvas], dim=1)
+    raise ValueError(
+        f"cannot feed v5 teacher expecting {in_channels} channels from "
+        f"lr_inputs with {c} channels"
+    )
+
+
+def run_v5_teacher_frame(
+    teacher: torch.nn.Module,
+    lr_inputs: torch.Tensor,
+    motion_lr: Optional[torch.Tensor],
+) -> torch.Tensor:
+    """Run v5 as a cold-start per-frame teacher for one v6 trajectory frame."""
+    from oss.sr.temporal import make_first_frame_prev_hr
+
+    scale = int(getattr(teacher, "scale", 2))
+    teacher_in = _v5_teacher_input(
+        lr_inputs,
+        in_channels=int(getattr(teacher, "in_channels", 12)),
+    )
+    h_hr = int(lr_inputs.shape[-2]) * scale
+    w_hr = int(lr_inputs.shape[-1]) * scale
+    depth_hr_curr = F.interpolate(
+        lr_inputs[:, 3:4],
+        size=(h_hr, w_hr),
+        mode="bilinear",
+        align_corners=False,
+    )
+    if motion_lr is None:
+        motion_for_teacher = lr_inputs.new_zeros(lr_inputs.shape[0], 2, *lr_inputs.shape[-2:])
+    else:
+        motion_for_teacher = motion_lr
+    prev_hr = make_first_frame_prev_hr(lr_inputs[:, :3], scale=scale)
+    return teacher(
+        lr_inputs=teacher_in,
+        prev_hr=prev_hr,
+        depth_hr_curr=depth_hr_curr,
+        depth_hr_prev=depth_hr_curr,
+        motion_lr=motion_for_teacher,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Train step
 # ---------------------------------------------------------------------------
 
@@ -777,6 +895,7 @@ def train_step(
     zero_grad: bool = True,
     step_optim: bool = True,
     loss_scale: float = 1.0,
+    v5_teacher: Optional[torch.nn.Module] = None,
 ) -> dict[str, Any]:
     """One optimizer step over one trajectory. Runs D only after GAN warmup."""
     device = args.device
@@ -842,6 +961,29 @@ def train_step(
                 # the loss penalizes correct frame-to-frame change.
                 target_prev=target_prev,
             )
+            lambda_v5 = v5_teacher_lambda(args, step) if v5_teacher is not None else 0.0
+            if v5_teacher is not None:
+                with torch.no_grad():
+                    v5_pred = run_v5_teacher_frame(
+                        v5_teacher,
+                        lr_inputs[:, frame_idx],
+                        motion_lr=motion_lr,
+                    ).detach()
+                kd_loss = (pred - v5_pred).abs().mean()
+                kd_weighted = kd_loss * float(lambda_v5)
+                frame_loss = frame_loss + kd_weighted
+                parts["v5_kd"] = float(kd_weighted.detach())
+                parts["lambda_v5_kd"] = float(lambda_v5)
+                if "total" in parts and isinstance(parts["total"], (int, float)):
+                    parts["total"] = float(parts["total"]) + float(kd_weighted.detach())
+                if (
+                    "first_non_finite_component" not in parts
+                    and not bool(torch.isfinite(kd_loss).all().detach().item())
+                ):
+                    parts["first_non_finite_component"] = "v5_kd"
+            else:
+                parts["v5_kd"] = 0.0
+                parts["lambda_v5_kd"] = 0.0
             total_g_loss = frame_loss if total_g_loss is None else total_g_loss + frame_loss
             for k, v in parts.items():
                 if k == "first_non_finite_component":
@@ -926,6 +1068,8 @@ def train_step(
         "loss_gan_g": float(parts_avg.get("gan", 0.0)),
         "loss_gan_d": float(d_loss.detach()) if d_fired else 0.0,
         "loss_tc": float(parts_avg.get("temporal", 0.0)),
+        "loss_v5_kd": float(parts_avg.get("v5_kd", 0.0)),
+        "lambda_v5_kd": float(parts_avg.get("lambda_v5_kd", 0.0)),
         "d_step": 1.0 if d_fired else 0.0,
         "n_pruned": float(pruned),
         "canvas_count_after_frame0": canvas_count_after_frame0,
@@ -1111,6 +1255,7 @@ def main(argv: list[str] | None = None) -> int:
         generator = V6Model(cfg).to(device)
         discriminator = UNetDiscriminator().to(device)
         loss_fn = V6CompositeLoss(gan_warmup_until_step=args.warmup_steps).to(device)
+        v5_teacher = load_v5_teacher(args.v5_teacher_ckpt, device=device)
         debug_nan = _debug_nan_enabled()
         if hasattr(generator, "debug_nan"):
             generator.debug_nan = debug_nan
@@ -1124,6 +1269,15 @@ def main(argv: list[str] | None = None) -> int:
                 "models constructed | G params=%d D params=%d",
                 n_params_g, n_params_d,
             )
+            if v5_teacher is not None:
+                n_params_v5 = sum(p.numel() for p in v5_teacher.parameters())
+                log.info(
+                    "v5 teacher loaded | ckpt=%s params=%d lambda_init=%.4f decay_end=%d",
+                    args.v5_teacher_ckpt,
+                    n_params_v5,
+                    args.v5_teacher_lambda_init,
+                    args.v5_teacher_decay_end,
+                )
             if debug_nan:
                 log.warning("OSS_V6_DEBUG_NAN=1; enabling v6 NaN instrumentation")
 
@@ -1204,6 +1358,7 @@ def main(argv: list[str] | None = None) -> int:
                     zero_grad=(micro_idx == 0),
                     step_optim=(micro_idx == args.grad_accum - 1),
                     loss_scale=1.0 / float(args.grad_accum),
+                    v5_teacher=v5_teacher,
                 )
                 for k, v in parts.items():
                     if k == "first_non_finite_component":
@@ -1256,6 +1411,8 @@ def main(argv: list[str] | None = None) -> int:
                     "loss_gan_g": last_parts.get("loss_gan_g", 0.0),
                     "loss_gan_d": last_parts.get("loss_gan_d", 0.0),
                     "loss_tc": last_parts.get("loss_tc", 0.0),
+                    "loss_v5_kd": last_parts.get("loss_v5_kd", 0.0),
+                    "lambda_v5_kd": last_parts.get("lambda_v5_kd", 0.0),
                     "lr_g": lr_g,
                     "lr_d": lr_d,
                     "ema_decay": ema.decay,
