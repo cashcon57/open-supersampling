@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
+import random
 from pathlib import Path
 import socket
 import subprocess
@@ -11,6 +13,7 @@ import sys
 import textwrap
 import warnings
 
+import numpy as np
 import pytest
 import torch
 import torch.nn as nn
@@ -324,6 +327,46 @@ def test_auto_resume_continues_at_next_step(tmp_path, cheap_trainer):
     assert (tmp_path / "step-00000003.pt").exists()
     assert (tmp_path / "step-00000005.pt").exists()
     assert any(row["loss_tc"] > 0.0 for row in rows[3:])
+
+
+def test_load_rng_state_casts_legacy_non_byte_torch_state(caplog):
+    torch.manual_seed(1234)
+    legacy_state = train_v6._rng_state()
+    legacy_state["torch"] = legacy_state["torch"].to(torch.int32)
+
+    torch.manual_seed(9999)
+    with caplog.at_level(logging.WARNING, logger="oss.sr.v6.train"):
+        train_v6._load_rng_state(legacy_state)
+
+    assert "casting torch RNG state from torch.int32 to torch.uint8" in caplog.text
+    assert [record.levelno for record in caplog.records] == [logging.WARNING]
+
+
+def test_rng_state_save_load_restores_exact_rng_state():
+    random.seed(123)
+    np.random.seed(456)
+    torch.manual_seed(789)
+
+    saved = train_v6._rng_state()
+    expected_torch = torch.get_rng_state().clone()
+    expected_python = random.getstate()
+    expected_numpy = np.random.get_state()
+
+    assert saved["torch"].dtype == torch.uint8
+    assert all(state.dtype == torch.uint8 for state in saved["cuda"])
+
+    _ = random.random()
+    _ = np.random.random()
+    _ = torch.rand(4)
+
+    train_v6._load_rng_state(saved)
+
+    loaded_numpy = np.random.get_state()
+    assert torch.equal(torch.get_rng_state(), expected_torch)
+    assert random.getstate() == expected_python
+    assert loaded_numpy[0] == expected_numpy[0]
+    assert np.array_equal(loaded_numpy[1], expected_numpy[1])
+    assert loaded_numpy[2:] == expected_numpy[2:]
 
 
 def test_canvas_continues_inside_trajectory():

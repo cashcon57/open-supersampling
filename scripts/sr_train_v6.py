@@ -549,26 +549,107 @@ def load_scheduler_state_dict(
 # ---------------------------------------------------------------------------
 
 
+def _torch_rng_state_bytes(state: torch.Tensor) -> torch.Tensor:
+    return state.detach().cpu().to(torch.uint8)
+
+
+def _python_rng_state() -> tuple[int, tuple[int, ...], Optional[float]]:
+    version, internal, gauss = random.getstate()
+    return (
+        int(version),
+        tuple(int(x) for x in internal),
+        None if gauss is None else float(gauss),
+    )
+
+
+def _numpy_rng_state() -> tuple[str, np.ndarray, int, int, float]:
+    name, keys, pos, has_gauss, cached_gaussian = np.random.get_state()
+    return (
+        str(name),
+        np.asarray(keys, dtype=np.uint32).copy(),
+        int(pos),
+        int(has_gauss),
+        float(cached_gaussian),
+    )
+
+
 def _rng_state() -> dict[str, Any]:
     return {
-        "torch": torch.get_rng_state(),
-        "cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else [],
-        "python": random.getstate(),
-        "numpy": np.random.get_state(),
+        "torch": _torch_rng_state_bytes(torch.get_rng_state()),
+        "cuda": (
+            [_torch_rng_state_bytes(state) for state in torch.cuda.get_rng_state_all()]
+            if torch.cuda.is_available()
+            else []
+        ),
+        "python": _python_rng_state(),
+        "numpy": _numpy_rng_state(),
     }
+
+
+def _coerce_torch_rng_state(name: str, value: Any) -> Optional[torch.Tensor]:
+    if not isinstance(value, torch.Tensor):
+        log.warning(
+            "skipping %s RNG state: expected tensor, got %s",
+            name,
+            type(value).__name__,
+        )
+        return None
+    if value.dtype != torch.uint8:
+        log.warning("casting %s RNG state from %s to torch.uint8", name, value.dtype)
+    try:
+        return value.detach().cpu().to(torch.uint8)
+    except (RuntimeError, TypeError, ValueError) as exc:
+        log.warning("skipping %s RNG state: could not cast to torch.uint8: %s", name, exc)
+        return None
+
+
+def _load_python_rng_state(value: Any) -> None:
+    try:
+        version, internal, gauss = value
+        random.setstate((int(version), tuple(int(x) for x in internal), gauss))
+    except (TypeError, ValueError) as exc:
+        log.warning("skipping python RNG state: %s", exc)
+
+
+def _load_numpy_rng_state(value: Any) -> None:
+    try:
+        name, keys, pos, has_gauss, cached_gaussian = value
+        np.random.set_state(
+            (
+                str(name),
+                np.asarray(keys, dtype=np.uint32),
+                int(pos),
+                int(has_gauss),
+                float(cached_gaussian),
+            )
+        )
+    except (TypeError, ValueError) as exc:
+        log.warning("skipping numpy RNG state: %s", exc)
 
 
 def _load_rng_state(state: Optional[dict[str, Any]]) -> None:
     if not state:
         return
     if "torch" in state:
-        torch.set_rng_state(state["torch"])
+        torch_state = _coerce_torch_rng_state("torch", state["torch"])
+        if torch_state is not None:
+            try:
+                torch.set_rng_state(torch_state)
+            except RuntimeError as exc:
+                log.warning("skipping torch RNG state: %s", exc)
     if torch.cuda.is_available() and state.get("cuda"):
-        torch.cuda.set_rng_state_all(state["cuda"])
+        for idx, cuda_state_value in enumerate(state["cuda"]):
+            cuda_state = _coerce_torch_rng_state(f"cuda:{idx}", cuda_state_value)
+            if cuda_state is None:
+                continue
+            try:
+                torch.cuda.set_rng_state(cuda_state, idx)
+            except RuntimeError as exc:
+                log.warning("skipping cuda:%d RNG state: %s", idx, exc)
     if "python" in state:
-        random.setstate(state["python"])
+        _load_python_rng_state(state["python"])
     if "numpy" in state:
-        np.random.set_state(state["numpy"])
+        _load_numpy_rng_state(state["numpy"])
 
 
 def save_checkpoint(
