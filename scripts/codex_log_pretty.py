@@ -205,7 +205,11 @@ def render_html(text: str, keep_mcp: bool = False) -> str:
         nonlocal in_exec, in_result
         if not (in_exec or in_result):
             return
-        # Render: <details><summary>$ cmd ⌁ status</summary><body></details>
+        # Action block: <details> with summary line + collapsed body.
+        # The body is hidden until the user clicks the summary, like
+        # real codex / Claude Code. Default state is collapsed —
+        # the conversation flows through prompts + reasoning, with
+        # tool-call output one click away when needed.
         cmd = " ".join(s.strip() for s in action_cmd_lines if s.strip()).strip()
         if not cmd:
             cmd = "(empty exec)"
@@ -214,14 +218,26 @@ def render_html(text: str, keep_mcp: bool = False) -> str:
         m = re.match(r"^/bin/zsh -lc ['\"](.+)['\"](?:\s+in\s+.+)?$", cmd)
         if m:
             cmd = m.group(1)
+        if len(cmd) > 200:
+            cmd = cmd[:197] + "..."
         status_txt = action_status or "running"
+        n_body = len(action_body_lines)
+        body_hint = (
+            f" · {n_body} line{'s' if n_body != 1 else ''} hidden"
+            if n_body
+            else ""
+        )
         summary = (
             f'<span class="codex-action-prompt">$</span> '
-            f'<span class="codex-action-cmd">{esc(cmd)}</span> '
+            f'<span class="codex-action-cmd">{esc(cmd)}</span>'
             f'<span class="codex-action-status codex-status-{action_status_class}">'
-            f'{esc(status_txt)}</span>'
+            f' {esc(status_txt)}{esc(body_hint)}</span>'
         )
         body_html = "\n".join(color_diff_line(b) for b in action_body_lines)
+        # IMPORTANT: <details> collapses its non-<summary> children by
+        # default (HTML spec). The dashboard CSS does not override this
+        # — clicking the summary toggles open/closed, identical to the
+        # codex-CLI / Claude Code action-collapse UX.
         out.append(
             '<details class="codex-action">'
             f'<summary>{summary}</summary>'
