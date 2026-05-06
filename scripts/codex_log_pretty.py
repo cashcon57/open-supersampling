@@ -50,6 +50,12 @@ def color(text: str, *codes: str) -> str:
 MCP_ERROR_RE = re.compile(r"ERROR rmcp::transport::worker:")
 SUCCESS_RE = re.compile(r"^ succeeded in (\d+)ms:")
 EXIT_RE = re.compile(r"^ exited (\d+) in (\d+)ms:")
+# Codex's ``apply_patch`` tool prints these markers on a bare line each.
+# The state machine treats them like an exec action so the patch body
+# is collapsed inside <details> and not rendered inline as reasoning.
+APPLY_PATCH_OPEN = "apply patch"
+APPLY_PATCH_OK = "patch: completed"
+APPLY_PATCH_FAIL_RE = re.compile(r"^patch: (failed|error)")
 
 
 # State machine modes.
@@ -270,6 +276,16 @@ def render_html(text: str, keep_mcp: bool = False) -> str:
             open_action()
             mode = EXEC
             continue
+        if line == APPLY_PATCH_OPEN:
+            # Treat `apply patch` as a synthetic exec block. Codex omits
+            # the standard "exec\n<command>" prefix for this tool, but
+            # the body that follows is still tool-call output (file
+            # paths + diff hunks) that belongs in a collapsed <details>.
+            close_action()
+            open_action()
+            action_cmd_lines.append("apply_patch")
+            mode = EXEC
+            continue
 
         m_ok = SUCCESS_RE.match(line)
         m_err = EXIT_RE.match(line)
@@ -282,6 +298,20 @@ def render_html(text: str, keep_mcp: bool = False) -> str:
             continue
         if m_err and mode in (EXEC, RESULT):
             action_status = f"✗ exit {m_err.group(1)} in {m_err.group(2)}ms"
+            action_status_class = "err"
+            in_exec = False
+            in_result = True
+            mode = RESULT
+            continue
+        if line == APPLY_PATCH_OK and mode in (EXEC, RESULT):
+            action_status = "✓ patch applied"
+            action_status_class = "ok"
+            in_exec = False
+            in_result = True
+            mode = RESULT
+            continue
+        if APPLY_PATCH_FAIL_RE.match(line) and mode in (EXEC, RESULT):
+            action_status = f"✗ {line}"
             action_status_class = "err"
             in_exec = False
             in_result = True
