@@ -10,6 +10,30 @@ import torch
 from oss.sr.v6.aa_analytic_splat import analytic_pixel_integral, logistic_cdf
 
 
+def _analytic_pixel_integral_eigh_reference(
+    delta_x: torch.Tensor,
+    delta_y: torch.Tensor,
+    sigma_2d_inv: torch.Tensor,
+) -> torch.Tensor:
+    """Previous direct-eigh implementation, retained as an anisotropic oracle."""
+    eigvals_inv, eigvecs = torch.linalg.eigh(sigma_2d_inv)
+    eigvals_inv = torch.clamp(eigvals_inv, min=1.0e-12)
+    sigma_1 = torch.rsqrt(eigvals_inv[..., 0])
+    sigma_2 = torch.rsqrt(eigvals_inv[..., 1])
+
+    delta_x_b, delta_y_b = torch.broadcast_tensors(delta_x, delta_y)
+    delta = torch.stack((delta_x_b, delta_y_b), dim=-1)
+    u = (eigvecs.unsqueeze(-3) * delta.unsqueeze(-1)).sum(dim=-2)
+
+    int_x = logistic_cdf((u[..., 0] + 0.5) / sigma_1.unsqueeze(-1)) - logistic_cdf(
+        (u[..., 0] - 0.5) / sigma_1.unsqueeze(-1)
+    )
+    int_y = logistic_cdf((u[..., 1] + 0.5) / sigma_2.unsqueeze(-1)) - logistic_cdf(
+        (u[..., 1] - 0.5) / sigma_2.unsqueeze(-1)
+    )
+    return 2.0 * math.pi * sigma_1.unsqueeze(-1) * sigma_2.unsqueeze(-1) * int_x * int_y
+
+
 def test_logistic_cdf_at_zero() -> None:
     out = logistic_cdf(torch.tensor(0.0)).item()
     # S(0) = 1 / (1 + exp(0)) = 0.5.
@@ -155,6 +179,40 @@ def test_anisotropic_rotation() -> None:
     ).item()
     # Should match within numerical precision of eigendecomposition.
     assert abs(out_diag - out_rotated) < 1.0e-5
+
+
+def test_anisotropic_closed_form_matches_eigh_reference() -> None:
+    """Away from repeated eigenvalues, the closed-form path matches direct eigh."""
+    diag_sigma_inv = torch.diag(torch.tensor([1.0 / 9.0, 1.0 / 2.25]))
+    theta = torch.tensor(0.37)
+    c, s = torch.cos(theta), torch.sin(theta)
+    R = torch.stack([torch.stack([c, -s]), torch.stack([s, c])])
+    sigma_inv = (R @ diag_sigma_inv @ R.T).unsqueeze(0)
+    delta_x = torch.tensor([[-1.25, -0.2, 0.0, 0.75, 1.5]])
+    delta_y = torch.tensor([[0.5, -0.75, 0.0, 0.25, -1.0]])
+
+    out = analytic_pixel_integral(delta_x, delta_y, sigma_inv)
+    expected = _analytic_pixel_integral_eigh_reference(delta_x, delta_y, sigma_inv)
+
+    assert torch.allclose(out, expected, atol=1.0e-5, rtol=1.0e-5)
+
+
+def test_exactly_isotropic_backward_has_no_nan_gradients() -> None:
+    """Repeated eigenvalues must not poison training gradients."""
+    sigma_inv = torch.eye(2).unsqueeze(0).requires_grad_(True)
+    delta_x = torch.tensor([[0.0, 0.25, -0.5]], requires_grad=True)
+    delta_y = torch.tensor([[0.0, -0.25, 0.5]], requires_grad=True)
+
+    out = analytic_pixel_integral(delta_x, delta_y, sigma_inv)
+    out.sum().backward()
+
+    assert torch.isfinite(out).all()
+    assert sigma_inv.grad is not None
+    assert delta_x.grad is not None
+    assert delta_y.grad is not None
+    assert torch.isfinite(sigma_inv.grad).all()
+    assert torch.isfinite(delta_x.grad).all()
+    assert torch.isfinite(delta_y.grad).all()
 
 
 def test_zero_variance_handled() -> None:

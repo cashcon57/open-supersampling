@@ -22,9 +22,10 @@ integration domain is rotated into the principal-axis frame, and the
 2D pixel-window integral factorises into a product of two 1D integrals.
 
 For the V6 reference we accept the pre-computed inverse covariance
-``sigma_2d_inv``, eigendecompose it, and apply the per-axis logistic
-CDF integral. Diagonal-Sigma fast path is provided implicitly by the
-eigenvalue decomposition of a diagonal matrix.
+``sigma_2d_inv``, diagonalize it with a gradient-safe closed-form 2x2
+symmetric eigensystem, and apply the per-axis logistic CDF integral.
+Repeated-eigenvalue inputs take an isotropic fast path that avoids the
+undefined eigenvector basis.
 
 NOTE: PyTorch pure-functional reference implementation. Slow but
 correct. Production CUDA kernels follow as a separate sprint.
@@ -32,9 +33,15 @@ correct. Production CUDA kernels follow as a separate sprint.
 
 from __future__ import annotations
 
+import math
+
 import torch
 
 __all__ = ["analytic_pixel_integral", "logistic_cdf"]
+
+_EIGEN_EPS = 1.0e-6
+_EIGENVALUE_FLOOR = 1.0e-12
+_ISOTROPIC_EIGEN_GAP = 1.0e-5
 
 
 def logistic_cdf(x: torch.Tensor) -> torch.Tensor:
@@ -48,6 +55,18 @@ def logistic_cdf(x: torch.Tensor) -> torch.Tensor:
     range encountered at +/- 5 sigma. bf16-safe.
     """
     return torch.sigmoid(1.6 * x + 0.07 * x * x * x)
+
+
+def _align_to_offsets(x: torch.Tensor, offsets: torch.Tensor) -> torch.Tensor:
+    """Append singleton pixel axes until ``x`` broadcasts with offsets."""
+    while x.ndim < offsets.ndim:
+        x = x.unsqueeze(-1)
+    return x
+
+
+def _axis_integral(u: torch.Tensor, sigma: torch.Tensor) -> torch.Tensor:
+    inv_sigma = 1.0 / sigma
+    return logistic_cdf((u + 0.5) * inv_sigma) - logistic_cdf((u - 0.5) * inv_sigma)
 
 
 def analytic_pixel_integral(
@@ -64,14 +83,14 @@ def analytic_pixel_integral(
     For each pixel, integrating a 1D Gaussian over [delta - 0.5,
     delta + 0.5] gives ``S((delta + 0.5) / sigma) - S((delta - 0.5) /
     sigma)`` per axis. The 2D version factorises in the eigenbasis of
-    Sigma -- so we eigendecompose ``sigma_2d_inv``, rotate the
-    (delta_x, delta_y) offsets into that basis, and multiply the two
-    per-axis 1D integrals.
+    Sigma -- so we diagonalize ``sigma_2d_inv`` with the closed-form 2x2
+    symmetric eigensystem, rotate the (delta_x, delta_y) offsets into
+    that basis, and multiply the two per-axis 1D integrals.
 
     Construction:
-        1. Recover Sigma from sigma_2d_inv via inverse, eigendecompose
+        1. Recover Sigma from sigma_2d_inv via inverse, diagonalize
            -> rotation R and eigenvalues lambda_1, lambda_2.
-           Equivalently: eigendecompose sigma_2d_inv directly --
+           Equivalently: diagonalize sigma_2d_inv directly --
            same eigenvectors, reciprocal eigenvalues. We do the
            latter (one fewer matrix inverse) and take the standard
            deviations as 1 / sqrt(lambda_inv).
@@ -106,8 +125,8 @@ def analytic_pixel_integral(
 
     Notes:
         * bf16-safe.
-        * If ``sigma_2d_inv`` is exactly diagonal the eigendecomposition
-          collapses to identity rotation and the returned values match
+        * If ``sigma_2d_inv`` is exactly diagonal the closed-form rotation
+          collapses to the coordinate axes and the returned values match
           the simple separable 1D-CDF case.
         * Tiny eigenvalues are clamped at a floor; in that limit the
           per-axis std-dev grows large and the per-axis integral
@@ -119,68 +138,65 @@ def analytic_pixel_integral(
             f"sigma_2d_inv must be (..., 2, 2), got {tuple(sigma_2d_inv.shape)}"
         )
 
-    # Eigendecompose Sigma_inv. Using torch.linalg.eigh because Sigma_inv
-    # is symmetric positive-definite. eigh returns ascending eigenvalues
-    # and orthonormal eigenvectors.
-    # Float upcast for numerical stability of the decomposition; matters
-    # because eigh under bf16 is wobbly. The downstream return is in the
-    # input dtype.
+    # Float upcast for numerical stability of the 2x2 closed-form path; the
+    # downstream return is in the input dtype.
     in_dtype = sigma_2d_inv.dtype
     sigma_inv_f = sigma_2d_inv.to(dtype=torch.float32) if in_dtype != torch.float32 else sigma_2d_inv
 
-    eigvals_inv, eigvecs = torch.linalg.eigh(sigma_inv_f)  # (..., 2), (..., 2, 2)
-
-    # Variances along principal axes = 1 / eigenvalues_of_Sigma_inv.
-    # Floor eigenvalues_inv at a small value (i.e. cap the variance at a
-    # large value); avoids div-by-zero on degenerate Sigma_inv.
-    eigvals_inv = torch.clamp(eigvals_inv, min=1.0e-12)
-    sigma_1 = torch.rsqrt(eigvals_inv[..., 0])  # std-dev along first axis
-    sigma_2 = torch.rsqrt(eigvals_inv[..., 1])  # std-dev along second axis
-
-    # Rotate (delta_x, delta_y) into eigenbasis. eigvecs has columns =
-    # eigenvectors. We want u = R^T delta where R = eigvecs.
-    # The calling convention for this function is:
-    #   sigma_2d_inv:  (N_leading..., 2, 2)
-    #   delta_x/y:     (N_leading..., P)
-    # where the per-Gaussian eigendecomposition broadcasts across all P
-    # pixel offsets. We add a singleton P axis to eigvecs / sigma_1 /
-    # sigma_2 so the rotation applies pointwise across pixels.
     delta_x_b, delta_y_b = torch.broadcast_tensors(delta_x, delta_y)
-    delta = torch.stack(
-        (delta_x_b.to(dtype=torch.float32), delta_y_b.to(dtype=torch.float32)),
-        dim=-1,
-    )  # (..., P, 2)
+    dx = delta_x_b.to(dtype=torch.float32)
+    dy = delta_y_b.to(dtype=torch.float32)
 
-    # Match shapes for the rotation: insert a singleton "P" axis just
-    # before the trailing (2, 2) of eigvecs and the trailing 2 of
-    # sigma_1 / sigma_2, so they broadcast against delta's P dim.
-    eigvecs_b = eigvecs.unsqueeze(-3)  # (..., 1, 2, 2)
-    sigma_1_b = sigma_1.unsqueeze(-1)  # (..., 1)
-    sigma_2_b = sigma_2.unsqueeze(-1)  # (..., 1)
+    # Symmetric 2x2 eigensystem for A = [[a, b], [b, c]]. The isotropic ridge
+    # keeps the inverse covariance strictly positive without changing the
+    # eigenvectors. The discriminant follows the Analytic-Splatting 2D
+    # diagonalisation but avoids torch.linalg.eigh, whose backward is singular
+    # for repeated eigenvalues.
+    a = sigma_inv_f[..., 0, 0] + _EIGEN_EPS
+    b = 0.5 * (sigma_inv_f[..., 0, 1] + sigma_inv_f[..., 1, 0])
+    c = sigma_inv_f[..., 1, 1] + _EIGEN_EPS
 
-    # u = R^T @ delta, computed per pixel.
-    # eigvecs_b: (..., 1, 2, 2); delta: (..., P, 2)
-    # contract over j: u_i = sum_j eigvecs_b[..., :, j, i] * delta[..., :, j]
-    # Manual contraction (broadcasts cleanly under the singleton P axis).
-    u = (eigvecs_b * delta.unsqueeze(-1)).sum(dim=-2)  # (..., P, 2)
+    half_delta = 0.5 * (a - c)
+    t = 0.5 * (a + c)
+    raw_d_sq = half_delta * half_delta + b * b
+    d = torch.sqrt(raw_d_sq + _EIGEN_EPS)
 
-    u1 = u[..., 0]
-    u2 = u[..., 1]
+    lambda_high = torch.clamp(t + d, min=_EIGENVALUE_FLOOR)
+    lambda_low = torch.clamp(t - d, min=_EIGENVALUE_FLOOR)
+    sigma_high = torch.rsqrt(lambda_high)
+    sigma_low = torch.rsqrt(lambda_low)
 
-    # Per-axis 1D pixel integral via logistic CDF, broadcasting per-Gaussian
-    # sigma against per-pixel u.
-    inv_s1 = 1.0 / sigma_1_b
-    inv_s2 = 1.0 / sigma_2_b
-    int_x = logistic_cdf((u1 + 0.5) * inv_s1) - logistic_cdf((u1 - 0.5) * inv_s1)
-    int_y = logistic_cdf((u2 + 0.5) * inv_s2) - logistic_cdf((u2 - 0.5) * inv_s2)
+    eigengap = 2.0 * torch.sqrt(raw_d_sq)
+    near_isotropic = eigengap < _ISOTROPIC_EIGEN_GAP
 
-    # Eq. 15 normalisation: 2*pi*sigma_1*sigma_2 * (int_x * int_y).
-    # This produces values that match the un-normalised Gaussian
-    # convention used by the OSS EWA path: at the splat centre with
-    # sigma=1 the integral evaluates to ~0.1466 (the area of a unit-peak
-    # Gaussian over a unit pixel).
-    import math
-    norm = 2.0 * math.pi * sigma_1_b * sigma_2_b
-    out = norm * int_x * int_y
+    # theta is the eigenvector angle for lambda_high. Guard exactly repeated
+    # eigenvalues before atan2 so the inactive anisotropic branch still has
+    # finite backward values under torch.where.
+    safe_angle_x = torch.where(near_isotropic, torch.ones_like(half_delta), a - c)
+    safe_angle_y = torch.where(near_isotropic, torch.zeros_like(b), 2.0 * b)
+    theta = 0.5 * torch.atan2(safe_angle_y, safe_angle_x)
+    cos_t = _align_to_offsets(torch.cos(theta), dx)
+    sin_t = _align_to_offsets(torch.sin(theta), dx)
+
+    sigma_high_b = _align_to_offsets(sigma_high, dx)
+    sigma_low_b = _align_to_offsets(sigma_low, dx)
+
+    u_high = cos_t * dx + sin_t * dy
+    u_low = -sin_t * dx + cos_t * dy
+
+    int_high = _axis_integral(u_high, sigma_high_b)
+    int_low = _axis_integral(u_low, sigma_low_b)
+    anisotropic = 2.0 * math.pi * sigma_high_b * sigma_low_b * int_high * int_low
+
+    # For repeated eigenvalues the principal axes are undefined, but the
+    # Gaussian is rotation-invariant. Eq. 12 therefore reduces to the same
+    # separable 1D CDF integral in screen x/y, with one shared std-dev.
+    sigma_iso = torch.rsqrt(torch.clamp(t, min=_EIGENVALUE_FLOOR))
+    sigma_iso_b = _align_to_offsets(sigma_iso, dx)
+    int_x = _axis_integral(dx, sigma_iso_b)
+    int_y = _axis_integral(dy, sigma_iso_b)
+    isotropic = 2.0 * math.pi * sigma_iso_b * sigma_iso_b * int_x * int_y
+
+    out = torch.where(_align_to_offsets(near_isotropic, dx), isotropic, anisotropic)
 
     return out.to(dtype=in_dtype)
