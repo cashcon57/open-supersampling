@@ -2,13 +2,14 @@
 
 Verifies the canonical v6 Stage 2 path: HAT features, warped persistent
 canvas, active-mask fusion, HR rasterization, composite RGB head, Gaussian
-write-back, ST-score state, and softplus / sigmoid output.
+write-back, ST-score state, and bicubic-residual RGB output.
 """
 from __future__ import annotations
 
 from unittest.mock import Mock
 
 import torch
+import torch.nn.functional as F
 import pytest
 
 from oss.sr.v6.model import CanvasState, V6Config, V6Model
@@ -61,6 +62,17 @@ def _motion(
     return motion
 
 
+def _realistic_lr(
+    batch: int = 1,
+    h: int = 32,
+    w: int = 32,
+) -> torch.Tensor:
+    """RGB in a plausible SDR range plus zeroed depth/motion/normal channels."""
+    rgb = torch.rand(batch, 3, h, w) * 0.7 + 0.1
+    gbuffers = torch.zeros(batch, 6, h, w)
+    return torch.cat([rgb, gbuffers], dim=1)
+
+
 # ---------------------------------------------------------------------------
 # Construction
 # ---------------------------------------------------------------------------
@@ -70,7 +82,7 @@ def test_v6model_constructs_with_default_config():
     cfg = V6Config(backbone="hat-tiny", canvas_capacity=64)
     m = V6Model(cfg)
     assert m.scale == 2
-    assert m.cfg.color_activation == "softplus"
+    assert m.cfg.color_activation == "hdr"
     assert m.feat_dim == m.backbone.embed_dim
 
 
@@ -189,8 +201,35 @@ def test_v6model_gradient_flows_through_stage2_path():
     assert sum(float(g.abs().sum()) for g in backbone_grads) > 0.0
 
 
+def test_v6model_init_output_has_real_signal_variance():
+    torch.manual_seed(0)
+    m = _tiny_model().train(False)
+    lr = _realistic_lr()
+
+    out = m(lr, motion_lr=None, frame_index=0)
+
+    assert out.std() > 0.05, "init output should preserve bicubic image variance"
+
+
+def test_v6model_init_output_close_to_bicubic():
+    torch.manual_seed(1)
+    m = _tiny_model().train(False)
+    lr = _realistic_lr()
+    bicubic = F.interpolate(
+        lr[:, :3],
+        size=(lr.shape[-2] * m.scale, lr.shape[-1] * m.scale),
+        mode="bicubic",
+        align_corners=False,
+        antialias=True,
+    ).clamp(min=0.0)
+
+    out = m(lr, motion_lr=None, frame_index=0)
+
+    assert (out - bicubic).abs().mean() < 0.05
+
+
 def test_v6model_forward_softplus_output_is_non_negative():
-    """Softplus output is unbounded above but always non-negative — HDR-safe."""
+    """Deprecated softplus alias is HDR-safe: non-negative and uncapped."""
     m = _tiny_model(color_activation="softplus").train(False)
     lr = torch.randn(1, 9, 32, 32)
     out = m(lr)
@@ -198,15 +237,23 @@ def test_v6model_forward_softplus_output_is_non_negative():
 
 
 def test_v6model_forward_sigmoid_output_in_unit_range():
+    """Deprecated sigmoid alias is SDR-safe: clamped to [0, 1]."""
     m = _tiny_model(color_activation="sigmoid").train(False)
     lr = torch.randn(1, 9, 32, 32)
     out = m(lr)
     assert (out >= 0).all() and (out <= 1).all(), "sigmoid output should be in [0,1]"
 
 
+def test_v6model_forward_sdr_output_in_unit_range():
+    m = _tiny_model(color_activation="sdr").train(False)
+    lr = torch.randn(1, 9, 32, 32)
+    out = m(lr)
+    assert (out >= 0).all() and (out <= 1).all(), "sdr output should be in [0,1]"
+
+
 def test_v6model_forward_handles_hdr_inputs():
     """LR input with values >> 1.0 should not crash the model."""
-    m = _tiny_model(color_activation="softplus").train(False)
+    m = _tiny_model(color_activation="hdr").train(False)
     lr = torch.randn(1, 9, 32, 32) * 5.0
     out = m(lr)
     assert torch.isfinite(out).all()

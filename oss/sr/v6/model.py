@@ -15,9 +15,11 @@ Wires the v6 architecture:
            rasterized canvas features by a lightweight conv head.
   Stage 7: Fresh Gaussians are spawned from refined features and written back
            into the persistent per-rank canvas.
-  Stage 8: Softplus output activation supports HDR linear-light values >1.0
-           (the model defaults to softplus per commit 43755fc — flag-
-           configurable for SDR-only callers).
+  Stage 8: Bicubic-residual RGB output. The composite head predicts a learned
+           delta from the bicubic-upsampled LR RGB input. ``color_activation``
+           selects HDR/non-negative output (``"hdr"`` / deprecated
+           ``"softplus"`` alias, clamp(min=0)) or SDR/unit-range output
+           (``"sdr"`` / deprecated ``"sigmoid"`` alias, clamp(0, 1)).
   Stage 9: STVScoreState aggregates per-Gaussian contribution + lifespan
            every step; periodic prune_by_st_score() drops the bottom
            fraction every ``prune_every`` steps.
@@ -95,8 +97,8 @@ class V6Config:
     """Hyperparameters for V6Model construction.
 
     Defaults match the v6 canonical memo's "Heavy" teacher tier (HAT-L
-    backbone, 15K canvas capacity, softplus output). Standard / Pico
-    tiers override ``backbone`` and ``canvas_capacity``.
+    backbone, 15K canvas capacity, HDR non-negative output). Standard /
+    Pico tiers override ``backbone`` and ``canvas_capacity``.
     """
 
     in_channels: int = 9
@@ -106,7 +108,9 @@ class V6Config:
     token_dim: int = 64
     cross_attention_heads: int = 6
     window_size: int = 16
-    color_activation: str = "softplus"   # "softplus" (HDR) | "sigmoid" (SDR)
+    # Preferred values are "hdr" and "sdr". "softplus" / "sigmoid" remain
+    # deprecated aliases for checkpoint and caller compatibility.
+    color_activation: str = "hdr"
     tile_size_lr: int = 8
     tile_size_hr: int = 16
     keyframe_interval: int = 10
@@ -127,9 +131,10 @@ class V6Model(nn.Module):
                 f"unknown backbone {self.cfg.backbone!r}; must be one of "
                 f"{sorted(_BACKBONE_REGISTRY)}"
             )
-        if self.cfg.color_activation not in ("softplus", "sigmoid"):
+        if self.cfg.color_activation not in ("hdr", "sdr", "softplus", "sigmoid"):
             raise ValueError(
-                f"color_activation must be 'softplus' or 'sigmoid'; got "
+                "color_activation must be 'hdr' or 'sdr' "
+                "('softplus' / 'sigmoid' aliases are deprecated); got "
                 f"{self.cfg.color_activation!r}"
             )
         self.scale = int(self.cfg.scale)
@@ -176,6 +181,7 @@ class V6Model(nn.Module):
             nn.GELU(),
             nn.Conv2d(hidden, 3, 3, padding=1),
         )
+        nn.init.zeros_(self.composite_head[-1].bias)
 
         # Per-rank-local stateful pieces. NOT registered as buffers so DDP
         # doesn't try to sync them; they reset at trajectory boundaries.
@@ -330,8 +336,24 @@ class V6Model(nn.Module):
             align_corners=False,
         )
         debug_check("refined_hr", refined_hr)
-        rgb_hr = self.composite_head(torch.cat([refined_hr, canvas_hr], dim=1))
-        debug_check("composite_output", rgb_hr)
+        lr_rgb = lr_inputs[:, :3]
+        # Bicubic residual skip puts init quality near bicubic instead of
+        # uniform ln(2). Cost is ~0.06 ms at 4K, negligible vs the 4 ms target.
+        bicubic_hr = F.interpolate(
+            lr_rgb,
+            size=output_hw,
+            mode="bicubic",
+            align_corners=False,
+            antialias=True,
+        ).clamp(min=0.0)
+        debug_check("bicubic_hr", bicubic_hr)
+        delta = self.composite_head(torch.cat([refined_hr, canvas_hr], dim=1))
+        debug_check("composite_delta", delta)
+        rgb_hr = bicubic_hr + delta
+        if self.cfg.color_activation in ("sdr", "sigmoid"):
+            rgb_hr = rgb_hr.clamp(0.0, 1.0)
+        else:
+            rgb_hr = rgb_hr.clamp(min=0.0)
         self._update_st_state(
             render_canvas,
             render_active,
@@ -339,12 +361,6 @@ class V6Model(nn.Module):
             old_count=old_count,
             new_count=int(spawned_canvas.count),
         )
-
-        if self.cfg.color_activation == "sigmoid":
-            rgb_hr = torch.sigmoid(rgb_hr)
-        else:
-            rgb_hr = rgb_hr.clamp(-30.0, 30.0)
-            rgb_hr = F.softplus(rgb_hr)
         debug_check("rgb_hr", rgb_hr)
 
         # Persistent per-rank state must NOT carry autograd across frames.
