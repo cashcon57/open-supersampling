@@ -114,8 +114,20 @@ def _load_temporal(ckpt_path: Path, device: str):
     saved = ck.get("args", {})
     tier = saved.get("tier", "standard")
     backbone_kind = saved.get("backbone_kind", "simple")
+    # Read the conditional channel-zero flag (added in commit d25b3b9). New
+    # ckpts persist the explicit flag; legacy ckpts predate it but warm-
+    # started runs (args.warm_start truthy) needed zeroing to match the
+    # v4-on-SRGD distribution. Without this restoration at eval time, the
+    # eval pathway feeds real TartanAir G-buffers into a backbone that was
+    # trained on zeroed G-buffers — producing the rainbow chromatic-
+    # dispersion garbage we already debugged in commit b2fa647.
+    if "zero_gbuffer_into_backbone" in saved:
+        zero_flag = bool(saved["zero_gbuffer_into_backbone"])
+    else:
+        zero_flag = bool(saved.get("warm_start"))
     model = TemporalSRModel(
         in_channels=12, scale=2, tier=tier, backbone_kind=backbone_kind,
+        zero_gbuffer_into_backbone=zero_flag,
     ).to(device)
     if "temporal_model" in ck:
         model.load_state_dict(ck["temporal_model"])
@@ -402,12 +414,28 @@ def _eval_loader(
             scale = model_temporal.scale
 
             # Baseline at t (used as cold-start prev_hr for v5 at t+1).
+            # The baseline (v4) was trained on SRGD where depth/motion/normals
+            # were zero everywhere except normals[2]=1.0; feeding real
+            # TartanAir G-buffers into the backbone here triggers the
+            # distribution-shift bug (chromatic-dispersion garbage; see
+            # commit b2fa647). Zero non-RGB channels with the same SRGD
+            # default-up convention before calling the baseline. The v5
+            # temporal model handles this internally via its
+            # ``zero_gbuffer_into_backbone`` flag; the baseline is a raw
+            # SRCNNSimple/RRDB so we apply the same masking here.
+            def _baseline_input(x: "torch.Tensor") -> "torch.Tensor":
+                masked = torch.zeros_like(x)
+                masked[:, :3] = x[:, :3]
+                if masked.shape[1] >= 7:
+                    masked[:, 6] = 1.0
+                return masked
+
             x_t = _make_12ch(t_lr, t_depth, t_motion, t_normals, t_canvas)
-            base_out_t = model_baseline(x_t).clamp(0.0, 1.0)
+            base_out_t = model_baseline(_baseline_input(x_t)).clamp(0.0, 1.0)
 
             # Baseline at t+1 (single-frame) — competitor.
             x_tp1 = _make_12ch(p_lr, p_depth, p_motion, p_normals, p_canvas)
-            base_out_tp1 = model_baseline(x_tp1).clamp(0.0, 1.0)
+            base_out_tp1 = model_baseline(_baseline_input(x_tp1)).clamp(0.0, 1.0)
 
             # v5 temporal at t (cold-started with bilinear up of t_lr) —
             # used both for the t+1 prev_hr feed AND the temporal-stability metric.
