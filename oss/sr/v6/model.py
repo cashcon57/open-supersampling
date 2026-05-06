@@ -42,6 +42,8 @@ trajectory boundary).
 from __future__ import annotations
 
 import math
+import logging
+import os
 from dataclasses import dataclass
 from typing import Optional
 
@@ -58,6 +60,26 @@ from oss.sr.v6.st_variation_score import (
     init_st_score_state,
     update_st_score,
 )
+
+
+log = logging.getLogger("oss.sr.v6.model")
+
+
+def _debug_nan_enabled() -> bool:
+    return os.environ.get("OSS_V6_DEBUG_NAN", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+def _debug_tensor_stats(x: torch.Tensor) -> str:
+    x_f = x.detach().float()
+    if x_f.numel() == 0:
+        return "mean=nan min=nan max=nan"
+    return (
+        f"mean={float(x_f.mean()):.9g} "
+        f"min={float(x_f.amin()):.9g} "
+        f"max={float(x_f.amax()):.9g}"
+    )
 
 
 _BACKBONE_REGISTRY = {
@@ -172,6 +194,8 @@ class V6Model(nn.Module):
         # carried over from v5 for warm-start ckpts. v6 backbones are
         # trained with real G-buffers from the start, so default False.
         self.zero_gbuffer_into_backbone: bool = False
+        self.debug_nan: bool = _debug_nan_enabled()
+        self.debug_nan_step: Optional[int] = None
 
     # ------------------------------------------------------------------
     # Stateful canvas + score interface
@@ -207,21 +231,53 @@ class V6Model(nn.Module):
         once per frame, with motion_lr threaded between frames. For first
         frame call with motion_lr=None.
         """
+        debug_first_nonfinite: Optional[str] = None
+
+        def debug_check(name: str, tensor: Optional[torch.Tensor]) -> None:
+            nonlocal debug_first_nonfinite
+            if (
+                not self.debug_nan
+                or debug_first_nonfinite is not None
+                or tensor is None
+                or bool(torch.isfinite(tensor).all().detach().item())
+            ):
+                return
+            debug_first_nonfinite = name
+            log.warning(
+                "model stage non-finite: name=%s stats=%s step=%s frame_index=%d",
+                name,
+                _debug_tensor_stats(tensor),
+                "unknown" if self.debug_nan_step is None else int(self.debug_nan_step),
+                int(frame_index),
+            )
+
         feats = self.backbone(lr_inputs)         # (B, feat_dim, H, W)
         feats = self.activation(self.pixel_head(feats))
+        debug_check("coarse_features", feats)
         b, _, h_lr, w_lr = feats.shape
         output_hw = (h_lr * self.scale, w_lr * self.scale)
 
         warped_canvas = self._warped_canvas(motion_lr=motion_lr, output_hw=output_hw)
+        if warped_canvas is not None:
+            debug_check("warped_canvas.positions", warped_canvas.positions)
+            debug_check("warped_canvas.scales", warped_canvas.scales)
+            debug_check("warped_canvas.opacities", warped_canvas.opacities)
+            debug_check("warped_canvas.colors", warped_canvas.colors)
         active_mask = self._active_mask(
             warped_canvas,
             frame_index=frame_index,
             output_hw=output_hw,
         )
         tokens = self._tokens_from_canvas(feats, warped_canvas, active_mask)
+        debug_check("tokens", tokens)
 
         refined = self.fusion(feats, tokens)
+        debug_check("refined", refined)
         spawned = self.gaussian_spawner(refined)
+        debug_check("spawned.positions", spawned.positions)
+        debug_check("spawned.scales", spawned.scales)
+        debug_check("spawned.opacities", spawned.opacities)
+        debug_check("spawned.colors", spawned.colors)
         spawned_canvas = self._flatten_spawned(spawned)
         previous_st_state = self._st_state
         old_count = 0 if warped_canvas is None else int(warped_canvas.count)
@@ -240,13 +296,16 @@ class V6Model(nn.Module):
             render_active.unsqueeze(0).expand(b, -1),
             output_hw=output_hw,
         )
+        debug_check("rasterized_canvas", canvas_hr)
         refined_hr = F.interpolate(
             refined,
             size=output_hw,
             mode="bilinear",
             align_corners=False,
         )
+        debug_check("refined_hr", refined_hr)
         rgb_hr = self.composite_head(torch.cat([refined_hr, canvas_hr], dim=1))
+        debug_check("composite_output", rgb_hr)
         self._update_st_state(
             render_canvas,
             render_active,
@@ -260,6 +319,7 @@ class V6Model(nn.Module):
         else:
             rgb_hr = rgb_hr.clamp(-30.0, 30.0)
             rgb_hr = F.softplus(rgb_hr)
+        debug_check("rgb_hr", rgb_hr)
 
         # Persistent per-rank state must NOT carry autograd across frames.
         # Without this, the canvas + ST tensors keep gradient back through

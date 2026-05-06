@@ -33,13 +33,42 @@ Design notes
 """
 from __future__ import annotations
 
-from typing import Optional
+import logging
+import os
+from typing import Any, Optional
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from oss.train.losses import temporal_consistency_loss as _temporal_consistency_loss
+
+
+log = logging.getLogger("oss.sr.v6.losses")
+
+
+def _debug_nan_enabled() -> bool:
+    return os.environ.get("OSS_V6_DEBUG_NAN", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+def _tensor_stats(x: torch.Tensor) -> str:
+    x_f = x.detach().float()
+    if x_f.numel() == 0:
+        return "mean=nan min=nan max=nan"
+    return (
+        f"mean={float(x_f.mean()):.9g} "
+        f"min={float(x_f.amin()):.9g} "
+        f"max={float(x_f.amax()):.9g}"
+    )
+
+
+def _component_value(x: torch.Tensor) -> float:
+    x_f = x.detach().float()
+    if x_f.numel() == 1:
+        return float(x_f)
+    return float(x_f.mean())
 
 
 # Re-export so callers can grab everything from this module.
@@ -274,15 +303,47 @@ class V6CompositeLoss(nn.Module):
     pre-weight scalar (for dashboard plotting). Total loss is a weighted sum.
     """
 
-    def __init__(self, gan_warmup_until_step: int = 20_000, use_lpips: bool = True):
+    def __init__(
+        self,
+        gan_warmup_until_step: int = 20_000,
+        use_lpips: bool = True,
+        debug_nan: Optional[bool] = None,
+    ):
         super().__init__()
         self.gan_warmup_until_step = int(gan_warmup_until_step)
         self.use_lpips = bool(use_lpips)
+        self.debug_nan = _debug_nan_enabled() if debug_nan is None else bool(debug_nan)
 
         self._lpips: Optional[nn.Module] = None
         self.vgg: MultiScaleVGGLoss = MultiScaleVGGLoss()
         if self.use_lpips:
             self._init_lpips()
+
+    def _record_component(
+        self,
+        parts: dict[str, Any],
+        name: str,
+        value: torch.Tensor,
+        pred: torch.Tensor,
+        target: torch.Tensor,
+        step: int,
+    ) -> None:
+        if (
+            not self.debug_nan
+            or "first_non_finite_component" in parts
+            or bool(torch.isfinite(value).all().detach().item())
+        ):
+            return
+        parts["first_non_finite_component"] = name
+        log.warning(
+            "loss component non-finite: name=%s value=%s pred_stats=%s "
+            "target_stats=%s step=%d",
+            name,
+            _component_value(value),
+            _tensor_stats(pred),
+            _tensor_stats(target),
+            int(step),
+        )
 
     def _init_lpips(self) -> None:
         if self._lpips is not None:
@@ -307,17 +368,19 @@ class V6CompositeLoss(nn.Module):
         pred_warped_prev: Optional[torch.Tensor] = None,
         target_warped_prev: Optional[torch.Tensor] = None,
         target_prev: Optional[torch.Tensor] = None,
-    ) -> tuple[torch.Tensor, dict[str, float]]:
+    ) -> tuple[torch.Tensor, dict[str, Any]]:
         in_dtype = pred.dtype
-        parts: dict[str, float] = {}
+        parts: dict[str, Any] = {}
 
         # Charbonnier.
         l_char = charbonnier_loss(pred, target)
         parts["charbonnier"] = float(l_char.detach())
+        self._record_component(parts, "charbonnier", l_char, pred, target, step)
 
         # Multi-scale VGG.
         l_vgg = self.vgg.to(pred.device)(pred.clamp(0.0, 1.0), target.clamp(0.0, 1.0))
         parts["vgg"] = float(l_vgg.detach())
+        self._record_component(parts, "vgg", l_vgg, pred, target, step)
 
         if self.use_lpips:
             # LPIPS-VGG. lpips expects [-1, 1]; we operate on [0, 1] and remap.
@@ -331,14 +394,17 @@ class V6CompositeLoss(nn.Module):
         else:
             l_lpips = pred.new_zeros(())
         parts["lpips"] = float(l_lpips.detach())
+        self._record_component(parts, "lpips", l_lpips, pred, target, step)
 
         # Wavelet L1 (haar, 2 levels, HF subbands).
         l_wav = wavelet_l1_loss(pred, target)
         parts["wavelet"] = float(l_wav.detach())
+        self._record_component(parts, "wavelet", l_wav, pred, target, step)
 
         # Sobel edge.
         l_sobel = sobel_edge_loss(pred, target)
         parts["sobel"] = float(l_sobel.detach())
+        self._record_component(parts, "sobel", l_sobel, pred, target, step)
 
         # GAN hinge generator term, after warmup.
         if fake_logits is not None and step >= self.gan_warmup_until_step:
@@ -348,6 +414,7 @@ class V6CompositeLoss(nn.Module):
             l_gan = pred.new_zeros(())
             w_gan = 0.0
         parts["gan"] = float(l_gan.detach())
+        self._record_component(parts, "gan", l_gan, pred, target, step)
 
         # Temporal consistency. Audit finding HIGH-H1: the bare form
         # |pred_t - warp(pred_prev)| penalizes ANY frame-to-frame change,
@@ -389,6 +456,7 @@ class V6CompositeLoss(nn.Module):
             l_temp = pred.new_zeros(())
             w_temp = 0.0
         parts["temporal"] = float(l_temp.detach())
+        self._record_component(parts, "temporal", l_temp, pred, target, step)
 
         total = (
             _W_CHARBONNIER * l_char

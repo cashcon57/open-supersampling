@@ -451,6 +451,18 @@ def _zero_optimizers(*optimizers: torch.optim.Optimizer) -> None:
         optim.zero_grad(set_to_none=True)
 
 
+def _debug_nan_enabled() -> bool:
+    return os.environ.get("OSS_V6_DEBUG_NAN", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+def _bad_step_parts(parts: dict[str, Any] | None = None) -> dict[str, Any]:
+    out: dict[str, Any] = dict(parts or {})
+    out["loss_total"] = float("nan")
+    return out
+
+
 def _has_global_nonfinite(tensor: torch.Tensor) -> bool:
     local_bad = int(not bool(torch.isfinite(tensor).all().detach().item()))
     flag = torch.tensor(local_bad, device=tensor.device, dtype=torch.int32)
@@ -684,7 +696,7 @@ def train_step(
     zero_grad: bool = True,
     step_optim: bool = True,
     loss_scale: float = 1.0,
-) -> dict[str, float]:
+) -> dict[str, Any]:
     """One optimizer step over one trajectory. Runs D only after GAN warmup."""
     device = args.device
     do_gan = step >= args.warmup_steps
@@ -709,7 +721,7 @@ def train_step(
     preds: list[torch.Tensor] = []
     targets: list[torch.Tensor] = []
     total_g_loss: Optional[torch.Tensor] = None
-    accum_parts: dict[str, float] = {}
+    accum_parts: dict[str, Any] = {}
     canvas_count_after_frame0 = 0.0
     canvas_count_at_frame1_start = 0.0
 
@@ -719,6 +731,8 @@ def train_step(
         target_prev: Optional[torch.Tensor] = None
         for frame_idx in range(traj_len):
             module = _unwrap(generator)
+            if hasattr(module, "debug_nan_step"):
+                setattr(module, "debug_nan_step", int(step))
             if frame_idx == 1 and hasattr(module, "_canvas_state"):
                 canvas = getattr(module, "_canvas_state", None)
                 canvas_count_at_frame1_start = float(getattr(canvas, "count", 0) or 0)
@@ -749,7 +763,10 @@ def train_step(
             )
             total_g_loss = frame_loss if total_g_loss is None else total_g_loss + frame_loss
             for k, v in parts.items():
-                accum_parts[k] = accum_parts.get(k, 0.0) + float(v)
+                if k == "first_non_finite_component":
+                    accum_parts.setdefault(k, v)
+                elif isinstance(v, (int, float)):
+                    accum_parts[k] = float(accum_parts.get(k, 0.0)) + float(v)
             preds.append(pred)
             targets.append(target[:, frame_idx])
             pred_prev = pred
@@ -758,17 +775,17 @@ def train_step(
     g_loss = total_g_loss
     if _has_global_nonfinite(g_loss):
         _zero_optimizers(optim_g, optim_d)
-        return {"loss_total": float("nan")}
+        return _bad_step_parts(accum_parts)
     (g_loss * float(loss_scale)).backward()
     generator_params = [p for p in generator.parameters() if p.requires_grad]
     if _has_global_nonfinite_grad(generator_params, ref=g_loss):
         _zero_optimizers(optim_g, optim_d)
-        return {"loss_total": float("nan")}
+        return _bad_step_parts(accum_parts)
     if step_optim:
         grad_norm_g = torch.nn.utils.clip_grad_norm_(generator_params, max_norm=1.0)
         if _has_global_nonfinite(grad_norm_g):
             _zero_optimizers(optim_g, optim_d)
-            return {"loss_total": float("nan")}
+            return _bad_step_parts(accum_parts)
         optim_g.step()
 
     d_loss = preds[-1].new_zeros(())
@@ -781,7 +798,7 @@ def train_step(
             d_loss = gan_hinge_d_loss(real_logits, fake_logits_d)
         if _has_global_nonfinite(d_loss):
             _zero_optimizers(optim_g, optim_d)
-            return {"loss_total": float("nan")}
+            return _bad_step_parts(accum_parts)
         (d_loss * float(loss_scale)).backward()
         discriminator_params = [
             p for p in discriminator.parameters()
@@ -789,7 +806,7 @@ def train_step(
         ]
         if _has_global_nonfinite_grad(discriminator_params, ref=d_loss):
             _zero_optimizers(optim_g, optim_d)
-            return {"loss_total": float("nan")}
+            return _bad_step_parts(accum_parts)
         if step_optim:
             grad_norm_d = torch.nn.utils.clip_grad_norm_(
                 discriminator_params,
@@ -797,7 +814,7 @@ def train_step(
             )
             if _has_global_nonfinite(grad_norm_d):
                 _zero_optimizers(optim_g, optim_d)
-                return {"loss_total": float("nan")}
+                return _bad_step_parts(accum_parts)
             optim_d.step()
         d_fired = True
     _set_requires_grad(discriminator, True)
@@ -812,9 +829,13 @@ def train_step(
             pruned = int(prune_target.maybe_prune())
 
     traj_len_f = float(lr_inputs.shape[1])
-    parts_avg = {k: v / traj_len_f for k, v in accum_parts.items()}
+    parts_avg = {
+        k: float(v) / traj_len_f
+        for k, v in accum_parts.items()
+        if isinstance(v, (int, float))
+    }
 
-    return {
+    result: dict[str, Any] = {
         "loss_total": float(accum_parts.get("total", float(g_loss.detach()))),
         "loss_charbonnier": float(parts_avg.get("charbonnier", 0.0)),
         "loss_lpips": float(parts_avg.get("lpips", 0.0)),
@@ -829,6 +850,9 @@ def train_step(
         "canvas_count_after_frame0": canvas_count_after_frame0,
         "canvas_count_at_frame1_start": canvas_count_at_frame1_start,
     }
+    if "first_non_finite_component" in accum_parts:
+        result["first_non_finite_component"] = accum_parts["first_non_finite_component"]
+    return result
 
 
 def _install_synthetic_canvas_state(model: torch.nn.Module, device: torch.device) -> None:
@@ -1006,6 +1030,11 @@ def main(argv: list[str] | None = None) -> int:
         generator = V6Model(cfg).to(device)
         discriminator = UNetDiscriminator().to(device)
         loss_fn = V6CompositeLoss(gan_warmup_until_step=args.warmup_steps).to(device)
+        debug_nan = _debug_nan_enabled()
+        if hasattr(generator, "debug_nan"):
+            generator.debug_nan = debug_nan
+        if hasattr(loss_fn, "debug_nan"):
+            loss_fn.debug_nan = debug_nan
 
         if is_main:
             n_params_g = sum(p.numel() for p in generator.parameters())
@@ -1014,6 +1043,8 @@ def main(argv: list[str] | None = None) -> int:
                 "models constructed | G params=%d D params=%d",
                 n_params_g, n_params_d,
             )
+            if debug_nan:
+                log.warning("OSS_V6_DEBUG_NAN=1; enabling v6 NaN instrumentation")
 
         optim_g = build_optimizer(generator, args)
         optim_d = build_optimizer(discriminator, args)
@@ -1067,7 +1098,7 @@ def main(argv: list[str] | None = None) -> int:
         while step < args.max_steps:
             step += 1
             final_step = step
-            accum_parts: dict[str, float] = {}
+            accum_parts: dict[str, Any] = {}
             bad_step = False
 
             for micro_idx in range(args.grad_accum):
@@ -1094,7 +1125,10 @@ def main(argv: list[str] | None = None) -> int:
                     loss_scale=1.0 / float(args.grad_accum),
                 )
                 for k, v in parts.items():
-                    accum_parts[k] = accum_parts.get(k, 0.0) + float(v)
+                    if k == "first_non_finite_component":
+                        accum_parts.setdefault(k, v)
+                    elif isinstance(v, (int, float)):
+                        accum_parts[k] = float(accum_parts.get(k, 0.0)) + float(v)
                 if not math.isfinite(parts.get("loss_total", float("nan"))):
                     bad_step = True
                     break
@@ -1103,14 +1137,16 @@ def main(argv: list[str] | None = None) -> int:
                 if is_main:
                     log.warning(
                         "non-finite loss at step %d; cleared gradients and skipped "
-                        "remaining updates/metrics for this step",
+                        "remaining updates/metrics for this step: %r",
                         step,
+                        accum_parts,
                     )
                 continue
 
             last_parts = {
-                k: v / float(args.grad_accum)
+                k: float(v) / float(args.grad_accum)
                 for k, v in accum_parts.items()
+                if isinstance(v, (int, float))
             }
             if not math.isfinite(last_parts.get("loss_total", float("nan"))):
                 if is_main:

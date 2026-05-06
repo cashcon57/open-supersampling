@@ -19,6 +19,7 @@ from types import SimpleNamespace
 
 import scripts.sr_train_v6 as train_v6
 from oss.sr.v6.ema import EMAModel
+import oss.sr.v6.losses as losses_mod
 
 
 class CheapCompositeLoss(nn.Module):
@@ -362,6 +363,31 @@ def test_nonfinite_train_step_clears_grads_and_skips_update():
     assert all(p.grad is None for p in g.parameters())
     for old, new in zip(before, g.parameters()):
         assert torch.equal(old, new)
+
+
+def test_composite_loss_debug_reports_first_nonfinite_component(monkeypatch, caplog):
+    class TinyVGGLoss(nn.Module):
+        def forward(self, pred, target):
+            return pred.new_zeros(())
+
+    monkeypatch.setattr(losses_mod, "MultiScaleVGGLoss", TinyVGGLoss)
+    monkeypatch.setattr(
+        losses_mod,
+        "wavelet_l1_loss",
+        lambda pred, target: pred.sum() * pred.new_tensor(float("nan")),
+    )
+
+    loss_fn = losses_mod.V6CompositeLoss(use_lpips=False, debug_nan=True)
+    pred = torch.rand(1, 3, 32, 32)
+    target = torch.rand(1, 3, 32, 32)
+
+    with caplog.at_level("WARNING", logger="oss.sr.v6.losses"):
+        loss, parts = loss_fn(pred, target, fake_logits=None, step=7)
+
+    assert not torch.isfinite(loss)
+    assert parts["first_non_finite_component"] == "wavelet"
+    assert "loss component non-finite: name=wavelet" in caplog.text
+    assert "step=7" in caplog.text
 
 
 def test_canvas_resets_between_trajectories():
