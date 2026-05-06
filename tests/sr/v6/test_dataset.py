@@ -12,6 +12,8 @@ import torch
 from oss.sr.v6.dataset import (
     HypersimDataset,
     MixedTartanAirHypersimDataset,
+    TrajectoryDataset,
+    TrajectoryMixedDataset,
     _TartanAirV6Wrapper,
 )
 
@@ -169,6 +171,32 @@ def test_mixed_dataset_single_source(tmp_path: Path) -> None:
     mixed = MixedTartanAirHypersimDataset(tartanair=None, hypersim=ds_h)
     assert len(mixed) == 2
     assert mixed._pick_source(0) == "hypersim"
+
+
+def test_trajectory_dataset_yields_consecutive_window(tmp_path: Path) -> None:
+    h_root = _make_hypersim_fixture(tmp_path / "hypersim", n_scenes=1, n_frames=4)
+    ds_h = HypersimDataset(root=h_root, scale=2.0)
+    traj = TrajectoryDataset(ds_h, trajectory_length=3)
+
+    item = traj[0]
+    assert item["lr_frame"].shape[:2] == (3, 3)
+    assert item["gt_hr_frame"].shape[:2] == (3, 3)
+    assert item["motion"].shape[:2] == (3, 2)
+    assert torch.equal(item["motion"][0], torch.zeros_like(item["motion"][0]))
+
+
+def test_trajectory_mixed_dataset_indexes_windows(tmp_path: Path) -> None:
+    h_root = _make_hypersim_fixture(tmp_path / "hypersim", n_scenes=1, n_frames=4)
+    ds_h = HypersimDataset(root=h_root, scale=2.0)
+    mixed = TrajectoryMixedDataset(
+        tartanair=None,
+        hypersim=ds_h,
+        trajectory_length=2,
+    )
+
+    assert len(mixed) == 3
+    item = mixed[0]
+    assert item["lr_frame"].shape[0] == 2
 
 
 # ---------------------------------------------------------------------------

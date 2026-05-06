@@ -428,6 +428,103 @@ class MixedTartanAirHypersimDataset(Dataset):
 
 
 # ---------------------------------------------------------------------------
+# Trajectory datasets
+# ---------------------------------------------------------------------------
+
+
+class TrajectoryDataset(Dataset):
+    """Wrap a frame dataset and yield fixed-length consecutive windows.
+
+    Windows never cross ``trajectory_key`` boundaries when the wrapped dataset
+    exposes that method. The motion tensor at trajectory frame 0 is zero; for
+    frame ``t > 0`` it is copied from source frame ``t - 1`` so callers receive
+    motion from the previous frame into the current frame.
+    """
+
+    def __init__(self, base: Dataset, trajectory_length: int) -> None:
+        if trajectory_length < 1:
+            raise ValueError("trajectory_length must be >= 1")
+        self.base = base
+        self.trajectory_length = int(trajectory_length)
+        self._starts: list[int] = []
+
+        n = len(base)
+        for start in range(max(0, n - self.trajectory_length + 1)):
+            if self._window_stays_in_trajectory(start):
+                self._starts.append(start)
+
+        if n > 0 and not self._starts:
+            raise ValueError(
+                f"no length-{self.trajectory_length} trajectories available in "
+                f"{type(base).__name__} with {n} frames"
+            )
+
+    def _trajectory_key(self, idx: int) -> str:
+        if hasattr(self.base, "trajectory_key"):
+            return str(self.base.trajectory_key(idx))  # type: ignore[attr-defined]
+        return "default"
+
+    def _window_stays_in_trajectory(self, start: int) -> bool:
+        key = self._trajectory_key(start)
+        end = start + self.trajectory_length
+        return all(self._trajectory_key(i) == key for i in range(start + 1, end))
+
+    def __len__(self) -> int:
+        return len(self._starts)
+
+    def trajectory_key(self, idx: int) -> str:
+        return self._trajectory_key(self._starts[idx])
+
+    def __getitem__(self, idx: int) -> Mapping[str, Any]:
+        start = self._starts[idx]
+        frames = [self.base[start + t] for t in range(self.trajectory_length)]
+
+        motion_frames = [torch.zeros_like(frames[0]["motion"])]
+        for t in range(1, self.trajectory_length):
+            motion_frames.append(frames[t - 1]["motion"])
+
+        return {
+            "lr_frame": torch.stack([f["lr_frame"] for f in frames], dim=0),
+            "gt_hr_frame": torch.stack([f["gt_hr_frame"] for f in frames], dim=0),
+            "depth": torch.stack([f["depth"] for f in frames], dim=0),
+            "normals": torch.stack([f["normals"] for f in frames], dim=0),
+            "motion": torch.stack(motion_frames, dim=0),
+            "canvas_hint": torch.stack([f["canvas_hint"] for f in frames], dim=0),
+            "metadata": [dict(f.get("metadata", {})) for f in frames],
+        }
+
+
+class TrajectoryMixedDataset(MixedTartanAirHypersimDataset):
+    """Mixed v6 dataset whose sampler index is a trajectory window."""
+
+    def __init__(
+        self,
+        tartanair: Dataset | None,
+        hypersim: Dataset | None,
+        trajectory_length: int,
+        tartanair_ratio: float = 0.667,
+        hypersim_ratio: float = 0.333,
+        seed: int = 0,
+    ) -> None:
+        self.trajectory_length = int(trajectory_length)
+        tartanair_traj = (
+            TrajectoryDataset(tartanair, self.trajectory_length)
+            if tartanair is not None else None
+        )
+        hypersim_traj = (
+            TrajectoryDataset(hypersim, self.trajectory_length)
+            if hypersim is not None else None
+        )
+        super().__init__(
+            tartanair=tartanair_traj,
+            hypersim=hypersim_traj,
+            tartanair_ratio=tartanair_ratio,
+            hypersim_ratio=hypersim_ratio,
+            seed=seed,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Convenience builder used by the training script
 # ---------------------------------------------------------------------------
 
@@ -443,6 +540,7 @@ def build_v6_training_dataset(
     hypersim_ratio: float = 0.333,
     lr_synth: EngineAliasedLRSynth | None = None,
     seed: int = 0,
+    trajectory_length: int | None = None,
 ) -> MixedTartanAirHypersimDataset:
     """Build the v6 training dataset (60% TartanAir + 30% Hypersim).
 
@@ -465,6 +563,16 @@ def build_v6_training_dataset(
             lr_synth=lr_synth, held_out_scenes=held_out_scenes,
         )
 
+    if trajectory_length is not None and trajectory_length > 1:
+        return TrajectoryMixedDataset(
+            tartanair=tartanair_wrapped,
+            hypersim=hypersim_ds,
+            trajectory_length=trajectory_length,
+            tartanair_ratio=tartanair_ratio,
+            hypersim_ratio=hypersim_ratio,
+            seed=seed,
+        )
+
     return MixedTartanAirHypersimDataset(
         tartanair=tartanair_wrapped,
         hypersim=hypersim_ds,
@@ -477,5 +585,7 @@ def build_v6_training_dataset(
 __all__ = [
     "HypersimDataset",
     "MixedTartanAirHypersimDataset",
+    "TrajectoryDataset",
+    "TrajectoryMixedDataset",
     "build_v6_training_dataset",
 ]

@@ -194,3 +194,13 @@ def test_composite_temporal_only_when_provided(composite: V6CompositeLoss):
     )
     expected = float((pwp - twp).abs().mean())
     assert parts_temp["temporal"] == pytest.approx(expected, rel=1e-5, abs=1e-7)
+
+    pred_prev = _rand((1, 3, 32, 32))
+    motion = torch.zeros(1, 2, 16, 16)
+    _, parts_motion = composite(
+        pred, target, fake_logits=None, step=0,
+        pred_prev=pred_prev, motion_lr=motion, scale_factor=2.0,
+    )
+    assert parts_motion["temporal"] == pytest.approx(
+        float((pred - pred_prev).abs().mean().detach()), rel=1e-5, abs=1e-7,
+    )

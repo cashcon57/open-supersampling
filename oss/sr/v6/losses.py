@@ -297,6 +297,9 @@ class V6CompositeLoss(nn.Module):
         target: torch.Tensor,
         fake_logits: Optional[torch.Tensor],
         step: int,
+        pred_prev: Optional[torch.Tensor] = None,
+        motion_lr: Optional[torch.Tensor] = None,
+        scale_factor: float = 2.0,
         pred_warped_prev: Optional[torch.Tensor] = None,
         target_warped_prev: Optional[torch.Tensor] = None,
     ) -> tuple[torch.Tensor, dict[str, float]]:
@@ -341,8 +344,15 @@ class V6CompositeLoss(nn.Module):
             w_gan = 0.0
         parts["gan"] = float(l_gan.detach())
 
-        # Temporal consistency (only when both warped tensors are provided).
-        if pred_warped_prev is not None and target_warped_prev is not None:
+        # Temporal consistency. Prefer motion-aware warping from the shared
+        # temporal loss helper; keep the externally-warped slot for older
+        # callers and tests.
+        if pred_prev is not None and motion_lr is not None:
+            l_temp = temporal_consistency_loss(
+                pred, pred_prev, motion_lr, scale_factor=scale_factor,
+            )
+            w_temp = _W_TEMPORAL
+        elif pred_warped_prev is not None and target_warped_prev is not None:
             l_temp = (pred_warped_prev - target_warped_prev).abs().mean()
             w_temp = _W_TEMPORAL
         else:

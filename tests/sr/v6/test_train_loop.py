@@ -15,6 +15,7 @@ import pytest
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from types import SimpleNamespace
 
 import scripts.sr_train_v6 as train_v6
 from oss.sr.v6.ema import EMAModel
@@ -25,14 +26,28 @@ class CheapCompositeLoss(nn.Module):
         super().__init__()
         self.gan_warmup_until_step = int(gan_warmup_until_step)
 
-    def forward(self, pred, target, fake_logits, step, **_kwargs):
+    def forward(
+        self,
+        pred,
+        target,
+        fake_logits,
+        step,
+        pred_prev=None,
+        motion_lr=None,
+        **_kwargs,
+    ):
         char = (pred - target).abs().mean()
         vgg = pred.square().mean() * 0.01
         lpips = (pred - target).square().mean() * 0.01
         wav = char * 0.1
         sobel = char * 0.2
         gan = -fake_logits.mean() if fake_logits is not None and step >= self.gan_warmup_until_step else pred.new_zeros(())
-        total = char + vgg + lpips + wav + sobel + 0.05 * gan
+        temporal = (
+            (pred - pred_prev).abs().mean()
+            if pred_prev is not None and motion_lr is not None
+            else pred.new_zeros(())
+        )
+        total = char + vgg + lpips + wav + sobel + 0.05 * gan + 0.5 * temporal
         return total, {
             "total": float(total.detach()),
             "charbonnier": float(char.detach()),
@@ -41,7 +56,7 @@ class CheapCompositeLoss(nn.Module):
             "wavelet": float(wav.detach()),
             "sobel": float(sobel.detach()),
             "gan": float(gan.detach()),
-            "temporal": 0.0,
+            "temporal": float(temporal.detach()),
         }
 
 
@@ -61,17 +76,28 @@ class TinyGenerator(nn.Module):
         super().__init__()
         self.conv = nn.Conv2d(9, 3, 1)
         self.prune_calls = 0
+        self._canvas_state = None
+        self.reset_count = 0
+        self.frame_start_counts = []
 
     def reset_state(self, device=None):
-        return None
+        self.reset_count += 1
+        self._canvas_state = None
 
     def maybe_prune(self):
         self.prune_calls += 1
         return 0
 
     def forward(self, lr_inputs, motion_lr=None, frame_index=0):
+        self.frame_start_counts.append(
+            0 if self._canvas_state is None else int(self._canvas_state.count)
+        )
         x = self.conv(lr_inputs)
-        return F.interpolate(x, scale_factor=2, mode="bilinear", align_corners=False)
+        out = F.interpolate(x, scale_factor=2, mode="bilinear", align_corners=False)
+        self._canvas_state = SimpleNamespace(
+            count=(1 if self._canvas_state is None else int(self._canvas_state.count) + 1)
+        )
+        return out
 
 
 @pytest.fixture()
@@ -155,6 +181,24 @@ def test_smoke_runs_five_steps_checkpoints_and_metrics(tmp_path, cheap_trainer):
     assert (tmp_path / "step-00000002.pt").exists()
     assert (tmp_path / "step-00000004.pt").exists()
     assert (tmp_path / "step-00000005.pt").exists()
+    assert any(row["loss_tc"] > 0.0 for row in rows)
+
+
+def test_early_checkpoint_step(tmp_path, cheap_trainer):
+    rc = train_v6.main([
+        "--output-dir", str(tmp_path),
+        "--smoke",
+        "--device", "cpu",
+        "--backbone", "hat-tiny",
+        "--patch-size", "32",
+        "--batch-size", "1",
+        "--grad-accum", "1",
+        "--first-ckpt-step", "2",
+        "--ckpt-every", "100",
+    ])
+
+    assert rc == 0
+    assert (tmp_path / "step-00000002.pt").exists()
 
 
 def _loopback_bind_available() -> tuple[bool, str]:
@@ -272,6 +316,42 @@ def test_auto_resume_continues_at_next_step(tmp_path, cheap_trainer):
     assert [r["step"] for r in rows] == [1, 2, 3, 4, 5]
     assert (tmp_path / "step-00000003.pt").exists()
     assert (tmp_path / "step-00000005.pt").exists()
+    assert any(row["loss_tc"] > 0.0 for row in rows[3:])
+
+
+def test_canvas_continues_inside_trajectory():
+    g = TinyGenerator()
+    d = TinyDiscriminator()
+    loss = CheapCompositeLoss()
+    opt_g = torch.optim.AdamW(g.parameters(), lr=1e-4)
+    opt_d = torch.optim.AdamW(d.parameters(), lr=1e-4)
+    ema = EMAModel(g, decay=0.999)
+
+    parts = train_v6.train_step(
+        g, d, loss, opt_g, opt_d, ema,
+        _tiny_trajectory_batch(length=2), step=1, args=_tiny_args(),
+    )
+
+    assert parts["canvas_count_at_frame1_start"] > 0.0
+    assert g.frame_start_counts[:2] == [0, 1]
+
+
+def test_canvas_resets_between_trajectories():
+    g = TinyGenerator()
+    d = TinyDiscriminator()
+    loss = CheapCompositeLoss()
+    opt_g = torch.optim.AdamW(g.parameters(), lr=1e-4)
+    opt_d = torch.optim.AdamW(d.parameters(), lr=1e-4)
+    ema = EMAModel(g, decay=0.999)
+
+    for step in (1, 2):
+        train_v6.train_step(
+            g, d, loss, opt_g, opt_d, ema,
+            _tiny_trajectory_batch(length=2), step=step, args=_tiny_args(),
+        )
+
+    assert g.reset_count == 2
+    assert g.frame_start_counts[:4] == [0, 1, 0, 1]
 
 
 def _tiny_batch():
@@ -279,6 +359,14 @@ def _tiny_batch():
         "lr_inputs": torch.rand(1, 9, 16, 16),
         "target": torch.rand(1, 3, 32, 32),
         "motion": torch.zeros(1, 2, 16, 16),
+    }
+
+
+def _tiny_trajectory_batch(length: int = 2):
+    return {
+        "lr_inputs": torch.rand(1, length, 9, 16, 16),
+        "target": torch.rand(1, length, 3, 32, 32),
+        "motion": torch.zeros(1, length, 2, 16, 16),
     }
 
 
