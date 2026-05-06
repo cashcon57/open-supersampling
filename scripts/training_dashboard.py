@@ -1346,7 +1346,7 @@ function selectedCodexStreamFiles() {
 }
 
 function codexTailLines(html) {
-  return String(html || '').split('\n').slice(-CODEX_RENDER_TAIL_LINES);
+  return String(html || '').split('\\n').slice(-CODEX_RENDER_TAIL_LINES);
 }
 
 function codexFindAppendHTML(nextHTML) {
@@ -1357,7 +1357,7 @@ function codexFindAppendHTML(nextHTML) {
     return { appendHTML: nextHTML.slice(codexRenderedHTML.length), matched: true };
   }
 
-  const nextLines = nextHTML.split('\n');
+  const nextLines = nextHTML.split('\\n');
   const maxOverlap = Math.min(codexRenderedTailLines.length, nextLines.length);
   for (let n = maxOverlap; n > 0; n--) {
     const suffixStart = codexRenderedTailLines.length - n;
@@ -1370,7 +1370,7 @@ function codexFindAppendHTML(nextHTML) {
         }
       }
       if (ok) {
-        return { appendHTML: nextLines.slice(start + n).join('\n'), matched: true };
+        return { appendHTML: nextLines.slice(start + n).join('\\n'), matched: true };
       }
     }
   }
