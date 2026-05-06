@@ -285,7 +285,13 @@ function lineChart(canvasId, label, color, opts = {}) {
       },
       scales: {
         x: { type: 'linear', title: { display: true, text: 'step', color: '#8b949e' },
-             ticks: { color: '#8b949e' }, grid: { color: '#30363d' } },
+             ticks: { color: '#8b949e' }, grid: { color: '#30363d' },
+             // suggestedMin/Max: data-driven if present, falls back to these
+             // bounds if the chart has no points yet (so reference lines + the
+             // axis itself render at training-step scale instead of Chart.js's
+             // default 0..1).
+             ...(opts.xMin !== undefined ? { suggestedMin: opts.xMin } : {}),
+             ...(opts.xMax !== undefined ? { suggestedMax: opts.xMax } : {}) },
         y: { title: { display: true, text: opts.yLabel || label, color: '#8b949e' },
              ticks: { color: '#8b949e' }, grid: { color: '#30363d' },
              ...(opts.yMin !== undefined ? { min: opts.yMin } : {}),
@@ -373,13 +379,17 @@ const upscalerRefPlugin = (metric) => ({
       ['dlss2', 'DLSS 2'], ['dlss3', 'DLSS 3'], ['dlss4', 'DLSS 4'],
       ['oss_v3', 'OSS v3 (ours, measured)'], ['oss_v4', 'OSS v4 (ours, measured)'],
     ];
+
+    // First pass: draw all reference lines and collect label-placement
+    // candidates. Lines stay at their true y; only labels get adjusted to
+    // avoid overlap.
+    const candidates = [];
     for (const [k, label] of items) {
       const e = UPSCALER_ESTIMATES[k];
       const v = e[metric];
       if (v == null) continue;
       const yp = y.getPixelForValue(v);
       if (yp < y.top || yp > y.bottom) continue;
-      // OSS lines are solid + thicker so 'ours' reads distinctly from competitors.
       ctx.strokeStyle = e.color;
       if (e.kind === 'ours') {
         ctx.setLineDash([]);
@@ -392,9 +402,57 @@ const upscalerRefPlugin = (metric) => ({
       ctx.moveTo(x.left, yp);
       ctx.lineTo(x.right, yp);
       ctx.stroke();
-      ctx.fillStyle = e.color;
       const suffix = e.kind === 'ours' ? '' : ' (est)';
-      ctx.fillText(label + suffix, x.right - 110, yp - 2);
+      candidates.push({ y: yp, color: e.color, text: label + suffix, kind: e.kind });
+    }
+
+    // Second pass: vertically de-overlap label y-positions while keeping
+    // the line y-positions intact. Sort by y ascending, walk top->bottom,
+    // and if a candidate would overlap the previous label, push it down by
+    // a minimum spacing. Two-pass: forward (for collisions on the way down)
+    // then backward (for any candidates that ended up below the chart).
+    const MIN_SPACING = 12;  // 10px font + 2px padding
+    candidates.sort((a, b) => a.y - b.y);
+    for (let i = 1; i < candidates.length; i++) {
+      const prev = candidates[i - 1];
+      if (candidates[i].y - prev.y < MIN_SPACING) {
+        candidates[i].y = prev.y + MIN_SPACING;
+      }
+    }
+    for (let i = candidates.length - 2; i >= 0; i--) {
+      const next = candidates[i + 1];
+      if (next.y > y.bottom - 4 && next.y - candidates[i].y < MIN_SPACING) {
+        candidates[i].y = next.y - MIN_SPACING;
+        next.y = y.bottom - 4;
+      }
+    }
+
+    // Draw labels at their adjusted positions. If a label was nudged away
+    // from its reference line, draw a thin 1px leader from line-y to
+    // label-y so the user can still see which line each label refers to.
+    ctx.setLineDash([]);
+    for (const c of candidates) {
+      const trueY = y.getPixelForValue(
+        UPSCALER_ESTIMATES[Object.keys(UPSCALER_ESTIMATES).find(k => {
+          const e = UPSCALER_ESTIMATES[k];
+          const lbl = items.find(it => it[0] === k);
+          if (!lbl) return false;
+          const suffix = e.kind === 'ours' ? '' : ' (est)';
+          return (lbl[1] + suffix) === c.text;
+        })][metric]
+      );
+      if (Math.abs(trueY - c.y) > 2) {
+        ctx.strokeStyle = c.color;
+        ctx.globalAlpha = 0.5;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(x.right - 6, trueY);
+        ctx.lineTo(x.right - 4, c.y);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+      ctx.fillStyle = c.color;
+      ctx.fillText(c.text, x.right - 110, c.y - 2);
     }
     ctx.restore();
   },
@@ -418,28 +476,42 @@ function buildCharts() {
   // Explicit y-min/y-max so the upscaler reference lines render even when
   // there's no data yet (Chart.js can't compute axis bounds from 0 points,
   // and getPixelForValue returns NaN without bounds).
+  // Default x-axis bound matches the v5 / v6 training horizon (80K steps).
+  // Used as suggestedMax so live data can extend it but the empty-chart
+  // case still renders at training-step scale instead of Chart.js's 0..1
+  // default.
+  const X_MAX_DEFAULT = 80000;
   charts.psnr = lineChart('chart-psnr', 'PSNR (dB)', null, {
-    yLabel: 'PSNR (dB) ↑ better', yMin: 22, yMax: 36,
+    yLabel: 'PSNR (dB) ↑ better', yMin: 24, yMax: 36,
+    xMin: 0, xMax: X_MAX_DEFAULT,
     extraPlugins: [phaseMarkerPlugin, upscalerRefPlugin('psnr')],
   });
   charts.lpips = lineChart('chart-lpips', 'LPIPS', null, {
-    yLabel: 'LPIPS ↓ better', yMin: 0, yMax: 0.6,
+    yLabel: 'LPIPS ↓ better', yMin: 0, yMax: 0.55,
+    xMin: 0, xMax: X_MAX_DEFAULT,
     extraPlugins: [phaseMarkerPlugin, upscalerRefPlugin('lpips')],
   });
   charts.throughput = lineChart('chart-throughput', 'steps/min', null, {
     yLabel: 'steps/min ↑ better', yMin: 0,
+    xMin: 0, xMax: X_MAX_DEFAULT,
     extraPlugins: [phaseMarkerPlugin],
   });
   charts.loss = lineChart('chart-loss', 'loss', null, {
     yLabel: 'loss ↓ better',
+    xMin: 0, xMax: X_MAX_DEFAULT,
     extraPlugins: [phaseMarkerPlugin],
   });
   charts.ssim = lineChart('chart-ssim', 'SSIM', null, {
     yLabel: 'SSIM ↑ better', yMin: 0, yMax: 1,
+    xMin: 0, xMax: X_MAX_DEFAULT,
     extraPlugins: [phaseMarkerPlugin],
   });
-  charts.out = lineChart('chart-out', 'output');
-  charts.grad = lineChart('chart-grad', 'grad norm');
+  charts.out = lineChart('chart-out', 'output', null, {
+    xMin: 0, xMax: X_MAX_DEFAULT,
+  });
+  charts.grad = lineChart('chart-grad', 'grad norm', null, {
+    xMin: 0, xMax: X_MAX_DEFAULT,
+  });
 }
 
 async function fetchJSON(url) {
