@@ -440,6 +440,7 @@ HTML = """<!DOCTYPE html>
       <h2>Codex live log</h2>
       <div class="codex-toolbar">
         <label><input type="checkbox" id="codex-stream-toggle" checked /> stream</label>
+        <label class="stream-only"><input type="checkbox" id="codex-show-all-toggle" /> all logs (incl. >1h old)</label>
         <span class="stream-only codex-file-filters" id="codex-file-filters"></span>
         <label class="single-only" for="codex-file-select">file</label>
         <select class="single-only" id="codex-file-select"><option value="">(no codex logs found)</option></select>
@@ -1250,17 +1251,31 @@ function saveCodexDisabledFiles(disabled) {
 function setCodexModeUI() {
   const toggle = document.getElementById('codex-stream-toggle');
   if (toggle) toggle.checked = codexStreamMode;
+  const showAll = document.getElementById('codex-show-all-toggle');
+  if (showAll) showAll.checked = codexShowAll;
   document.querySelectorAll('.single-only').forEach(el => { el.hidden = codexStreamMode; });
   document.querySelectorAll('.stream-only').forEach(el => { el.hidden = !codexStreamMode; });
 }
 
+// Stream mode default: show ALL logs, with the active subset prioritized
+// in the UI. The previous "active-only" filter hid every log older than
+// 60 minutes, which broke the use case of scrolling through historical
+// codex activity. The 'codex-show-all-toggle' switches between
+// active-only and full history; default = full history.
+let codexShowAll = localStorage.getItem('oss-training-dashboard-codex-show-all') !== 'false';
+
+function streamCodexFiles() {
+  return codexShowAll ? codexFiles : codexFiles.filter(f => f.active);
+}
+
 function activeCodexFiles() {
-  return codexFiles.filter(f => f.active);
+  // Backward-compat alias used elsewhere in the panel.
+  return streamCodexFiles();
 }
 
 function selectedCodexStreamFiles() {
   const disabled = codexDisabledFiles();
-  return activeCodexFiles().filter(f => !disabled.has(f.name)).map(f => f.name);
+  return streamCodexFiles().filter(f => !disabled.has(f.name)).map(f => f.name);
 }
 
 async function refreshCodexFileList() {
@@ -1348,11 +1363,25 @@ async function refreshCodexLog() {
       if (meta) meta.textContent = (codexStreamMode ? 'stream' : fname) + ' — error';
       return;
     }
+    // Auto-scroll behavior fix: previously checking the auto-scroll
+    // toggle force-snapped scroll to bottom on every poll, which broke
+    // history navigation (user scrolls up to read, next poll yanks
+    // them to bottom). New behavior: only snap to bottom when the user
+    // is ALREADY at the bottom (sticky-bottom). Auto-scroll toggle
+    // OFF disables sticky-bottom entirely (preserve scroll position
+    // even if at bottom). Toggle ON enables sticky-bottom only.
     const tail = document.getElementById('codex-tail-toggle');
     const wantTail = !tail || tail.checked;
-    const atBottom = wantTail || (pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 8);
+    const wasAtBottom =
+      pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 8;
+    const prevTop = pre.scrollTop;
     pre.innerHTML = data.html || '';
-    if (atBottom) pre.scrollTop = pre.scrollHeight;
+    if (wantTail && wasAtBottom) {
+      pre.scrollTop = pre.scrollHeight;
+    } else {
+      // innerHTML rewrite resets scrollTop to 0; restore user's position.
+      pre.scrollTop = prevTop;
+    }
     if (meta) {
       if (data.mode === 'stream') {
         const trunc = data.truncated ? ' · capped' : '';
@@ -1381,6 +1410,15 @@ if (codexStreamToggle) {
     localStorage.setItem(CODEX_MODE_KEY, codexStreamMode ? 'stream' : 'single');
     setCodexModeUI();
     refreshCodexLog();
+  });
+}
+
+const codexShowAllToggle = document.getElementById('codex-show-all-toggle');
+if (codexShowAllToggle) {
+  codexShowAllToggle.addEventListener('change', (e) => {
+    codexShowAll = e.target.checked;
+    localStorage.setItem('oss-training-dashboard-codex-show-all', String(codexShowAll));
+    refreshCodexFileList().then(refreshCodexLog);
   });
 }
 
