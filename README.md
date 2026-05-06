@@ -6,6 +6,24 @@ Pre-alpha. Active research.
 
 ---
 
+## Latest results (v5-pixel-temporal, 2026-05-06)
+
+**PSNR 25.703 dB · LPIPS 0.1666 · temporal-stability ratio 0.337×** on the TartanAir `oldtown` held-out batch (64 frames, 2× super-resolution from engine LR + G-buffers).
+
+| | PSNR ↑ | LPIPS-VGG ↓ | Temporal ratio ↓ |
+|---|---|---|---|
+| bicubic baseline | 23.909 | 0.2945 | n/a |
+| **OSS v5-pixel-temporal** | **25.703** | **0.1666** | **0.337** |
+| v4 single-frame (distribution-shifted on TartanAir) | 11.718 | 0.6367 | reference (1.000) |
+
+v5-pixel-temporal **beat bicubic on 64/64 held-out frames** (100% — spec target ≥95%) and improved temporal stability over v4 by ~3× (spec target ≥2×). Every quality gate of the validation memo passed. Full eval, methodology, and reproduction commands: [`docs/superpowers/experiments/2026-05-06-v5-pixel-temporal-final-held-out-eval.md`](docs/superpowers/experiments/2026-05-06-v5-pixel-temporal-final-held-out-eval.md).
+
+These are the first measured OSS results that establish the temporal-SR architecture works end-to-end on photoreal game-engine input. v6 is the production-target architecture currently in training (see below).
+
+(v4's 11.718 dB on TartanAir is the SRGD-trained-model-on-TartanAir distribution-shift failure mode. v4 measured ~30.1 dB / 0.30 LPIPS on its native SRGD held-out batch.)
+
+---
+
 ## Where things stand
 
 ![v5-pixel-temporal in flight at training step 42K](docs/results/v5-pixel-temporal/in-flight/step-00042000.png)
