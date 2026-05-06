@@ -29,6 +29,15 @@ Module layout (this package, in build order):
               gaussian_tokens:  (B, K, token_dim))
         -> (B, feat_dim, H, W)
 
+  gaussian_spawner.py
+    GRAPE-style point-wise decoder. A single 1x1 conv predicts Gaussian
+    params from HAT features, then tile pooling emits per-batch canvas
+    write-back proposals.
+
+    API contract:
+      forward(features: (B, feat_dim, H, W)) -> GaussianSpawnState
+      with positions/scales/colors batched over K LR tiles.
+
   covariance_resampling.py
     GS-STVSR (arXiv:2604.18047) ``Sigma'_output = J_t Sigma_t J_t^T +
     Sigma_recon`` resampled covariance computation. Used inside the
@@ -75,4 +84,6 @@ training proves the architecture converges.
 """
 from __future__ import annotations
 
-__all__: list[str] = []
+from oss.sr.v6.gaussian_spawner import GaussianSpawner, GaussianSpawnState
+
+__all__: list[str] = ["GaussianSpawner", "GaussianSpawnState"]

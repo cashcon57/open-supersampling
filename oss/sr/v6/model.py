@@ -75,6 +75,7 @@ class V6Config:
     cross_attention_heads: int = 6
     window_size: int = 16
     color_activation: str = "softplus"   # "softplus" (HDR) | "sigmoid" (SDR)
+    tile_size_lr: int = 8
     keyframe_interval: int = 10
     prune_every: int = 200
     prune_fraction: float = 0.7
