@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import torch
 
+import oss.gaussian.renderer.rasterizer as renderer_mod
 from oss.sr.v6.model import CanvasState
 from oss.sr.v6.rasterizer import V6Rasterizer
 
@@ -125,4 +126,85 @@ def test_bf16_autocast_forward_produces_finite_output():
         out = rast(canvas, torch.ones(1, dtype=torch.bool), (16, 16))
 
     assert out.dtype == torch.bfloat16
+    assert torch.isfinite(out).all()
+
+
+def test_bf16_realistic_hatl_canvas_produces_finite_output():
+    token_dim = 180
+    count = 12
+    h_hr, w_hr = 64, 96
+    positions = torch.stack(
+        [
+            torch.linspace(0.0, float(w_hr), count),
+            torch.linspace(0.0, float(h_hr), count),
+        ],
+        dim=-1,
+    ).to(dtype=torch.bfloat16)
+    scales = torch.full((count, 2), 8.0, dtype=torch.bfloat16)
+    rotations = torch.linspace(-torch.pi, torch.pi, count).to(dtype=torch.bfloat16)
+    opacities = torch.ones(count, dtype=torch.bfloat16)
+    colors = (torch.randn(count, token_dim) * 180.0).to(dtype=torch.bfloat16)
+    canvas = CanvasState(
+        positions=positions,
+        scales=scales,
+        rotations=rotations,
+        opacities=opacities,
+        colors=colors,
+        count=count,
+    )
+
+    with torch.autocast("cpu", dtype=torch.bfloat16):
+        out = V6Rasterizer(token_dim)(
+            canvas,
+            torch.ones(count, dtype=torch.bool),
+            output_hw=(h_hr, w_hr),
+        )
+
+    assert out.shape == (1, token_dim, h_hr, w_hr)
+    assert out.dtype == torch.bfloat16
+    assert torch.isfinite(out).all()
+
+
+def test_wide_cuda_feature_path_chunks_channels_on_cpu(monkeypatch):
+    token_dim = 25
+    canvas = _canvas_state(count=2, token_dim=token_dim)
+    canvas.scales[:] = 8.0
+    calls: list[int] = []
+
+    def fake_project(xy, scale, rot, h, w, tile_bounds):
+        assert xy.shape == (2, 2)
+        assert scale.shape == (2, 2)
+        assert torch.all(scale >= 1.0)
+        return (
+            torch.zeros_like(xy),
+            torch.ones(2, dtype=torch.int32),
+            torch.zeros(2, 3, dtype=xy.dtype),
+            torch.ones(2, dtype=torch.int32),
+        )
+
+    def fake_rasterize(xy, radii, conics, hits, feat, h, w, tile_h, tile_w, topk_norm):
+        calls.append(int(feat.shape[-1]))
+        assert feat.shape[-1] <= renderer_mod.CUDA_MAX_CHANNELS
+        return feat.mean(dim=0).expand(h * w, feat.shape[-1]).contiguous()
+
+    monkeypatch.setattr(renderer_mod, "_GSPLAT_AVAILABLE", True)
+    monkeypatch.setattr(
+        renderer_mod,
+        "project_gaussians_2d_scale_rot",
+        fake_project,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        renderer_mod,
+        "rasterize_gaussians_sum",
+        fake_rasterize,
+        raising=False,
+    )
+
+    rast = V6Rasterizer(token_dim)
+    rast.renderer.force_backend = "cuda"
+    out = rast(canvas, torch.ones(2, dtype=torch.bool), output_hw=(16, 16))
+
+    assert calls == [12, 12, 1]
+    assert out.shape == (1, token_dim, 16, 16)
     assert torch.isfinite(out).all()

@@ -261,6 +261,7 @@ class V6Model(nn.Module):
         if warped_canvas is not None:
             debug_check("warped_canvas.positions", warped_canvas.positions)
             debug_check("warped_canvas.scales", warped_canvas.scales)
+            debug_check("warped_canvas.rotations", warped_canvas.rotations)
             debug_check("warped_canvas.opacities", warped_canvas.opacities)
             debug_check("warped_canvas.colors", warped_canvas.colors)
         active_mask = self._active_mask(
@@ -277,12 +278,23 @@ class V6Model(nn.Module):
         debug_check("spawned.positions", spawned.positions)
         debug_check("spawned.scales", spawned.scales)
         debug_check("spawned.rotations", spawned.rotations)
+        debug_check("spawned.opacities", spawned.opacities)
         debug_check("spawned.colors", spawned.colors)
         debug_check("spawned.confidence", spawned.confidence)
         spawned_canvas = self._flatten_spawned(spawned)
+        debug_check("flattened.positions", spawned_canvas.positions)
+        debug_check("flattened.scales", spawned_canvas.scales)
+        debug_check("flattened.rotations", spawned_canvas.rotations)
+        debug_check("flattened.opacities", spawned_canvas.opacities)
+        debug_check("flattened.colors", spawned_canvas.colors)
         previous_st_state = self._st_state
         old_count = 0 if warped_canvas is None else int(warped_canvas.count)
         render_canvas = self._concat_canvas(warped_canvas, spawned_canvas)
+        debug_check("concat.positions", render_canvas.positions)
+        debug_check("concat.scales", render_canvas.scales)
+        debug_check("concat.rotations", render_canvas.rotations)
+        debug_check("concat.opacities", render_canvas.opacities)
+        debug_check("concat.colors", render_canvas.colors)
         self._canvas_state = render_canvas
         self.keyframe_mask.reset()
 
@@ -292,12 +304,25 @@ class V6Model(nn.Module):
             new_count=int(spawned_canvas.count),
             canvas=render_canvas,
         )
+        rasterizer_input_alive_count = render_active[: int(render_canvas.count)].sum()
+        debug_check(
+            "rasterizer.input_alive_count",
+            rasterizer_input_alive_count.to(dtype=torch.float32),
+        )
+        if self.debug_nan:
+            log.info(
+                "model stage finite: name=rasterizer.input_alive_count value=%d "
+                "step=%s frame_index=%d",
+                int(rasterizer_input_alive_count.detach().item()),
+                "unknown" if self.debug_nan_step is None else int(self.debug_nan_step),
+                int(frame_index),
+            )
         canvas_hr = self.rasterizer(
             render_canvas,
             render_active.unsqueeze(0).expand(b, -1),
             output_hw=output_hw,
         )
-        debug_check("rasterized_canvas", canvas_hr)
+        debug_check("rasterizer.output", canvas_hr)
         refined_hr = F.interpolate(
             refined,
             size=output_hw,

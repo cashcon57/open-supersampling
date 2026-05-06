@@ -40,6 +40,7 @@ except Exception as _e:  # noqa: BLE001 — import failure is captured for diagn
 # Hardcoded in upstream Image-GS CUDA kernel — must not change without modifying
 # the kernel source. See `vendor/image_gs/model.py:198` (`self.block_h, self.block_w = 16, 16`).
 TILE_SIZE: int = 16
+CUDA_MAX_CHANNELS: int = 12
 
 
 @dataclass(frozen=True)
@@ -161,27 +162,39 @@ class Rasterizer:
                 f"Original import error: {_GSPLAT_IMPORT_ERROR}. "
                 "Build the extension: cd oss/gaussian/renderer/vendor/image_gs && pip install -e ."
             )
+        if gaussians.feat_dim > CUDA_MAX_CHANNELS:
+            chunks = []
+            for feat in gaussians.feat.split(CUDA_MAX_CHANNELS, dim=-1):
+                chunk = GaussianBatch(
+                    xy=gaussians.xy,
+                    scale=gaussians.scale,
+                    rot=gaussians.rot,
+                    feat=feat.contiguous(),
+                )
+                chunks.append(self._render_cuda(chunk, h, w))
+            return torch.cat(chunks, dim=0).contiguous()
+
         # gsplat tile_bounds is (num_tiles_W, num_tiles_H, 1) — width first, height
         # second. Reference: oss/gaussian/renderer/vendor/image_gs/model.py:130.
         tile_bounds = ((w + self.tile_size - 1) // self.tile_size,
                        (h + self.tile_size - 1) // self.tile_size,
                        1)
-        # gsplat 1.4.0 uses **normalized [0, 1] coordinates** for both xy and
-        # scale, not pixel-space. Our public API takes pixel-space (which is
-        # the intuitive convention for game upscaling), so we normalize here.
+        # gsplat 1.4.0 uses normalized [0, 1] centers but pixel-space scales.
+        # Our public API takes both centers and scales in pixel space, so only
+        # centers are normalized here.
         # Verified by direct test: xy=(0.25, 0.25) at 64x64 → projected
         # xy_proj=(16, 16), 16 tile hits. xy=(16, 16) → projected (1024, 1024)
         # outside frame → 0 hits → degenerate-tile crash inside the kernel.
         norm = torch.tensor([w, h], dtype=gaussians.xy.dtype, device=gaussians.xy.device)
         xy_norm = gaussians.xy / norm
-        scale_norm = gaussians.scale / norm
+        scale_px = gaussians.scale.clamp_min(1.0e-3)
         # gsplat expects rot as (N, 1) per Image-GS model.py line 167. Our
         # public API uses (N,) (more natural in PyTorch), so unsqueeze here.
         # Without this the backward path returns gradient shape (N, 1) for
         # an input (N,) tensor → autograd shape-mismatch RuntimeError.
         rot_unsq = gaussians.rot.unsqueeze(-1)
         xy_proj, radii, conics, num_tiles_hit = project_gaussians_2d_scale_rot(
-            xy_norm, scale_norm, rot_unsq, h, w, tile_bounds,
+            xy_norm, scale_px, rot_unsq, h, w, tile_bounds,
         )
         out_flat = rasterize_gaussians_sum(
             xy_proj, radii, conics, num_tiles_hit,

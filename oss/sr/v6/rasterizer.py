@@ -10,6 +10,9 @@ from oss.gaussian.renderer import GaussianBatch, Rasterizer, TILE_SIZE
 from oss.sr.v6.model import CanvasState
 
 
+_MIN_PIXEL_SCALE = 1.0e-3
+
+
 class V6Rasterizer(nn.Module):
     """Renders active subset of v6 CanvasState to HR feature image.
 
@@ -63,16 +66,84 @@ class V6Rasterizer(nn.Module):
 
         # The reference rasterizer performs exp/quadratic math; keeping that in
         # fp32 avoids bf16 underflow/rounding while preserving autograd edges.
+        positions = canvas.positions[:n_live][live_active].to(dtype=torch.float32)
+        scales = canvas.scales[:n_live][live_active].to(dtype=torch.float32)
+        rotations = canvas.rotations[:n_live][live_active].to(dtype=torch.float32)
+        features = colors[live_active].to(dtype=torch.float32)
+
+        positions, scales, rotations, features = self._sanitize_active_gaussians(
+            positions,
+            scales,
+            rotations,
+            features,
+            output_hw=(h, w),
+        )
+        if positions.shape[0] == 0:
+            return torch.zeros(
+                (batch_size, self.token_dim, h, w),
+                device=device,
+                dtype=out_dtype,
+            )
+
         gaussians = GaussianBatch(
-            xy=canvas.positions[:n_live][live_active].to(dtype=torch.float32),
-            scale=canvas.scales[:n_live][live_active].to(dtype=torch.float32),
-            rot=canvas.rotations[:n_live][live_active].to(dtype=torch.float32),
-            feat=colors[live_active].to(dtype=torch.float32),
+            xy=positions,
+            scale=scales,
+            rot=rotations,
+            feat=features,
         )
 
         rendered = self.renderer(gaussians, output_hw=(h, w))
         rendered = rendered.to(dtype=feat_dtype)
         return rendered.unsqueeze(0).expand(batch_size, -1, -1, -1)
+
+    def _sanitize_active_gaussians(
+        self,
+        positions: torch.Tensor,
+        scales: torch.Tensor,
+        rotations: torch.Tensor,
+        features: torch.Tensor,
+        output_hw: tuple[int, int],
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        h, w = int(output_hw[0]), int(output_hw[1])
+        if positions.shape[0] == 0:
+            return positions, scales, rotations, features
+
+        finite = (
+            torch.isfinite(positions).all(dim=-1)
+            & torch.isfinite(scales).all(dim=-1)
+            & torch.isfinite(rotations)
+            & torch.isfinite(features).all(dim=-1)
+        )
+
+        scales_safe = scales.abs().clamp(min=_MIN_PIXEL_SCALE, max=float(max(h, w)))
+        radius = 3.0 * scales_safe.amax(dim=-1)
+        overlaps = (
+            (positions[:, 0] + radius >= 0.0)
+            & (positions[:, 0] - radius < float(w))
+            & (positions[:, 1] + radius >= 0.0)
+            & (positions[:, 1] - radius < float(h))
+        )
+        valid = finite & overlaps
+        if not bool(valid.any().item()):
+            return (
+                positions[:0],
+                scales_safe[:0],
+                rotations[:0],
+                features[:0],
+            )
+
+        positions = positions[valid]
+        scales_safe = scales_safe[valid]
+        rotations = rotations[valid]
+        features = features[valid]
+
+        max_xy = positions.new_tensor([
+            max(float(w) - 1.0e-4, 0.0),
+            max(float(h) - 1.0e-4, 0.0),
+        ])
+        positions = torch.minimum(positions.clamp_min(0.0), max_xy)
+        rotations = torch.atan2(torch.sin(rotations), torch.cos(rotations))
+        return positions, scales_safe, rotations, features
 
     def _normalize_active_mask(
         self,
