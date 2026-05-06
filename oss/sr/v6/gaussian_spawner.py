@@ -150,24 +150,32 @@ class GaussianSpawner(nn.Module):
         )
         pooled = pooled.flatten(2).transpose(1, 2).contiguous()
 
-        conf_raw = pooled[..., 0]
-        offset_raw = pooled[..., 1:3]
-        scale_raw = pooled[..., 3:5]
-        rotation_raw = pooled[..., 5]
-        colors = pooled[..., 6:]
+        # Parameter heads feed the rasterizer's quadratic/exp math. Decode in
+        # fp32 even under bf16 autocast so large HAT-L activations cannot push
+        # positions/scales into non-finite canvas state before rendering.
+        with torch.autocast(device_type=features.device.type, enabled=False):
+            pooled_f = pooled.float()
+            conf_raw = pooled_f[..., 0]
+            offset_raw = pooled_f[..., 1:3]
+            scale_raw = pooled_f[..., 3:5]
+            rotation_raw = pooled_f[..., 5]
+            colors = pooled_f[..., 6:]
 
-        centers = self._tile_centers(
-            tile_h=h // self.tile_size_lr,
-            tile_w=w // self.tile_size_lr,
-            device=pooled.device,
-            dtype=pooled.dtype,
-        )
-        offset_bound = pooled.new_tensor(0.5 * float(self.tile_size_hr))
-        positions = centers.unsqueeze(0) + torch.tanh(offset_raw) * offset_bound
+            centers = self._tile_centers(
+                tile_h=h // self.tile_size_lr,
+                tile_w=w // self.tile_size_lr,
+                device=pooled_f.device,
+                dtype=torch.float32,
+            )
+            offset_bound = pooled_f.new_tensor(0.5 * float(self.tile_size_hr))
+            positions = centers.unsqueeze(0) + torch.tanh(offset_raw) * offset_bound
+            max_xy = pooled_f.new_tensor([float(w * self.scale), float(h * self.scale)])
+            positions = torch.minimum(positions.clamp_min(0.0), max_xy.view(1, 1, 2))
 
-        scales = F.softplus(scale_raw)
-        rotations = torch.tanh(rotation_raw) * pooled.new_tensor(torch.pi)
-        confidence = torch.sigmoid(conf_raw)
+            max_scale = 4.0 * float(self.tile_size_hr)
+            scales = F.softplus(scale_raw).clamp(min=1.0e-4, max=max_scale)
+            rotations = torch.tanh(rotation_raw) * pooled_f.new_tensor(torch.pi)
+            confidence = torch.sigmoid(conf_raw)
 
         return GaussianSpawnState(
             positions=positions,

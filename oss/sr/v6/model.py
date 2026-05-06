@@ -276,8 +276,9 @@ class V6Model(nn.Module):
         spawned = self.gaussian_spawner(refined)
         debug_check("spawned.positions", spawned.positions)
         debug_check("spawned.scales", spawned.scales)
-        debug_check("spawned.opacities", spawned.opacities)
+        debug_check("spawned.rotations", spawned.rotations)
         debug_check("spawned.colors", spawned.colors)
+        debug_check("spawned.confidence", spawned.confidence)
         spawned_canvas = self._flatten_spawned(spawned)
         previous_st_state = self._st_state
         old_count = 0 if warped_canvas is None else int(warped_canvas.count)

@@ -111,7 +111,39 @@ def test_bf16_autocast_forward_produces_finite_output() -> None:
         out.confidence,
     ):
         assert torch.isfinite(tensor).all()
-        assert tensor.dtype == torch.bfloat16
+        assert tensor.dtype == torch.float32
+
+
+def test_bf16_hat_l_extreme_features_are_finite_and_bounded() -> None:
+    spawner = GaussianSpawner(feat_dim=180, token_dim=64, scale=2, tile_size_lr=8)
+    with torch.no_grad():
+        spawner.conv.weight.fill_(50.0)
+        spawner.conv.bias.zero_()
+    features = torch.full((2, 180, 16, 24), 10.0)
+    features[1].neg_()
+
+    with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
+        out = spawner(features)
+
+    for tensor in (
+        out.positions,
+        out.scales,
+        out.rotations,
+        out.colors,
+        out.confidence,
+    ):
+        assert torch.isfinite(tensor).all()
+
+    assert (out.positions[..., 0] >= 0.0).all()
+    assert (out.positions[..., 0] <= 24 * 2).all()
+    assert (out.positions[..., 1] >= 0.0).all()
+    assert (out.positions[..., 1] <= 16 * 2).all()
+    assert (out.scales >= 1.0e-4).all()
+    assert (out.scales <= 4 * spawner.tile_size_hr).all()
+    assert (out.rotations >= -torch.pi).all()
+    assert (out.rotations <= torch.pi).all()
+    assert (out.confidence >= 0.0).all()
+    assert (out.confidence <= 1.0).all()
 
 
 def test_pickle_round_trip_preserves_behavior() -> None:
