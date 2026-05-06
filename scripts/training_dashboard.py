@@ -22,10 +22,13 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import html as _html
 import json
 import os
+import re
 import socketserver
 import sys
+import time
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -40,6 +43,12 @@ except Exception:  # pragma: no cover — optional, dashboard still works withou
 
 CODEX_LOG_DIR = Path("/tmp")
 CODEX_LOG_GLOB = "codex-*.log"
+CODEX_ACTIVE_SECONDS = 60 * 60
+CODEX_LOG_CAP_BYTES = 4 * 1024 * 1024
+CODEX_STREAM_ENTRY_LIMIT = 160
+CODEX_TIMESTAMP_RE = re.compile(
+    r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)\b"
+)
 
 
 RUN_DIR_PATTERNS = (
@@ -133,9 +142,27 @@ HTML = """<!DOCTYPE html>
     padding: 12px; max-height: 480px; overflow-y: auto; line-height: 1.45;
     color: var(--fg); display: block;
   }
-  .codex-log .codex-section {
-    display: block; padding: 6px 0 2px 0; margin-top: 8px;
-    border-top: 1px solid #1b2129; font-weight: 600; letter-spacing: 0.3px;
+  .codex-log .codex-entry-source {
+    display: flex; align-items: center; gap: 8px; margin: 12px 0 4px 0;
+    color: var(--muted); font-size: 11px; font-family: var(--mono);
+  }
+  .codex-log .codex-entry-source::before {
+    content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--link);
+    opacity: 0.8;
+  }
+  .codex-log .codex-section-header {
+    display: flex; align-items: center; gap: 7px; padding: 7px 0 3px 0; margin-top: 8px;
+    border-top: 1px solid #1b2129; font-weight: 700; letter-spacing: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    text-transform: uppercase; font-size: 11px;
+  }
+  .codex-log .codex-section-caret { width: 10px; color: var(--muted); font-size: 10px; }
+  .codex-log .codex-section-bar {
+    width: 3px; height: 14px; border-radius: 2px; background: currentColor;
+  }
+  .codex-log .codex-section-icon {
+    min-width: 32px; padding: 1px 5px; border: 1px solid currentColor; border-radius: 4px;
+    font-size: 10px; line-height: 1.2; text-align: center; opacity: 0.9;
   }
   .codex-log .codex-section-prompt { color: #58a6ff; }
   .codex-log .codex-section-reason { color: #79c0ff; }
@@ -144,9 +171,32 @@ HTML = """<!DOCTYPE html>
   .codex-log .codex-section-err    { color: #f85149; }
   .codex-log .codex-header { display: block; color: #6e7681; opacity: 0.7; }
   .codex-log .codex-prompt { display: block; color: #79c0ff; opacity: 0.8; }
-  .codex-log .codex-reason { display: block; color: #79c0ff; }
+  .codex-log .codex-reason {
+    display: block; color: #b7d9ff; padding-left: 18px; margin: 1px 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    line-height: 1.5; max-width: 104ch; word-break: normal;
+  }
   .codex-log .codex-exec   { display: block; color: #ffdf5d; }
+  .codex-log code.cmd {
+    display: block; color: #ffdf5d; background: #111820; border: 1px solid #2b3139;
+    border-radius: 4px; padding: 6px 8px; margin: 4px 0; overflow-x: auto;
+    white-space: nowrap; font-family: var(--mono); word-break: normal;
+  }
   .codex-log .codex-result { display: block; color: var(--fg); }
+  .codex-log .codex-diff-block {
+    display: block; margin: 6px 0; border: 1px solid #27313a; border-radius: 6px;
+    background: #0f151c; overflow: hidden;
+  }
+  .codex-log .codex-diff-block summary {
+    cursor: pointer; color: #d2a8ff; padding: 7px 9px; user-select: none;
+    font-family: var(--mono); font-size: 12px; list-style: none;
+  }
+  .codex-log .codex-diff-block summary::-webkit-details-marker { display: none; }
+  .codex-log .codex-diff-block[open] .codex-diff-carat { display: inline-block; transform: rotate(90deg); }
+  .codex-log .codex-diff-body {
+    border-top: 1px solid #27313a; padding: 6px 9px 8px 9px; overflow-x: auto;
+    white-space: pre; word-break: normal;
+  }
   .codex-log .codex-diff-add    { display: block; color: #56d364; }
   .codex-log .codex-diff-rm     { display: block; color: #ff7b72; }
   .codex-log .codex-diff-add-hd { display: block; color: #3fb950; font-weight: 700; }
@@ -160,6 +210,16 @@ HTML = """<!DOCTYPE html>
     max-width: min(60vw, 480px);
   }
   .codex-toolbar label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+  .codex-toolbar .codex-file-filters { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+  .codex-toolbar .codex-file-chip {
+    padding: 2px 6px; border: 1px solid #30363d; border-radius: 999px;
+    background: #161b22; color: var(--fg); max-width: 280px;
+  }
+  .codex-toolbar .codex-file-chip input { margin: 0; }
+  .codex-toolbar .codex-file-chip span {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .codex-toolbar .single-only[hidden], .codex-toolbar .stream-only[hidden] { display: none; }
   .codex-toolbar .meta { margin-left: auto; font-family: var(--mono); font-size: 11px; }
   .codex-toolbar .pid-alive { color: var(--good); }
   .codex-toolbar .pid-dead  { color: var(--muted); }
@@ -379,14 +439,16 @@ HTML = """<!DOCTYPE html>
     <div class="panel-head">
       <h2>Codex live log</h2>
       <div class="codex-toolbar">
-        <label for="codex-file-select">file</label>
-        <select id="codex-file-select"><option value="">(no codex logs found)</option></select>
+        <label><input type="checkbox" id="codex-stream-toggle" checked /> stream</label>
+        <span class="stream-only codex-file-filters" id="codex-file-filters"></span>
+        <label class="single-only" for="codex-file-select">file</label>
+        <select class="single-only" id="codex-file-select"><option value="">(no codex logs found)</option></select>
         <label><input type="checkbox" id="codex-tail-toggle" checked /> auto-scroll</label>
         <label><input type="checkbox" id="codex-pause-toggle" /> pause</label>
         <span class="meta" id="codex-meta">–</span>
       </div>
     </div>
-    <pre class="codex-log" id="codex-log">select a codex log file to start streaming…</pre>
+    <div class="codex-log" id="codex-log">waiting for active codex logs…</div>
   </div>
 
 </div>
@@ -1164,55 +1226,126 @@ setInterval(refresh, POLL_MS);
 // ============================================================
 const CODEX_POLL_MS = 2500;
 const CODEX_FILE_KEY = 'oss-training-dashboard-codex-file';
+const CODEX_MODE_KEY = 'oss-training-dashboard-codex-mode';
+const CODEX_DISABLED_KEY = 'oss-training-dashboard-codex-disabled-files';
 let codexCurrentFile = localStorage.getItem(CODEX_FILE_KEY) || '';
+let codexStreamMode = localStorage.getItem(CODEX_MODE_KEY) !== 'single';
+let codexFiles = [];
+
+function escapeHTML(s) {
+  return String(s).replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
+}
+
+function codexDisabledFiles() {
+  try { return new Set(JSON.parse(localStorage.getItem(CODEX_DISABLED_KEY) || '[]')); }
+  catch (e) { return new Set(); }
+}
+
+function saveCodexDisabledFiles(disabled) {
+  localStorage.setItem(CODEX_DISABLED_KEY, JSON.stringify(Array.from(disabled).sort()));
+}
+
+function setCodexModeUI() {
+  const toggle = document.getElementById('codex-stream-toggle');
+  if (toggle) toggle.checked = codexStreamMode;
+  document.querySelectorAll('.single-only').forEach(el => { el.hidden = codexStreamMode; });
+  document.querySelectorAll('.stream-only').forEach(el => { el.hidden = !codexStreamMode; });
+}
+
+function activeCodexFiles() {
+  return codexFiles.filter(f => f.active);
+}
+
+function selectedCodexStreamFiles() {
+  const disabled = codexDisabledFiles();
+  return activeCodexFiles().filter(f => !disabled.has(f.name)).map(f => f.name);
+}
 
 async function refreshCodexFileList() {
   try {
     const data = await fetchJSON('/api/codex-logs');
     const files = (data && data.files) || [];
+    codexFiles = files;
     const sel = document.getElementById('codex-file-select');
-    if (!sel) return;
-    const prev = sel.value || codexCurrentFile;
-    if (files.length === 0) {
-      sel.innerHTML = '<option value="">(no codex logs found)</option>';
-      sel.value = '';
-      codexCurrentFile = '';
-      return;
+    if (sel) {
+      const prev = sel.value || codexCurrentFile;
+      if (files.length === 0) {
+        sel.innerHTML = '<option value="">(no codex logs found)</option>';
+        sel.value = '';
+        codexCurrentFile = '';
+      } else {
+        sel.innerHTML = files.map(f => {
+          const tag = f.alive ? '● live' : (f.active ? '◐ active' : '○ old');
+          const ageS = Math.max(0, Math.floor((Date.now() / 1000) - f.mtime));
+          const kb = (f.size / 1024).toFixed(0);
+          return `<option value="${escapeHTML(f.name)}">${tag} · ${escapeHTML(f.name)} · ${kb}KB · ${ageS}s</option>`;
+        }).join('');
+        if (prev && files.some(f => f.name === prev)) {
+          sel.value = prev;
+          codexCurrentFile = prev;
+        } else {
+          const live = files.find(f => f.alive);
+          const active = files.find(f => f.active);
+          const pick = (live || active || files[0]).name;
+          sel.value = pick;
+          codexCurrentFile = pick;
+          localStorage.setItem(CODEX_FILE_KEY, pick);
+        }
+      }
     }
-    sel.innerHTML = files.map(f => {
-      const tag = f.alive ? '● live' : '○ done';
-      const ageS = Math.max(0, Math.floor((Date.now() / 1000) - f.mtime));
-      const kb = (f.size / 1024).toFixed(0);
-      return `<option value="${f.name}">${tag} · ${f.name} · ${kb}KB · ${ageS}s</option>`;
-    }).join('');
-    if (prev && files.some(f => f.name === prev)) {
-      sel.value = prev;
-      codexCurrentFile = prev;
-    } else {
-      // Default to the most recently-modified live file, else the most
-      // recent overall.
-      const live = files.find(f => f.alive);
-      const pick = (live || files[0]).name;
-      sel.value = pick;
-      codexCurrentFile = pick;
-      localStorage.setItem(CODEX_FILE_KEY, pick);
+    const filters = document.getElementById('codex-file-filters');
+    if (filters) {
+      const disabled = codexDisabledFiles();
+      const active = activeCodexFiles();
+      filters.innerHTML = active.length === 0
+        ? '<span class="codex-file-chip">no active logs</span>'
+        : active.map(f => {
+          const checked = disabled.has(f.name) ? '' : ' checked';
+          const kb = (f.size / 1024).toFixed(0);
+          return `<label class="codex-file-chip" title="${escapeHTML(f.name)}"><input type="checkbox" data-codex-file="${escapeHTML(f.name)}"${checked} /><span>${escapeHTML(f.name)} · ${kb}KB</span></label>`;
+        }).join('');
+      filters.querySelectorAll('input[data-codex-file]').forEach(input => {
+        input.addEventListener('change', () => {
+          const nextDisabled = codexDisabledFiles();
+          const name = input.getAttribute('data-codex-file');
+          if (!name) return;
+          if (input.checked) nextDisabled.delete(name);
+          else nextDisabled.add(name);
+          saveCodexDisabledFiles(nextDisabled);
+          refreshCodexLog();
+        });
+      });
     }
+    setCodexModeUI();
   } catch (e) { /* leave as-is */ }
 }
 
 async function refreshCodexLog() {
   const pause = document.getElementById('codex-pause-toggle');
   if (pause && pause.checked) return;
+  const streamFiles = selectedCodexStreamFiles();
   const fname = codexCurrentFile;
-  if (!fname) return;
+  if (codexStreamMode && streamFiles.length === 0) {
+    const pre = document.getElementById('codex-log');
+    const meta = document.getElementById('codex-meta');
+    if (pre) pre.textContent = '(no active codex logs selected)';
+    if (meta) meta.textContent = 'stream · 0 logs';
+    return;
+  }
+  if (!codexStreamMode && !fname) return;
   try {
-    const data = await fetchJSON('/api/codex-log?file=' + encodeURIComponent(fname));
+    const url = codexStreamMode
+      ? '/api/codex-log-stream?files=' + encodeURIComponent(streamFiles.join(','))
+      : '/api/codex-log?file=' + encodeURIComponent(fname);
+    const data = await fetchJSON(url);
     const pre = document.getElementById('codex-log');
     const meta = document.getElementById('codex-meta');
     if (!pre) return;
     if (data && data.error) {
       pre.textContent = '(error: ' + data.error + ')';
-      if (meta) meta.textContent = fname + ' — error';
+      if (meta) meta.textContent = (codexStreamMode ? 'stream' : fname) + ' — error';
       return;
     }
     const tail = document.getElementById('codex-tail-toggle');
@@ -1221,20 +1354,38 @@ async function refreshCodexLog() {
     pre.innerHTML = data.html || '';
     if (atBottom) pre.scrollTop = pre.scrollHeight;
     if (meta) {
-      const kb = (data.size / 1024).toFixed(0);
-      const trunc = data.truncated ? ' (tail of last 512KB)' : '';
-      meta.textContent = `${data.name} · ${kb}KB${trunc}`;
+      if (data.mode === 'stream') {
+        const trunc = data.truncated ? ' · capped' : '';
+        meta.textContent = `stream · ${data.files.length} logs · ${data.entries} entries${trunc}`;
+      } else {
+        const kb = (data.size / 1024).toFixed(0);
+        const trunc = data.truncated ? ' (tail of last 4MB)' : '';
+        meta.textContent = `${data.name} · ${kb}KB${trunc}`;
+      }
     }
   } catch (e) { /* leave previous */ }
 }
 
-document.getElementById('codex-file-select').addEventListener('change', (e) => {
-  codexCurrentFile = e.target.value;
-  if (codexCurrentFile) localStorage.setItem(CODEX_FILE_KEY, codexCurrentFile);
-  refreshCodexLog();
-});
+const codexFileSelect = document.getElementById('codex-file-select');
+if (codexFileSelect) {
+  codexFileSelect.addEventListener('change', (e) => {
+    codexCurrentFile = e.target.value;
+    if (codexCurrentFile) localStorage.setItem(CODEX_FILE_KEY, codexCurrentFile);
+    refreshCodexLog();
+  });
+}
+const codexStreamToggle = document.getElementById('codex-stream-toggle');
+if (codexStreamToggle) {
+  codexStreamToggle.addEventListener('change', (e) => {
+    codexStreamMode = e.target.checked;
+    localStorage.setItem(CODEX_MODE_KEY, codexStreamMode ? 'stream' : 'single');
+    setCodexModeUI();
+    refreshCodexLog();
+  });
+}
 
 // Initial render + polling.
+setCodexModeUI();
 refreshCodexFileList().then(refreshCodexLog);
 setInterval(() => { refreshCodexFileList(); }, 10_000);
 setInterval(refreshCodexLog, CODEX_POLL_MS);
@@ -1374,6 +1525,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 fname = fname_values[-1] if fname_values else ""
                 payload = self._read_codex_log(fname)
                 self._send_json(payload)
+            elif path == "/api/codex-log-stream":
+                params = parse_qs(parsed.query, keep_blank_values=False)
+                files_values = params.get("files", [])
+                limit_values = params.get("limit", [])
+                files_csv = files_values[-1] if files_values else ""
+                limit = self._parse_int(limit_values[-1], CODEX_STREAM_ENTRY_LIMIT) if limit_values else CODEX_STREAM_ENTRY_LIMIT
+                payload = self._read_codex_log_stream(files_csv, limit=limit)
+                self._send_json(payload)
             elif path == "/api/viz":
                 output_dir = self._resolve_request_output_dir(parsed.query)
                 # Lists step-XXXXX.png files in <output_dir>/viz/, sorted ascending.
@@ -1484,6 +1643,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     # ---- codex live-log helpers ----
 
+    @staticmethod
+    def _parse_int(value: str, default: int) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
     def _list_codex_logs(self) -> dict:
         """Return summary of /tmp/codex-*.log files (name, size, mtime, alive)."""
         if not CODEX_LOG_DIR.is_dir():
@@ -1503,11 +1669,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 continue
             stem = p.stem  # e.g. "codex-v6model-stage2"
             alive = any(stem in cmd for cmd in active_cmdlines)
+            active = (time.time() - st.st_mtime) <= CODEX_ACTIVE_SECONDS
             files.append({
                 "name": p.name,
                 "size": int(st.st_size),
                 "mtime": st.st_mtime,
                 "alive": alive,
+                "active": active,
             })
         return {"files": files}
 
@@ -1526,25 +1694,27 @@ class DashboardHandler(BaseHTTPRequestHandler):
         except Exception:
             return []
 
-    def _read_codex_log(self, fname: str) -> dict:
-        """Return rendered HTML of a /tmp/codex-*.log file (capped to last
-        ~512 KB so the browser doesn't choke on multi-MB logs)."""
+    def _validate_codex_log_name(self, fname: str) -> str | None:
         if not fname or "/" in fname or "\\" in fname or ".." in fname:
-            return {"error": "bad filename"}
+            return "bad filename"
         if not fname.startswith("codex-") or not fname.endswith(".log"):
-            return {"error": "not a codex log"}
+            return "not a codex log"
+        return None
+
+    def _read_codex_log_text(self, fname: str) -> dict:
+        """Return raw text of a /tmp/codex-*.log file capped to last 4 MB."""
+        err = self._validate_codex_log_name(fname)
+        if err:
+            return {"error": err}
         path = CODEX_LOG_DIR / fname
         if not path.is_file():
             return {"error": "not found"}
         try:
             st = path.stat()
             size = int(st.st_size)
-            # Cap at 4 MB — beyond that, browsers start to chug. Most codex
-            # logs come in well under that.
-            cap = 4 * 1024 * 1024
             with path.open("rb") as f:
-                if size > cap:
-                    f.seek(size - cap)
+                if size > CODEX_LOG_CAP_BYTES:
+                    f.seek(size - CODEX_LOG_CAP_BYTES)
                     raw = f.read()
                     text = raw.decode("utf-8", errors="replace")
                     # The state machine only renders correctly if it starts
@@ -1565,18 +1735,131 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     truncated = False
         except Exception as e:
             return {"error": f"read error: {e}"}
-        if _render_codex_html is not None:
-            html = _render_codex_html(text, keep_mcp=False)
-        else:
-            import html as _html
-            html = _html.escape(text)
         return {
             "name": fname,
             "size": size,
             "mtime": st.st_mtime,
             "truncated": truncated,
+            "text": text,
+        }
+
+    def _read_codex_log(self, fname: str) -> dict:
+        """Return rendered HTML of one /tmp/codex-*.log file."""
+        payload = self._read_codex_log_text(fname)
+        if "error" in payload:
+            return payload
+        text = str(payload["text"])
+        if _render_codex_html is not None:
+            html = _render_codex_html(text, keep_mcp=False)
+        else:
+            html = _html.escape(text)
+        return {
+            "name": payload["name"],
+            "size": payload["size"],
+            "mtime": payload["mtime"],
+            "truncated": payload["truncated"],
             "html": html,
         }
+
+    def _read_codex_log_stream(self, files_csv: str, *, limit: int) -> dict:
+        """Return recent codex/exec entries merged by timestamp across logs."""
+        limit = max(1, min(limit, 500))
+        requested = [f for f in files_csv.split(",") if f]
+        if not requested:
+            requested = [
+                f["name"] for f in self._list_codex_logs()["files"]
+                if f.get("active")
+            ]
+
+        entries: list[dict] = []
+        used_files: list[str] = []
+        truncated = False
+        now = time.time()
+        for fname in requested:
+            err = self._validate_codex_log_name(fname)
+            if err:
+                return {"error": err}
+            path = CODEX_LOG_DIR / fname
+            if not path.is_file():
+                continue
+            try:
+                st = path.stat()
+            except OSError:
+                continue
+            if now - st.st_mtime > CODEX_ACTIVE_SECONDS:
+                continue
+            payload = self._read_codex_log_text(fname)
+            if "error" in payload:
+                continue
+            used_files.append(fname)
+            truncated = truncated or bool(payload["truncated"])
+            entries.extend(
+                self._codex_log_entries(
+                    fname,
+                    str(payload["text"]),
+                    float(payload["mtime"]),
+                )
+            )
+
+        entries = sorted(entries, key=lambda e: (float(e["timestamp"]), str(e["file"]), int(e["index"])))
+        entries = entries[-limit:]
+        html_parts = []
+        for entry in entries:
+            source = _html.escape(str(entry["file"]), quote=False)
+            html_parts.append(f'<div class="codex-entry-source">{source}</div>')
+            body = str(entry["text"])
+            if _render_codex_html is not None:
+                html_parts.append(_render_codex_html(body, keep_mcp=False))
+            else:
+                html_parts.append(_html.escape(body))
+        return {
+            "mode": "stream",
+            "files": used_files,
+            "entries": len(entries),
+            "truncated": truncated,
+            "html": "\n".join(part for part in html_parts if part),
+        }
+
+    def _codex_log_entries(self, fname: str, text: str, mtime: float) -> list[dict]:
+        chunks: list[list[str]] = []
+        current: list[str] = []
+        for line in text.splitlines():
+            if line in ("user", "codex", "exec", "apply patch") and current:
+                chunks.append(current)
+                current = [line]
+            else:
+                current.append(line)
+        if current:
+            chunks.append(current)
+
+        total = max(1, len(chunks))
+        entries = []
+        for idx, lines in enumerate(chunks):
+            timestamp = self._entry_timestamp(lines)
+            if timestamp is None:
+                timestamp = mtime - ((total - idx) / 1000.0)
+            entries.append({
+                "file": fname,
+                "index": idx,
+                "timestamp": timestamp,
+                "text": "\n".join(lines),
+            })
+        return entries
+
+    @staticmethod
+    def _entry_timestamp(lines: list[str]) -> float | None:
+        for line in lines:
+            m = CODEX_TIMESTAMP_RE.match(line)
+            if not m:
+                continue
+            try:
+                from datetime import datetime, timezone
+
+                dt = datetime.fromisoformat(m.group(1).replace("Z", "+00:00"))
+                return dt.astimezone(timezone.utc).timestamp()
+            except ValueError:
+                return None
+        return None
 
     def _build_info(self, output_dir: Path) -> dict:
         log_file = self._log_file_for_output_dir(output_dir)

@@ -20,6 +20,7 @@ Pure stdlib.
 from __future__ import annotations
 
 import argparse
+import textwrap
 import re
 import sys
 
@@ -145,16 +146,15 @@ class Pretty:
 
 
 def render_html(text: str, keep_mcp: bool = False) -> str:
-    """Convert a codex-exec log body into an HTML <pre>-friendly fragment.
+    """Convert a codex-exec log body into an HTML fragment.
 
-    Returns one big string of <span class="codex-XXX">...</span> wrapped
-    lines plus <hr class="codex-section codex-section-XXX" /> dividers.
-    Intended to be embedded inside a <pre> tag in the OSS training
+    Returns one big string of styled block/span elements for the OSS training
     dashboard, which provides the matching CSS classes.
     """
     import html as _html
 
     out: list[str] = []
+    pending_diff: list[str] = []
     mode = HEADER
 
     def html_escape(s: str) -> str:
@@ -183,12 +183,68 @@ def render_html(text: str, keep_mcp: bool = False) -> str:
             return f'<span class="codex-diff-rm">{esc}</span>'
         return f'<span class="codex-result">{esc}</span>'
 
+    def is_diff_line(line: str) -> bool:
+        return line.startswith("@@") or line[:1] in ("+", "-")
+
+    def diff_file(lines: list[str]) -> str:
+        for line in lines:
+            m = re.match(r"^\+\+\+ b/(.+)$", line)
+            if m:
+                return m.group(1)
+        return "(unnamed diff)"
+
+    def flush_diff() -> None:
+        if not pending_diff:
+            return
+        added = sum(
+            1 for line in pending_diff
+            if line.startswith("+") and not line.startswith("+++")
+        )
+        removed = sum(
+            1 for line in pending_diff
+            if line.startswith("-") and not line.startswith("---")
+        )
+        fname = html_escape(diff_file(pending_diff))
+        summary = f"diff: {added} lines added, {removed} lines removed, in {fname}"
+        body = "\n".join(diff_html(line) for line in pending_diff)
+        out.append(
+            '<details class="codex-diff-block">'
+            f'<summary><span class="codex-diff-carat">▶</span> {summary}</summary>'
+            f'<div class="codex-diff-body">{body}</div>'
+            '</details>'
+        )
+        pending_diff.clear()
+
+    def reason_lines(line: str) -> list[str]:
+        if not line:
+            return [""]
+        return textwrap.wrap(
+            line,
+            width=100,
+            break_long_words=False,
+            break_on_hyphens=False,
+            replace_whitespace=False,
+            drop_whitespace=True,
+        ) or [line]
+
     def section_html(label: str, kind: str) -> str:
         return (
-            f'<span class="codex-section codex-section-{kind}">'
-            f'┌─[ {html_escape(label)} ]'
-            f'</span>'
+            f'<div class="codex-section-header codex-section-{kind}">'
+            '<span class="codex-section-caret">▾</span>'
+            '<span class="codex-section-bar"></span>'
+            f'<span class="codex-section-icon" aria-hidden="true">{section_icon(kind)}</span>'
+            f'<span class="codex-section-label">{html_escape(label)}</span>'
+            '</div>'
         )
+
+    def section_icon(kind: str) -> str:
+        return {
+            "prompt": "user",
+            "reason": "think",
+            "exec": "$",
+            "ok": "ok",
+            "err": "!",
+        }.get(kind, "log")
 
     for raw in text.splitlines():
         if not keep_mcp and MCP_ERROR_RE.search(raw):
@@ -197,14 +253,17 @@ def render_html(text: str, keep_mcp: bool = False) -> str:
 
         # Mode transitions.
         if line == "user" and mode == HEADER:
+            flush_diff()
             out.append(section_html("USER PROMPT", "prompt"))
             mode = PROMPT
             continue
         if line == "codex":
+            flush_diff()
             out.append(section_html("REASONING", "reason"))
             mode = REASON
             continue
         if line == "exec":
+            flush_diff()
             out.append(section_html("EXEC", "exec"))
             mode = EXEC
             continue
@@ -212,10 +271,12 @@ def render_html(text: str, keep_mcp: bool = False) -> str:
         m_ok = SUCCESS_RE.match(line)
         m_err = EXIT_RE.match(line)
         if m_ok and mode in (EXEC, RESULT):
+            flush_diff()
             out.append(section_html(f"RESULT (ok in {m_ok.group(1)}ms)", "ok"))
             mode = RESULT
             continue
         if m_err and mode in (EXEC, RESULT):
+            flush_diff()
             out.append(
                 section_html(
                     f"RESULT (exit {m_err.group(1)} in {m_err.group(2)}ms)",
@@ -226,11 +287,21 @@ def render_html(text: str, keep_mcp: bool = False) -> str:
             continue
 
         if mode == RESULT:
-            out.append(diff_html(line))
+            if is_diff_line(line):
+                pending_diff.append(line)
+            else:
+                flush_diff()
+                out.append(diff_html(line))
+        elif mode == REASON:
+            for wrapped in reason_lines(line):
+                out.append(f'<span class="codex-reason">{html_escape(wrapped)}</span>')
+        elif mode == EXEC:
+            out.append(f'<code class="cmd">{html_escape(line)}</code>')
         else:
             cls = line_class_for_mode(mode)
             out.append(f'<span class="{cls}">{html_escape(line)}</span>')
 
+    flush_diff()
     return "\n".join(out)
 
 
