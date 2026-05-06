@@ -1,10 +1,14 @@
 #!/usr/bin/env python
-"""In-flight visualization for v5-pixel-temporal training.
+"""In-flight visualization for temporal SR training.
 
 Watches a checkpoint dir, loads the latest ``step-XXXXX.pt`` periodically,
-renders a fixed set of held-out frames as a 4-up comparison strip:
+renders a fixed set of held-out frames as a comparison strip:
 
-    [ LR (bilinear-up) | bicubic | model | GT ]
+    v5 primary:
+        [ LR | bicubic | v4-baseline | v5-pixel-temporal | GT | |err| ]
+
+    v6 primary:
+        [ LR | bicubic | v5-pixel-temporal | v6 | GT | |err v5| | |err v6| ]
 
 Writes ``output_dir/viz/step-XXXXX.png`` after each iteration. Designed to
 run as a background loop alongside training; uses CPU inference to avoid
@@ -45,8 +49,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--output-dir", type=Path, required=True,
                    help="Training output dir containing step-*.pt checkpoints.")
-    p.add_argument("--manifest", type=Path, required=True,
-                   help="Held-out manifest JSON (from sr_freeze_held_out_manifest.py).")
+    p.add_argument("--manifest", type=Path, default=None,
+                   help="Held-out manifest JSON (from sr_freeze_held_out_manifest.py). "
+                        "If omitted for v6, infer from the v6 ckpt args when possible.")
     p.add_argument("--tartanair-root", type=Path, default=None,
                    help="TartanAir root for resolving manifest pair paths.")
     p.add_argument("--n-pairs", type=int, default=4,
@@ -55,6 +60,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="Seconds between viz iterations (default 300 = 5 min).")
     p.add_argument("--device", default="cpu",
                    help="Inference device. Default cpu (avoids contention with training GPU).")
+    p.add_argument("--primary-version",
+                   choices=("v4", "v5-pixel", "v5-gaussian", "v6"),
+                   default=None,
+                   help="Checkpoint family in --output-dir. Default infers from run name.")
+    p.add_argument("--backbone", choices=("hat-tiny", "hat-small", "hat-l"),
+                   default="hat-l",
+                   help="Fallback v6 backbone if a ckpt is missing v6_config/args.")
+    p.add_argument("--traj-length", type=int, default=None,
+                   help="Consecutive frames to replay per manifest entry. Defaults to "
+                        "v6 ckpt args.trajectory_length when present, else 2.")
     p.add_argument("--once", action="store_true",
                    help="Render one iteration and exit (smoke / one-shot).")
     p.add_argument("--ckpt-baseline", type=Path, default=None,
@@ -63,6 +78,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--ckpt-v5-gaussian", type=Path, default=None,
                    help="Optional v5-gaussian-temporal ckpt path; with --ckpt-v6, "
                         "adds a v5-Gaussian comparison column.")
+    p.add_argument("--ckpt-v5", type=Path, default=None,
+                   help="Required v5-pixel-temporal comparison ckpt for v6-primary. "
+                        "If omitted, auto-resolve the validated v5 run's latest ckpt.")
     p.add_argument("--ckpt-v6", type=Path, default=None,
                    help="Optional v6 ckpt path; when provided, viz adds a v6 "
                         "comparison column using oss.sr.v6.model.V6Model.")
@@ -73,11 +91,123 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def _latest_ckpt(output_dir: Path) -> Path | None:
+    if not output_dir.is_dir():
+        return None
     ckpts = sorted(output_dir.glob("step-*.pt"))
     return ckpts[-1] if ckpts else None
 
 
-def _load_v6_model(ckpt_path: Path, device: str):
+class NonFiniteCheckpointError(RuntimeError):
+    """Checkpoint contains non-finite model weights and should be skipped."""
+
+
+def _infer_primary_version(output_dir: Path, explicit: str | None) -> str:
+    if explicit is not None:
+        return explicit
+    name = output_dir.name.lower()
+    if name.startswith("srcnn-v6-") or name == "srcnn-v6":
+        return "v6"
+    if name.startswith("srcnn-v5-pixel-temporal"):
+        return "v5-pixel"
+    if name.startswith("srcnn-v5-gaussian"):
+        return "v5-gaussian"
+    if name.startswith("srcnn-v4") or "v4" in name:
+        return "v4"
+    return "v5-pixel"
+
+
+def _step_from_ckpt_name(ckpt_path: Path) -> int:
+    step_str = ckpt_path.stem.split("-")[-1]
+    try:
+        return int(step_str)
+    except ValueError:
+        return -1
+
+
+def _state_has_nonfinite(state: dict) -> bool:
+    import torch
+
+    for value in state.values():
+        if hasattr(value, "is_floating_point") and value.is_floating_point():
+            if not bool(torch.isfinite(value).all().item()):
+                return True
+    return False
+
+
+def _latest_from_candidates(candidates: list[Path]) -> Path | None:
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+        if candidate.is_dir():
+            latest = _latest_ckpt(candidate)
+            if latest is not None:
+                return latest
+    return None
+
+
+def _auto_resolve_v5_ckpt(explicit: Path | None) -> Path | None:
+    if explicit is not None:
+        return explicit if explicit.exists() else None
+    return _latest_from_candidates([
+        Path(r"<train-host-data>\checkpoints\srcnn-v5-pixel-temporal-validated"),
+        Path("/tmp/oss-runs/srcnn-v5-pixel-temporal-validated"),
+        Path(r"<train-host-data>\checkpoints\srcnn-v5-pixel-temporal"),
+        Path("/tmp/oss-runs/srcnn-v5-pixel-temporal"),
+    ])
+
+
+def _ckpt_args(ckpt_path: Path, device: str = "cpu") -> dict:
+    import torch
+
+    ck = torch.load(ckpt_path, map_location=device, weights_only=False)
+    if isinstance(ck, dict) and isinstance(ck.get("args"), dict):
+        return ck["args"]
+    return {}
+
+
+def _auto_resolve_manifest(
+    *,
+    explicit: Path | None,
+    primary_ckpt: Path | None,
+    output_dir: Path,
+    device: str,
+) -> Path | None:
+    if explicit is not None:
+        return explicit if explicit.exists() else None
+    candidates: list[Path] = [
+        output_dir / "held_out_manifest.json",
+        output_dir / "v5_held_out_manifest.json",
+    ]
+    held_out_envs: list[str] = []
+    if primary_ckpt is not None and primary_ckpt.exists():
+        saved = _ckpt_args(primary_ckpt, device=device)
+        raw = saved.get("held_out_envs", [])
+        if isinstance(raw, str):
+            held_out_envs = [raw]
+        elif isinstance(raw, (list, tuple)):
+            held_out_envs = [str(v) for v in raw]
+    if not held_out_envs or held_out_envs == ["oldtown"]:
+        candidates.extend([
+            Path(r"<train-host-data>\checkpoints\v5_held_out_manifest.json"),
+            Path("/tmp/oss-runs/v5_held_out_manifest.json"),
+        ])
+    for env in held_out_envs:
+        slug = env.strip().lower()
+        if not slug:
+            continue
+        candidates.extend([
+            Path(rf"<train-host-data>\checkpoints\v5_held_out_manifest_{slug}.json"),
+            Path(f"/tmp/oss-runs/v5_held_out_manifest_{slug}.json"),
+            _REPO_ROOT / "docs" / "superpowers" / "experiments" / f"v5_held_out_manifest_{slug}.json",
+        ])
+    candidates.append(_REPO_ROOT / "docs" / "superpowers" / "experiments" / "v5_held_out_manifest.json")
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _load_v6_model(ckpt_path: Path, device: str, fallback_backbone: str = "hat-l"):
     import torch
     from oss.sr.v6.model import V6Config, V6Model
 
@@ -86,29 +216,60 @@ def _load_v6_model(ckpt_path: Path, device: str):
     cfg_data = ck.get("v6_config", {}) if isinstance(ck, dict) else {}
     if not isinstance(cfg_data, dict):
         cfg_data = {}
-    backbone = args.get("backbone", cfg_data.get("backbone", "hat-l"))
-    in_channels = int(args.get("in_channels", cfg_data.get("in_channels", 9)))
-    scale = int(args.get("scale", cfg_data.get("scale", 2)))
-    color_activation = args.get(
-        "color_activation", cfg_data.get("color_activation", "softplus")
-    )
-    model = V6Model(V6Config(
-        backbone=backbone,
-        in_channels=in_channels,
-        scale=scale,
-        color_activation=color_activation,
-    )).to(device)
+    cfg_kwargs = dict(cfg_data)
+    cfg_kwargs.setdefault("backbone", args.get("backbone", fallback_backbone))
+    cfg_kwargs.setdefault("in_channels", int(args.get("in_channels", 9)))
+    cfg_kwargs.setdefault("scale", int(args.get("scale", 2)))
+    cfg_kwargs.setdefault("color_activation", args.get("color_activation", "softplus"))
+    model = V6Model(V6Config(**cfg_kwargs)).to(device)
 
     state = None
     if isinstance(ck, dict):
-        for key in ("v6_model", "model", "model_state_dict", "state_dict"):
+        for key in ("v6_model", "model", "model_state_dict", "generator", "state_dict"):
             if key in ck:
                 state = ck[key]
                 break
     if state is None and isinstance(ck, dict) and all(hasattr(v, "shape") for v in ck.values()):
         state = ck
     if state is not None:
+        if _state_has_nonfinite(state):
+            raise NonFiniteCheckpointError(f"{ckpt_path} contains non-finite v6 weights")
         model.load_state_dict(state, strict=False)
+    model.train(False)
+    return model
+
+
+def _load_v5_pixel_model(ckpt_path: Path, device: str):
+    import torch
+
+    from oss.sr.temporal import TemporalSRModel
+
+    ck = torch.load(ckpt_path, map_location=device, weights_only=False)
+    saved = ck.get("args", {})
+    tier = saved.get("tier", "standard")
+    backbone_kind = saved.get("backbone_kind")
+    if backbone_kind is None:
+        backbone_kind = "rrdb" if saved.get("sr_backbone") == "rrdb" else "simple"
+    if "zero_gbuffer_into_backbone" in saved:
+        zero_flag = bool(saved["zero_gbuffer_into_backbone"])
+    else:
+        zero_flag = bool(saved.get("warm_start"))
+    model = TemporalSRModel(
+        in_channels=int(saved.get("in_channels", 12)),
+        scale=int(saved.get("scale", 2)),
+        tier=tier,
+        backbone_kind=backbone_kind,
+        zero_gbuffer_into_backbone=zero_flag,
+    ).to(device)
+    state = ck.get("temporal_model")
+    if state is None and "sr_model" in ck:
+        model.backbone.load_state_dict(ck["sr_model"])
+    elif state is not None:
+        if _state_has_nonfinite(state):
+            raise NonFiniteCheckpointError(f"{ckpt_path} contains non-finite v5 weights")
+        model.load_state_dict(state)
+    else:
+        raise KeyError(f"{ckpt_path} has no temporal_model or sr_model")
     model.train(False)
     return model
 
@@ -125,26 +286,44 @@ def _comparison_panels(
     *,
     lr_up,
     bicubic,
-    baseline,
+    baseline=None,
     pixel,
     gt,
     err_rgb,
+    err_rgb_v6=None,
     gaussian=None,
     v6=None,
 ):
     if v6 is None:
+        baseline = bicubic if baseline is None else baseline
         return (
             [lr_up, bicubic, baseline, pixel, gt, err_rgb],
             ["LR-bilinear", "bicubic", "v4-baseline", "v5-temporal", "GT", "|err| heatmap"],
         )
-    panels = [lr_up, bicubic, pixel]
-    labels = ["LR-bilinear", "bicubic", "v5-pixel-temporal"]
+    panels = [lr_up, bicubic]
+    labels = ["LR-bilinear", "bicubic"]
+    if baseline is not None:
+        panels.append(baseline)
+        labels.append("v4-baseline")
+    panels.append(pixel)
+    labels.append("v5-pixel-temporal")
     if gaussian is not None:
         panels.append(gaussian)
         labels.append("v5-Gaussian")
-    panels.extend([v6, gt, err_rgb])
-    labels.extend(["v6", "GT", "|err| heatmap"])
+    panels.extend([v6, gt, err_rgb, err_rgb_v6 if err_rgb_v6 is not None else err_rgb])
+    labels.extend(["v6", "GT", "|err v5|", "|err v6|"])
     return panels, labels
+
+
+def _error_heatmap(pred, gt, err_scale: float):
+    import torch
+
+    err = (pred - gt).abs().mean(dim=0, keepdim=True)
+    err_norm = (err / max(err_scale, 1e-6)).clamp(0.0, 1.0)
+    red = (err_norm * 2.0).clamp(0.0, 1.0)
+    green = (err_norm * 2.0 - 1.0).clamp(0.0, 1.0)
+    blue = torch.zeros_like(err_norm)
+    return torch.cat([red, green, blue], dim=0)
 
 
 def _render_iteration(
@@ -155,34 +334,25 @@ def _render_iteration(
     output_dir: Path,
     n_pairs: int,
     device: str,
+    primary_version: str = "v5-pixel",
     ckpt_baseline: Path | None = None,
     ckpt_v5_gaussian: Path | None = None,
     ckpt_v6: Path | None = None,
+    ckpt_v5: Path | None = None,
+    fallback_backbone: str = "hat-l",
+    traj_length: int | None = None,
     err_scale: float = 0.2,
 ) -> Path | None:
-    """Render a single 6-up comparison strip and write to viz/step-XXXXX.png.
-
-    Strip layout (left to right):
-      LR-bilinear | bicubic | v4-baseline | v5-temporal | GT | |error|
-    """
+    """Render one checkpoint into ``viz/step-XXXXXXXX.png``."""
     import torch
     import torch.nn.functional as F
 
     from oss.gaussian.data import EngineAliasedLRSynth, TartanAirGaussianDataset
     from oss.sr import build_sr_model
-    from oss.sr.temporal import (
-        SequentialPairDataset, TemporalSRModel,
-        adapt_tartanair, make_first_frame_prev_hr,
-        warp_prev_hr,
-    )
+    from oss.sr.temporal import adapt_tartanair, make_first_frame_prev_hr
     from oss.sr.temporal.held_out_manifest import load_manifest, manifest_to_pairs
 
-    # Step number from filename (e.g. step-00012000.pt -> 12000)
-    step_str = ckpt_path.stem.split("-")[-1]
-    try:
-        step = int(step_str)
-    except ValueError:
-        step = -1
+    step = _step_from_ckpt_name(ckpt_path)
 
     viz_dir = output_dir / "viz"
     viz_dir.mkdir(exist_ok=True, parents=True)
@@ -190,26 +360,25 @@ def _render_iteration(
     if out_path.exists():
         return None  # already rendered this step
 
-    # Load v5-temporal model.
-    ck = torch.load(ckpt_path, map_location=device, weights_only=False)
-    saved = ck.get("args", {})
-    tier = saved.get("tier", "standard")
-    backbone_kind = saved.get("backbone_kind", "simple")
-    if "zero_gbuffer_into_backbone" in saved:
-        zero_flag = bool(saved["zero_gbuffer_into_backbone"])
+    if primary_version == "v6":
+        v6_ckpt = ckpt_path
+        v5_ckpt = ckpt_v5
+        if v5_ckpt is None:
+            raise FileNotFoundError(
+                "v6-primary viz requires a v5-pixel-temporal comparison ckpt. "
+                "Pass --ckpt-v5, or make the validated v5 run reachable at "
+                r"<train-host-data>\checkpoints\srcnn-v5-pixel-temporal-validated or "
+                "/tmp/oss-runs/srcnn-v5-pixel-temporal-validated."
+            )
     else:
-        # Legacy ckpts: warm-started runs zeroed G-buffer channels into
-        # the backbone; from-scratch runs did not.
-        zero_flag = bool(saved.get("warm_start"))
-    model = TemporalSRModel(
-        in_channels=12, scale=2, tier=tier, backbone_kind=backbone_kind,
-        zero_gbuffer_into_backbone=zero_flag,
-    ).to(device)
-    if "temporal_model" in ck:
-        model.load_state_dict(ck["temporal_model"])
-    elif "sr_model" in ck:
-        model.backbone.load_state_dict(ck["sr_model"])
-    model.train(False)
+        v5_ckpt = ckpt_path
+        v6_ckpt = ckpt_v6 if ckpt_v6 is not None and ckpt_v6.exists() else None
+
+    model = _load_v5_pixel_model(v5_ckpt, device)
+
+    v6_model = None
+    if v6_ckpt is not None and v6_ckpt.exists():
+        v6_model = _load_v6_model(v6_ckpt, device, fallback_backbone=fallback_backbone)
 
     # Load v4-baseline single-frame model (optional column).
     baseline = None
@@ -226,12 +395,13 @@ def _render_iteration(
         baseline.train(False)
 
     gaussian_engine = None
-    if ckpt_v6 is not None and ckpt_v5_gaussian is not None and ckpt_v5_gaussian.exists():
+    if ckpt_v5_gaussian is not None and ckpt_v5_gaussian.exists():
         gaussian_engine = _load_v5_gaussian_engine(ckpt_v5_gaussian, device)
 
-    v6_model = None
-    if ckpt_v6 is not None and ckpt_v6.exists():
-        v6_model = _load_v6_model(ckpt_v6, device)
+    if traj_length is None:
+        saved = _ckpt_args(ckpt_path, device=device)
+        traj_length = int(saved.get("trajectory_length", 2))
+    traj_length = max(2, int(traj_length))
 
     # Load manifest + dataset. Codex R5 review fixed three issues:
     #
@@ -269,135 +439,138 @@ def _render_iteration(
     resolved = manifest_to_pairs(sliced, base)
 
     rendered_strips: list[torch.Tensor] = []
-    for (base_idx_t, base_idx_tp1) in resolved:
-        ex_t = base[base_idx_t]
-        ex_tp1 = base[base_idx_tp1]
+    panel_labels: list[str] = []
 
-        def _to_x12(ex):
-            lr = ex.lr_frame.to(device)
-            depth_lr = ex.depth.to(device)
-            motion_lr = ex.motion.to(device)
-            normals = (ex.normals if ex.normals is not None else
-                       torch.zeros((3, *lr.shape[-2:]), dtype=lr.dtype)).to(device)
-            canvas = (ex.canvas_hint if ex.canvas_hint is not None else
-                      torch.zeros((3, *lr.shape[-2:]), dtype=lr.dtype)).to(device)
-            return lr, depth_lr, motion_lr, normals, canvas
-
-        lr_t, depth_t_lr, motion_t_lr, normals_t, canvas_t = _to_x12(ex_t)
-        lr_tp1, depth_tp1_lr, motion_tp1_lr, normals_tp1, canvas_tp1 = _to_x12(ex_tp1)
-
-        x12_t = torch.cat([lr_t, depth_t_lr, motion_t_lr, normals_t, canvas_t], dim=0).unsqueeze(0)
-        x12_tp1 = torch.cat([lr_tp1, depth_tp1_lr, motion_tp1_lr, normals_tp1, canvas_tp1], dim=0).unsqueeze(0)
-
-        H_lr, W_lr = lr_t.shape[-2:]
-        H_hr, W_hr = H_lr * model.scale, W_lr * model.scale
-        depth_hr_t = F.interpolate(depth_t_lr.unsqueeze(0), size=(H_hr, W_hr),
-                                   mode="bilinear", align_corners=False)
-        depth_hr_tp1 = F.interpolate(depth_tp1_lr.unsqueeze(0), size=(H_hr, W_hr),
-                                     mode="bilinear", align_corners=False)
-
-        # Frame t: cold-start (bilinear-LR-up as prev_hr) — same protocol as
-        # sr_temporal_held_out.py uses on the first frame in a pair.
-        prev_hr_t = make_first_frame_prev_hr(lr_t.unsqueeze(0)[:, :3], scale=model.scale)
-        with torch.no_grad():
-            out_t = model(
-                lr_inputs=x12_t, prev_hr=prev_hr_t,
-                depth_hr_curr=depth_hr_t, depth_hr_prev=depth_hr_t,
-                motion_lr=motion_t_lr.unsqueeze(0),
-            ).clamp(0.0, 1.0)
-        # Frame t+1: prev_hr is the model's frame-t output; motion is t_motion
-        # (forward flow t -> t+1, lives at frame t — matches the t_motion
-        # convention enforced in sr_temporal_held_out.py post-38cf507).
-        with torch.no_grad():
-            out_tp1 = model(
-                lr_inputs=x12_tp1, prev_hr=out_t.detach(),
-                depth_hr_curr=depth_hr_tp1, depth_hr_prev=depth_hr_t,
-                motion_lr=motion_t_lr.unsqueeze(0),
-            ).clamp(0.0, 1.0)
-
-        bicubic_tp1 = F.interpolate(lr_tp1.unsqueeze(0)[:, :3], size=(H_hr, W_hr),
-                                    mode="bicubic", antialias=True).clamp(0.0, 1.0)
-        lr_up_tp1 = F.interpolate(lr_tp1.unsqueeze(0)[:, :3], size=(H_hr, W_hr),
-                                  mode="bilinear", align_corners=False).clamp(0.0, 1.0)
-        gt_tp1 = ex_tp1.gt_hr_frame.unsqueeze(0).to(device).clamp(0.0, 1.0)
-
-        gauss_out_tp1 = None
-        if gaussian_engine is not None:
-            with torch.no_grad():
-                gaussian_engine.reset()
-                _ = gaussian_engine(
-                    lr_inputs=x12_t, motion_lr=motion_t_lr.unsqueeze(0),
-                ).clamp(0.0, 1.0)
-                gauss_out_tp1 = gaussian_engine(
-                    lr_inputs=x12_tp1, motion_lr=motion_t_lr.unsqueeze(0),
-                ).clamp(0.0, 1.0)
-
-        v6_out_tp1 = None
-        if v6_model is not None:
-            in_channels = int(v6_model.cfg.in_channels)
-            if in_channels > x12_tp1.shape[1]:
-                raise ValueError(
-                    f"v6 ckpt expects {in_channels} channels, but viz can supply "
-                    f"only {x12_tp1.shape[1]}"
-                )
-            with torch.no_grad():
-                v6_model.reset_state(device=torch.device(device))
-                _ = v6_model(
-                    lr_inputs=x12_t[:, :in_channels],
-                    motion_lr=None,
-                    depth_hr_curr=depth_hr_t,
-                    depth_hr_prev=depth_hr_t,
-                    frame_index=0,
-                )
-                v6_out_tp1 = v6_model(
-                    lr_inputs=x12_tp1[:, :in_channels],
-                    motion_lr=motion_t_lr.unsqueeze(0),
-                    depth_hr_curr=depth_hr_tp1,
-                    depth_hr_prev=depth_hr_t,
-                    frame_index=1,
-                ).clamp(0.0, 1.0)
-
-        # v4-baseline column (single-frame; no temporal/prev_hr regime).
-        # MUST match the SRGD training distribution v4 was trained against
-        # (depth/motion/normals = 0, normals[2]=1.0). Feeding TartanAir's
-        # real G-buffers into v4 produces the same chromatic-dispersion
-        # garbage that motivated the b2fa647 fix in TemporalSRModel.
-        if baseline is not None:
-            with torch.no_grad():
-                base_in = torch.zeros_like(x12_tp1)
-                base_in[:, :3] = x12_tp1[:, :3]
-                if base_in.shape[1] >= 7:
-                    base_in[:, 6] = 1.0
-                base_out_tp1 = baseline(base_in).clamp(0.0, 1.0)
-        else:
-            base_out_tp1 = bicubic_tp1  # fallback so strip width stays consistent
-
-        # Per-pixel L1 error between v5-temporal and GT, normalized to
-        # [0, err_scale] then mapped to a black->red->yellow gradient. Reveals
-        # WHERE the model fails (edges? dark regions? high-freq texture?).
-        # Channels-collapsed via mean so a single error magnitude per pixel.
-        err_source = v6_out_tp1 if v6_out_tp1 is not None else out_tp1
-        err = (err_source[0] - gt_tp1[0]).abs().mean(dim=0, keepdim=True)  # (1, H, W)
-        err_norm = (err / max(err_scale, 1e-6)).clamp(0.0, 1.0)
-        # Hot-iron gradient: lo (black) -> mid (red) -> hi (yellow).
-        # red = clamp(2*x), green = clamp(2*x - 1), blue = 0
-        red = (err_norm * 2.0).clamp(0.0, 1.0)
-        green = (err_norm * 2.0 - 1.0).clamp(0.0, 1.0)
-        blue = torch.zeros_like(err_norm)
-        err_rgb = torch.cat([red, green, blue], dim=0)
-
-        panels, panel_labels = _comparison_panels(
-            lr_up=lr_up_tp1[0],
-            bicubic=bicubic_tp1[0],
-            baseline=base_out_tp1[0],
-            pixel=out_tp1[0],
-            gaussian=gauss_out_tp1[0] if gauss_out_tp1 is not None else None,
-            v6=v6_out_tp1[0] if v6_out_tp1 is not None else None,
-            gt=gt_tp1[0],
-            err_rgb=err_rgb,
+    def _to_x12(ex):
+        lr = ex.lr_frame.to(device)
+        depth_lr = ex.depth.to(device)
+        motion_lr = ex.motion.to(device)
+        normals = (ex.normals if ex.normals is not None else
+                   torch.zeros((3, *lr.shape[-2:]), dtype=lr.dtype)).to(device)
+        canvas = (ex.canvas_hint if ex.canvas_hint is not None else
+                  torch.zeros((3, *lr.shape[-2:]), dtype=lr.dtype)).to(device)
+        x12 = torch.cat([lr, depth_lr, motion_lr, normals, canvas], dim=0).unsqueeze(0)
+        x9 = torch.cat([lr, depth_lr, motion_lr, normals], dim=0).unsqueeze(0)
+        h_hr, w_hr = lr.shape[-2] * model.scale, lr.shape[-1] * model.scale
+        depth_hr = F.interpolate(
+            depth_lr.unsqueeze(0), size=(h_hr, w_hr),
+            mode="bilinear", align_corners=False,
         )
-        strip = torch.cat(panels, dim=-1)
-        rendered_strips.append(strip.cpu())
+        return lr, motion_lr, x12, x9, depth_hr
+
+    for (base_idx_t, _base_idx_tp1) in resolved:
+        traj_key = base.trajectory_key(base_idx_t)
+        seq_indices = [base_idx_t + offset for offset in range(traj_length)]
+        if (
+            seq_indices[-1] >= len(base)
+            or any(base.trajectory_key(idx) != traj_key for idx in seq_indices)
+        ):
+            print(
+                f"  skip manifest trajectory {traj_key}: shorter than "
+                f"--traj-length={traj_length}",
+                flush=True,
+            )
+            continue
+
+        examples = [base[idx] for idx in seq_indices]
+        v6_out = None
+        prev_v5 = None
+        prev_depth_hr = None
+        prev_motion = None
+        if gaussian_engine is not None:
+            gaussian_engine.reset()
+        if v6_model is not None:
+            v6_model.reset_state(device=torch.device(device))
+
+        for frame_index, ex in enumerate(examples):
+            lr, motion_lr, x12, x9, depth_hr = _to_x12(ex)
+            h_hr, w_hr = depth_hr.shape[-2:]
+            motion_for_temporal = (
+                torch.zeros_like(motion_lr).unsqueeze(0)
+                if frame_index == 0 or prev_motion is None
+                else prev_motion.unsqueeze(0)
+            )
+
+            with torch.no_grad():
+                if prev_v5 is None:
+                    prev_hr = make_first_frame_prev_hr(x12[:, :3], scale=model.scale)
+                    prev_depth = depth_hr
+                else:
+                    prev_hr = prev_v5
+                    prev_depth = prev_depth_hr
+                out_v5 = model(
+                    lr_inputs=x12, prev_hr=prev_hr,
+                    depth_hr_curr=depth_hr, depth_hr_prev=prev_depth,
+                    motion_lr=motion_for_temporal,
+                ).clamp(0.0, 1.0)
+
+                gauss_out = None
+                if gaussian_engine is not None:
+                    gauss_out = gaussian_engine(
+                        lr_inputs=x12,
+                        motion_lr=motion_for_temporal,
+                    ).clamp(0.0, 1.0)
+
+                if v6_model is not None:
+                    in_channels = int(v6_model.cfg.in_channels)
+                    if in_channels <= x9.shape[1]:
+                        v6_inputs = x9[:, :in_channels]
+                    elif in_channels <= x12.shape[1]:
+                        v6_inputs = x12[:, :in_channels]
+                    else:
+                        raise ValueError(
+                            f"v6 ckpt expects {in_channels} channels, but viz can "
+                            f"supply only {x12.shape[1]}"
+                        )
+                    v6_out = v6_model(
+                        lr_inputs=v6_inputs,
+                        motion_lr=None if frame_index == 0 else motion_for_temporal,
+                        depth_hr_curr=depth_hr,
+                        depth_hr_prev=depth_hr if prev_depth_hr is None else prev_depth_hr,
+                        frame_index=frame_index,
+                    ).clamp(0.0, 1.0)
+
+            if frame_index > 0:
+                bicubic = F.interpolate(
+                    x12[:, :3], size=(h_hr, w_hr), mode="bicubic", antialias=True
+                ).clamp(0.0, 1.0)
+                lr_up = F.interpolate(
+                    x12[:, :3], size=(h_hr, w_hr), mode="bilinear", align_corners=False
+                ).clamp(0.0, 1.0)
+                gt = ex.gt_hr_frame.unsqueeze(0).to(device).clamp(0.0, 1.0)
+
+                base_out = None
+                if baseline is not None:
+                    base_in = torch.zeros_like(x12)
+                    base_in[:, :3] = x12[:, :3]
+                    if base_in.shape[1] >= 7:
+                        base_in[:, 6] = 1.0
+                    with torch.no_grad():
+                        base_out = baseline(base_in).clamp(0.0, 1.0)
+
+                err_v5 = _error_heatmap(out_v5[0], gt[0], err_scale)
+                err_v6 = (
+                    _error_heatmap(v6_out[0], gt[0], err_scale)
+                    if v6_out is not None else None
+                )
+                panels, panel_labels = _comparison_panels(
+                    lr_up=lr_up[0],
+                    bicubic=bicubic[0],
+                    baseline=base_out[0] if base_out is not None else (
+                        None if v6_out is not None else bicubic[0]
+                    ),
+                    pixel=out_v5[0],
+                    gaussian=gauss_out[0] if gauss_out is not None else None,
+                    v6=v6_out[0] if v6_out is not None else None,
+                    gt=gt[0],
+                    err_rgb=err_v5,
+                    err_rgb_v6=err_v6,
+                )
+                rendered_strips.append(torch.cat(panels, dim=-1).cpu())
+
+            prev_v5 = out_v5.detach()
+            prev_depth_hr = depth_hr.detach()
+            prev_motion = motion_lr.detach()
     if not rendered_strips:
         return None
 
@@ -435,18 +608,21 @@ def _render_iteration(
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    if not args.output_dir.is_dir():
-        print(f"output-dir {args.output_dir} does not exist", file=sys.stderr)
-        return 1
-    if not args.manifest.exists():
-        print(f"manifest {args.manifest} does not exist", file=sys.stderr)
-        return 1
+    import torch
+
+    torch.set_num_threads(2)
+    if args.device != "cpu":
+        print("forcing --device cpu for in-flight viz to avoid GPU contention", flush=True)
+        args.device = "cpu"
+
+    primary_version = _infer_primary_version(args.output_dir, args.primary_version)
     if args.tartanair_root is None or not args.tartanair_root.is_dir():
         print(f"--tartanair-root must point to an existing dir", file=sys.stderr)
         return 1
 
     print(f"in-flight viz: output_dir={args.output_dir} interval={args.interval}s "
-          f"n_pairs={args.n_pairs} device={args.device}", flush=True)
+          f"n_pairs={args.n_pairs} primary={primary_version} device={args.device}",
+          flush=True)
 
     last_step = -1
     iters = 0
@@ -455,20 +631,38 @@ def main(argv: list[str] | None = None) -> int:
         if ckpt is None:
             print(f"  no checkpoints yet at {args.output_dir}", flush=True)
         else:
-            try:
-                step = int(ckpt.stem.split("-")[-1])
-            except ValueError:
-                step = -1
+            step = _step_from_ckpt_name(ckpt)
             if step != last_step:
                 t0 = time.monotonic()
                 try:
+                    ckpt_v5 = (
+                        _auto_resolve_v5_ckpt(args.ckpt_v5)
+                        if primary_version == "v6" else args.ckpt_v5
+                    )
+                    manifest = _auto_resolve_manifest(
+                        explicit=args.manifest,
+                        primary_ckpt=ckpt,
+                        output_dir=args.output_dir,
+                        device=args.device,
+                    )
+                    if manifest is None:
+                        raise FileNotFoundError(
+                            "held-out manifest not found. Pass --manifest, or place it at "
+                            "<output-dir>/held_out_manifest.json / "
+                            r"<train-host-data>\checkpoints\v5_held_out_manifest*.json / "
+                            "/tmp/oss-runs/v5_held_out_manifest*.json."
+                        )
                     out = _render_iteration(
-                        ckpt_path=ckpt, manifest_path=args.manifest,
+                        ckpt_path=ckpt, manifest_path=manifest,
                         tartanair_root=args.tartanair_root, output_dir=args.output_dir,
                         n_pairs=args.n_pairs, device=args.device,
+                        primary_version=primary_version,
                         ckpt_baseline=args.ckpt_baseline,
                         ckpt_v5_gaussian=args.ckpt_v5_gaussian,
                         ckpt_v6=args.ckpt_v6,
+                        ckpt_v5=ckpt_v5,
+                        fallback_backbone=args.backbone,
+                        traj_length=args.traj_length,
                         err_scale=args.err_scale,
                     )
                     elapsed = time.monotonic() - t0
@@ -476,6 +670,9 @@ def main(argv: list[str] | None = None) -> int:
                         print(f"  step {step}: no new viz", flush=True)
                     else:
                         print(f"  step {step}: rendered {out} in {elapsed:.1f}s", flush=True)
+                    last_step = step
+                except NonFiniteCheckpointError as e:
+                    print(f"  step {step}: checkpoint has NaN/Inf weights; skipping: {e}", flush=True)
                     last_step = step
                 except Exception as e:
                     print(f"  step {step}: render failed: {e}", flush=True)
