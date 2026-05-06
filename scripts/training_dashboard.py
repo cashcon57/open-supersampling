@@ -64,6 +64,25 @@ HTML = """<!DOCTYPE html>
            border-radius: 8px; padding: 16px; }
   .panel h2 { font-size: 14px; margin: 0 0 12px 0; color: var(--muted);
               text-transform: uppercase; letter-spacing: 0.5px; }
+  .panel-head { display: flex; justify-content: space-between; align-items: center;
+                margin: 0 0 12px 0; gap: 12px; }
+  .panel-head h2 { margin: 0; }
+  .chart-toolbar { display: flex; gap: 4px; }
+  .chart-toolbar button {
+    background: #21262d; color: var(--fg); border: 1px solid var(--border);
+    border-radius: 4px; padding: 2px 8px; font-size: 11px; cursor: pointer;
+    font-family: var(--mono); min-width: 24px;
+  }
+  .chart-toolbar button:hover { background: #30363d; border-color: var(--link); }
+  .chart-toolbar button:active { background: #0d1117; }
+  .chart-legend { display: flex; flex-wrap: wrap; gap: 4px 12px;
+                  margin-top: 8px; font-size: 11px; }
+  .chart-legend label { display: inline-flex; align-items: center; gap: 4px;
+                        cursor: pointer; user-select: none; color: var(--fg); }
+  .chart-legend label.off { color: var(--muted); text-decoration: line-through; }
+  .chart-legend input[type="checkbox"] { margin: 0; cursor: pointer; }
+  .chart-legend .swatch { display: inline-block; width: 14px; height: 3px;
+                          border-radius: 1px; }
   .stat-row { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; }
   .stat { flex: 1; min-width: 140px; }
   .stat .lbl { font-size: 11px; color: var(--muted); text-transform: uppercase; }
@@ -171,42 +190,98 @@ HTML = """<!DOCTYPE html>
   </div>
 
   <div class="panel">
-    <h2>PSNR <span style="font-size:13px;color:#3fb950">↑ higher is better</span></h2>
+    <div class="panel-head">
+      <h2>PSNR <span style="font-size:13px;color:#3fb950">↑ higher is better</span></h2>
+      <div class="chart-toolbar" data-chart="chart-psnr">
+        <button data-action="zoom-out" title="Zoom out">−</button>
+        <button data-action="zoom-in" title="Zoom in">+</button>
+        <button data-action="reset" title="Reset zoom + pan">↺</button>
+      </div>
+    </div>
     <canvas id="chart-psnr"></canvas>
-    <div style="font-size:11px;color:#8b949e;margin-top:4px"><b>Drag to pan · scroll to zoom · double-click to reset.</b> Solid line: live training-time PSNR proxy (≈ −10·log10(t_l1²)). Held-out eval lines populate after `sr_temporal_held_out.py` runs (closeout). Dashed: published-benchmark estimates of competing upscalers at 1080p→4K Quality (±1 dB envelope). Solid + thicker = our measured numbers (OSS v3, v4).</div>
+    <div class="chart-legend" id="legend-chart-psnr"></div>
+    <div style="font-size:11px;color:#8b949e;margin-top:4px"><b>Two-finger scroll (or scroll-wheel) to pan · ⌘/Ctrl+scroll or pinch to zoom · double-click to reset.</b> Solid line: live training-time PSNR proxy (≈ −10·log10(t_l1²)). Held-out eval lines populate after `sr_temporal_held_out.py` runs (closeout). Dashed: published-benchmark estimates of competing upscalers at 1080p→4K Quality (±1 dB envelope). Solid + thicker = our measured numbers (OSS v3, v4).</div>
   </div>
 
   <div class="panel">
-    <h2>LPIPS-VGG <span style="font-size:13px;color:#3fb950">↓ lower is better</span></h2>
+    <div class="panel-head">
+      <h2>LPIPS-VGG <span style="font-size:13px;color:#3fb950">↓ lower is better</span></h2>
+      <div class="chart-toolbar" data-chart="chart-lpips">
+        <button data-action="zoom-out" title="Zoom out">−</button>
+        <button data-action="zoom-in" title="Zoom in">+</button>
+        <button data-action="reset" title="Reset zoom + pan">↺</button>
+      </div>
+    </div>
     <canvas id="chart-lpips"></canvas>
+    <div class="chart-legend" id="legend-chart-lpips"></div>
     <div style="font-size:11px;color:#8b949e;margin-top:4px">Solid line: live training-time LPIPS (Phase 2+ only, when LPIPS loss is enabled). Held-out eval lines populate after closeout. Dashed: published-benchmark estimates (Bicubic ≈ 0.51, DLSS 2/FSR 2 ≈ 0.22, DLSS 4 ≈ 0.17).</div>
   </div>
 
   <div class="panel">
-    <h2>Throughput <span style="font-size:13px;color:#3fb950">↑ higher is better (steps/min)</span></h2>
+    <div class="panel-head">
+      <h2>Throughput <span style="font-size:13px;color:#3fb950">↑ higher is better (steps/min)</span></h2>
+      <div class="chart-toolbar" data-chart="chart-throughput">
+        <button data-action="zoom-out" title="Zoom out">−</button>
+        <button data-action="zoom-in" title="Zoom in">+</button>
+        <button data-action="reset" title="Reset zoom + pan">↺</button>
+      </div>
+    </div>
     <canvas id="chart-throughput"></canvas>
+    <div class="chart-legend" id="legend-chart-throughput"></div>
     <div style="font-size:11px;color:#8b949e;margin-top:4px">Computed from train-row timestamps. Sustained drop indicates DataLoader starvation or compute-bound phase (Phase 2 LPIPS-VGG cuts throughput ~5×).</div>
   </div>
 
   <div class="panel">
-    <h2>Loss decomposition <span style="font-size:13px;color:#3fb950">↓ lower is better</span></h2>
+    <div class="panel-head">
+      <h2>Loss decomposition <span style="font-size:13px;color:#3fb950">↓ lower is better</span></h2>
+      <div class="chart-toolbar" data-chart="chart-loss">
+        <button data-action="zoom-out" title="Zoom out">−</button>
+        <button data-action="zoom-in" title="Zoom in">+</button>
+        <button data-action="reset" title="Reset zoom + pan">↺</button>
+      </div>
+    </div>
     <canvas id="chart-loss"></canvas>
+    <div class="chart-legend" id="legend-chart-loss"></div>
     <div style="font-size:11px;color:#8b949e;margin-top:4px">Phase 1: appearance loss (L1+SSIM) only. Phase 2 (step 10K+): adds LPIPS + temporal-consistency. Phase 3 (step 60K+): same loss, LR×0.01 polish.</div>
   </div>
 
   <div class="panel">
-    <h2>SSIM <span style="font-size:13px;color:#3fb950">↑ higher is better</span></h2>
+    <div class="panel-head">
+      <h2>SSIM <span style="font-size:13px;color:#3fb950">↑ higher is better</span></h2>
+      <div class="chart-toolbar" data-chart="chart-ssim">
+        <button data-action="zoom-out" title="Zoom out">−</button>
+        <button data-action="zoom-in" title="Zoom in">+</button>
+        <button data-action="reset" title="Reset zoom + pan">↺</button>
+      </div>
+    </div>
     <canvas id="chart-ssim"></canvas>
+    <div class="chart-legend" id="legend-chart-ssim"></div>
   </div>
 
   <div class="panel">
-    <h2>Output stats (mean, std)</h2>
+    <div class="panel-head">
+      <h2>Output stats (mean, std)</h2>
+      <div class="chart-toolbar" data-chart="chart-out">
+        <button data-action="zoom-out" title="Zoom out">−</button>
+        <button data-action="zoom-in" title="Zoom in">+</button>
+        <button data-action="reset" title="Reset zoom + pan">↺</button>
+      </div>
+    </div>
     <canvas id="chart-out"></canvas>
+    <div class="chart-legend" id="legend-chart-out"></div>
   </div>
 
   <div class="panel">
-    <h2>Gradient norms</h2>
+    <div class="panel-head">
+      <h2>Gradient norms</h2>
+      <div class="chart-toolbar" data-chart="chart-grad">
+        <button data-action="zoom-out" title="Zoom out">−</button>
+        <button data-action="zoom-in" title="Zoom in">+</button>
+        <button data-action="reset" title="Reset zoom + pan">↺</button>
+      </div>
+    </div>
     <canvas id="chart-grad"></canvas>
+    <div class="chart-legend" id="legend-chart-grad"></div>
   </div>
 
   <div class="panel full">
@@ -266,14 +341,18 @@ function lineChart(canvasId, label, color, opts = {}) {
       maintainAspectRatio: false,
       interaction: { mode: 'nearest', axis: 'x', intersect: false },
       plugins: {
-        legend: { labels: { color: '#e6edf3' } },
-        // chartjs-plugin-zoom: scroll-wheel zoom (cursor-anchored), drag to
-        // pan the x-axis, double-click to reset. Vertical zoom enabled too
-        // so users can magnify into a tight loss range.
+        // Built-in legend disabled: each chart panel renders its own
+        // checkbox-style legend below the canvas (see installChartControls).
+        legend: { display: false },
+        // chartjs-plugin-zoom: pan via drag, zoom via Ctrl/Cmd-wheel or
+        // pinch (trackpad). Plain scroll-wheel + two-finger swipe are
+        // routed to chart.pan() by a custom canvas wheel handler in
+        // installChartControls — that's the standard scroll-as-pan UX
+        // most chart UIs ship with.
         zoom: {
           pan: { enabled: true, mode: 'xy', modifierKey: null },
           zoom: {
-            wheel: { enabled: true, speed: 0.1 },
+            wheel: { enabled: true, modifierKey: 'ctrl', speed: 0.1 },
             pinch: { enabled: true },
             mode: 'xy',
           },
@@ -302,8 +381,87 @@ function lineChart(canvasId, label, color, opts = {}) {
 }
 
 function setChart(chart, datasets) {
+  // Preserve user's per-dataset visibility selections across data refresh.
+  const prevHidden = {};
+  for (const ds of (chart.data.datasets || [])) {
+    if (ds && ds.label != null) prevHidden[ds.label] = !!ds.hidden;
+  }
+  for (const ds of datasets) {
+    if (ds && ds.label != null && ds.label in prevHidden) {
+      ds.hidden = prevHidden[ds.label];
+    }
+  }
   chart.data.datasets = datasets;
   chart.update();
+  refreshChartLegend(chart);
+}
+
+function _clearChildren(node) {
+  while (node.firstChild) node.removeChild(node.firstChild);
+}
+
+function refreshChartLegend(chart) {
+  const id = chart.canvas.id;
+  const container = document.getElementById('legend-' + id);
+  if (!container) return;
+  _clearChildren(container);
+  const datasets = chart.data.datasets || [];
+  if (datasets.length === 0) {
+    container.textContent = '(no data yet)';
+    container.style.color = 'var(--muted)';
+    return;
+  }
+  container.style.color = '';
+  for (let i = 0; i < datasets.length; i++) {
+    const ds = datasets[i];
+    if (!ds || ds.label == null) continue;
+    const label = document.createElement('label');
+    if (ds.hidden) label.classList.add('off');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = !ds.hidden;
+    cb.addEventListener('change', () => {
+      ds.hidden = !cb.checked;
+      if (ds.hidden) label.classList.add('off');
+      else label.classList.remove('off');
+      chart.update();
+    });
+    const swatch = document.createElement('span');
+    swatch.className = 'swatch';
+    swatch.style.background = ds.borderColor || ds.backgroundColor || '#888';
+    label.appendChild(cb);
+    label.appendChild(swatch);
+    label.appendChild(document.createTextNode(' ' + ds.label));
+    container.appendChild(label);
+  }
+}
+
+function installChartControls(chart) {
+  const id = chart.canvas.id;
+  const toolbar = document.querySelector('.chart-toolbar[data-chart="' + id + '"]');
+  if (toolbar) {
+    toolbar.addEventListener('click', (ev) => {
+      const btn = ev.target.closest('button');
+      if (!btn) return;
+      const action = btn.getAttribute('data-action');
+      if (action === 'zoom-in') chart.zoom(1.25);
+      else if (action === 'zoom-out') chart.zoom(0.8);
+      else if (action === 'reset') chart.resetZoom();
+    });
+  }
+  // Plain wheel/two-finger scroll = pan; Ctrl/Cmd+wheel = zoom (delegated
+  // to chartjs-plugin-zoom which has wheel.modifierKey='ctrl').
+  const canvas = chart.canvas;
+  canvas.addEventListener('wheel', (ev) => {
+    if (ev.ctrlKey || ev.metaKey) return;
+    ev.preventDefault();
+    const dx = -ev.deltaX;
+    const dy = -ev.deltaY;
+    if (chart.pan && (dx || dy)) {
+      chart.pan({ x: dx, y: dy }, undefined, 'default');
+    }
+  }, { passive: false });
+  refreshChartLegend(chart);
 }
 
 // Published-benchmark estimates of competing real-time upscalers at
@@ -512,6 +670,11 @@ function buildCharts() {
   charts.grad = lineChart('chart-grad', 'grad norm', null, {
     xMin: 0, xMax: X_MAX_DEFAULT,
   });
+  // Wire toolbar buttons + custom checkbox legend + scroll-as-pan handler
+  // for every chart we just built.
+  for (const chart of Object.values(charts)) {
+    installChartControls(chart);
+  }
 }
 
 async function fetchJSON(url) {
