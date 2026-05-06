@@ -176,7 +176,19 @@ def test_mixed_dataset_single_source(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_sr_train_v6_smoke_exits_on_v6model_stub(tmp_path: Path) -> None:
+def _read_metrics_json(path: Path) -> dict:
+    import json as _json
+    return _json.loads(path.read_text())
+
+
+def test_sr_train_v6_smoke_passes_construction(tmp_path: Path) -> None:
+    """`--smoke` must construct V6Model successfully and exit zero.
+
+    Before the V6Model orchestrator landed (commit before this test was
+    last updated), --smoke exited on a NotImplementedError stub. Now
+    V6Model is real; --smoke must reach the construction-only success
+    path which writes a metrics.json sentinel and exits cleanly.
+    """
     repo_root = Path(__file__).resolve().parents[3]
     script = repo_root / "scripts" / "sr_train_v6.py"
     assert script.is_file(), f"script not found at {script}"
@@ -187,12 +199,14 @@ def test_sr_train_v6_smoke_exits_on_v6model_stub(tmp_path: Path) -> None:
         cwd=str(repo_root),
         capture_output=True, text=True, timeout=120,
     )
-    # Must exit zero — the V6Model stub branch is the success path.
     combined = res.stdout + res.stderr
     assert res.returncode == 0, (
         f"smoke failed: code={res.returncode}\nstdout={res.stdout}\nstderr={res.stderr}"
     )
-    assert "V6Model not yet implemented" in combined, (
-        f"expected V6Model-stub message in output; got:\n{combined}"
+    assert "V6Model construction smoke passed" in combined or "smoke OK" in combined, (
+        f"expected v6-smoke-construction success message; got:\n{combined}"
     )
-    assert (out_dir / "metrics.json").exists(), "metrics.json was not created"
+    metrics_path = out_dir / "metrics.json"
+    assert metrics_path.exists(), "metrics.json was not created"
+    metrics = _read_metrics_json(metrics_path)
+    assert metrics["status"] in ("v6-smoke-construction-only", "v6-model-stub")

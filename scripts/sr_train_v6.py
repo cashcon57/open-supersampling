@@ -182,26 +182,50 @@ def main(argv: list[str] | None = None) -> int:
         if _is_main(rank):
             log.info("v6 mixed dataset length: %d", len(train_ds))
 
-    # Step 3 — V6Model (orchestrator stub raises NotImplementedError).
+    # Step 3 — V6Model construction. The full training loop lands in a
+    # follow-up commit; --smoke exits cleanly here once construction works.
+    from oss.sr.v6.model import V6Config, V6Model
+
+    cfg = V6Config(backbone=args.backbone)
     try:
-        from oss.sr.v6.model import V6Model
-        _model = V6Model(
-            backbone=args.backbone,
-            warm_start=args.warm_start,
-            patch_size=args.patch_size,
-        )
+        _model = V6Model(cfg)
     except NotImplementedError as e:
+        # Retained for backward-compat: if a future code path stubs out a
+        # V6Model component, --smoke can still exit cleanly.
         msg = f"{_NOT_IMPLEMENTED_PREFIX} {e}"
         if _is_main(rank):
             log.warning(msg)
             print(msg)
-        # Persist a stub metrics.json so the dashboard parser still reads
-        # something coherent.
         metrics_path = args.output_dir / "metrics.json"
         if not metrics_path.exists():
             metrics_path.write_text(json.dumps({"status": "v6-model-stub", "step": 0}))
         _ddp_cleanup()
         return 0
+
+    if _is_main(rank):
+        n_params = sum(p.numel() for p in _model.parameters())
+        log.info("V6Model constructed | backbone=%s params=%d", args.backbone, n_params)
+
+    # The training loop itself is the next commit. For --smoke, exit
+    # cleanly with a stub metrics.json once the model has constructed.
+    if args.smoke:
+        metrics_path = args.output_dir / "metrics.json"
+        if not metrics_path.exists():
+            metrics_path.write_text(json.dumps({
+                "status": "v6-smoke-construction-only",
+                "step": 0,
+                "backbone": args.backbone,
+                "n_params": sum(p.numel() for p in _model.parameters()),
+            }))
+        if _is_main(rank):
+            log.info("smoke OK | V6Model constructed; training loop not yet implemented")
+            print("V6Model construction smoke passed; training loop is the next commit.")
+        _ddp_cleanup()
+        return 0
+    raise NotImplementedError(
+        "v6 training loop is the next commit; run with --smoke to verify "
+        "model construction in the meantime."
+    )
 
     # ---- Steps 4-10: full training loop, will be implemented when V6Model
     # lands. Skeleton only below; not exercised by the current stub path.
