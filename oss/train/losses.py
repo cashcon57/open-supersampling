@@ -33,6 +33,67 @@ def relative_l2(pred: torch.Tensor, target: torch.Tensor, eps: float = 1e-2) -> 
     return ((pred - target).pow(2) / denom).mean()
 
 
+def warp_with_motion(
+    image_prev: torch.Tensor,
+    motion_lr: torch.Tensor,
+    scale_factor: float = 2.0,
+) -> torch.Tensor:
+    """Warp ``image_prev`` (HR) toward the current frame using LR motion.
+
+    Args:
+        image_prev:   (B, C, H_hr, W_hr) tensor to warp from frame t-1
+                      coordinates into frame t coordinates.
+        motion_lr:    (B, 2, H_lr, W_lr) — LR motion vectors (channel 0=x,
+                      1=y), pointing from current frame to previous frame
+                      in pixel displacements at LR scale.
+        scale_factor: HR / LR ratio (default 2.0).
+
+    Returns:
+        (B, C, H_hr, W_hr) warped tensor.
+
+    Implementation notes:
+        - Motion vectors are bilinearly upsampled to HR and scaled by
+          ``scale_factor`` to convert LR-pixel displacements to HR-pixel
+          displacements.
+        - The HR displacements are then normalized into ``grid_sample``'s
+          [-1, 1] coordinate system by ``2 / extent``.
+        - We clamp the sample grid to a broad [-2, 2] range to avoid NaN
+          from extreme motion; ``padding_mode='border'`` handles
+          out-of-bounds.
+    """
+    B, _, H_hr, W_hr = image_prev.shape
+
+    motion_hr = F.interpolate(
+        motion_lr, size=(H_hr, W_hr), mode="bilinear", align_corners=False
+    )
+    motion_hr = motion_hr * scale_factor
+
+    iy = (torch.arange(H_hr, device=image_prev.device, dtype=image_prev.dtype) + 0.5) * (
+        2.0 / H_hr
+    ) - 1.0
+    ix = (torch.arange(W_hr, device=image_prev.device, dtype=image_prev.dtype) + 0.5) * (
+        2.0 / W_hr
+    ) - 1.0
+    yy, xx = torch.meshgrid(iy, ix, indexing="ij")
+    base_grid = torch.stack([xx, yy], dim=-1).unsqueeze(0).expand(B, -1, -1, -1)
+
+    motion_grid = motion_hr.permute(0, 2, 3, 1)
+    extent = torch.tensor(
+        [W_hr, H_hr], device=image_prev.device, dtype=image_prev.dtype
+    )
+    motion_grid_norm = motion_grid * 2.0 / extent
+
+    sample_grid = (base_grid + motion_grid_norm).clamp(-2, 2)
+
+    return F.grid_sample(
+        image_prev,
+        sample_grid,
+        mode="bilinear",
+        padding_mode="border",
+        align_corners=False,
+    )
+
+
 def temporal_consistency_loss(
     pred_t: torch.Tensor,
     pred_prev: torch.Tensor,
@@ -42,65 +103,21 @@ def temporal_consistency_loss(
     """Penalize per-pixel difference between current frame's prediction and
     the motion-warped previous prediction. Encourages temporal stability.
 
+    Note: this bare form penalizes ANY frame-to-frame change, including
+    correct change matched by GT motion. For training v6 prefer the
+    paired-warp form computed inline in V6CompositeLoss when both
+    pred_prev and target_prev are available.
+
     Args:
         pred_t:       (B, 3, H_hr, W_hr) — current frame's HR prediction.
         pred_prev:    (B, 3, H_hr, W_hr) — previous frame's HR prediction.
-        motion_lr:    (B, 2, H_lr, W_lr) — LR motion vectors (channel 0=x, 1=y),
-                      pointing from current frame to previous frame in pixel
-                      displacements at LR scale.
+        motion_lr:    (B, 2, H_lr, W_lr) — LR motion vectors.
         scale_factor: HR / LR ratio (default 2.0).
 
     Returns:
         Scalar L1 of (pred_t - warp(pred_prev, motion)).
-
-    Implementation notes:
-        - Motion vectors are bilinearly upsampled to HR and scaled by
-          ``scale_factor`` to convert LR-pixel displacements to HR-pixel
-          displacements.
-        - The HR displacements are then normalized into ``grid_sample``'s
-          [-1, 1] coordinate system by ``2 / extent``.
-        - We clamp the sample grid to a broad [-2, 2] range to avoid NaN
-          from extreme motion; ``padding_mode='border'`` handles out-of-bounds.
     """
-    B, _, H_hr, W_hr = pred_t.shape
-
-    motion_hr = F.interpolate(
-        motion_lr, size=(H_hr, W_hr), mode="bilinear", align_corners=False
-    )
-    motion_hr = motion_hr * scale_factor  # LR-pixel disp -> HR-pixel disp
-
-    # Identity sampling grid in normalized [-1, 1] coords. With
-    # ``align_corners=False`` (which we use below to match the rest of the
-    # pipeline's interpolate calls), pixel centers lie at
-    # ``(2i + 1)/N - 1`` rather than ``linspace(-1, 1, N)``. Using the wrong
-    # convention here introduces a half-pixel shift that breaks the
-    # zero-motion-identical-frames invariant.
-    iy = (torch.arange(H_hr, device=pred_t.device, dtype=pred_t.dtype) + 0.5) * (
-        2.0 / H_hr
-    ) - 1.0
-    ix = (torch.arange(W_hr, device=pred_t.device, dtype=pred_t.dtype) + 0.5) * (
-        2.0 / W_hr
-    ) - 1.0
-    yy, xx = torch.meshgrid(iy, ix, indexing="ij")
-    base_grid = torch.stack([xx, yy], dim=-1).unsqueeze(0).expand(B, -1, -1, -1)
-
-    # (B, 2, H, W) -> (B, H, W, 2). Channel 0 = x-disp, channel 1 = y-disp.
-    motion_grid = motion_hr.permute(0, 2, 3, 1)
-    # Normalize HR-pixel displacements to grid-coord displacements.
-    extent = torch.tensor(
-        [W_hr, H_hr], device=pred_t.device, dtype=pred_t.dtype
-    )
-    motion_grid_norm = motion_grid * 2.0 / extent
-
-    sample_grid = (base_grid + motion_grid_norm).clamp(-2, 2)
-
-    pred_prev_warped = F.grid_sample(
-        pred_prev,
-        sample_grid,
-        mode="bilinear",
-        padding_mode="border",
-        align_corners=False,
-    )
+    pred_prev_warped = warp_with_motion(pred_prev, motion_lr, scale_factor)
     return (pred_t - pred_prev_warped).abs().mean()
 
 

@@ -302,6 +302,7 @@ class V6CompositeLoss(nn.Module):
         scale_factor: float = 2.0,
         pred_warped_prev: Optional[torch.Tensor] = None,
         target_warped_prev: Optional[torch.Tensor] = None,
+        target_prev: Optional[torch.Tensor] = None,
     ) -> tuple[torch.Tensor, dict[str, float]]:
         in_dtype = pred.dtype
         parts: dict[str, float] = {}
@@ -344,17 +345,42 @@ class V6CompositeLoss(nn.Module):
             w_gan = 0.0
         parts["gan"] = float(l_gan.detach())
 
-        # Temporal consistency. Prefer motion-aware warping from the shared
-        # temporal loss helper; keep the externally-warped slot for older
-        # callers and tests.
-        if pred_prev is not None and motion_lr is not None:
+        # Temporal consistency. Audit finding HIGH-H1: the bare form
+        # |pred_t - warp(pred_prev)| penalizes ANY frame-to-frame change,
+        # including correct change matched by GT motion. The paired form:
+        #
+        #   l_temp = | |warp(pred_prev) - pred_t| - |warp(target_prev) - target_t| |
+        #
+        # only fires when the prediction is MORE temporally inconsistent
+        # than the target would be under the same motion warp. Fires when
+        # the trainer threads target_prev OR pre-warped tensors. Falls
+        # back to the bare form (logged separately) when only pred_prev
+        # is available.
+        if (
+            pred_prev is not None
+            and target_prev is not None
+            and motion_lr is not None
+        ):
+            from oss.train.losses import warp_with_motion
+            pred_prev_w = warp_with_motion(pred_prev, motion_lr, scale_factor)
+            with torch.no_grad():
+                target_prev_w = warp_with_motion(target_prev, motion_lr, scale_factor)
+            pred_residual = (pred - pred_prev_w).abs()
+            target_residual = (target - target_prev_w).abs()
+            l_temp = (pred_residual - target_residual).abs().mean()
+            w_temp = _W_TEMPORAL
+        elif pred_warped_prev is not None and target_warped_prev is not None:
+            pred_residual = (pred - pred_warped_prev).abs()
+            target_residual = (target - target_warped_prev).abs().detach()
+            l_temp = (pred_residual - target_residual).abs().mean()
+            w_temp = _W_TEMPORAL
+        elif pred_prev is not None and motion_lr is not None:
+            # Bare form fallback — trainer didn't thread target_prev.
             l_temp = temporal_consistency_loss(
                 pred, pred_prev, motion_lr, scale_factor=scale_factor,
             )
             w_temp = _W_TEMPORAL
-        elif pred_warped_prev is not None and target_warped_prev is not None:
-            l_temp = (pred_warped_prev - target_warped_prev).abs().mean()
-            w_temp = _W_TEMPORAL
+            parts["temporal_unpaired"] = float(l_temp.detach())
         else:
             l_temp = pred.new_zeros(())
             w_temp = 0.0

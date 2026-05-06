@@ -186,21 +186,43 @@ def test_composite_temporal_only_when_provided(composite: V6CompositeLoss):
     _, parts_no_temp = composite(pred, target, fake_logits=None, step=0)
     assert parts_no_temp["temporal"] == 0.0
 
+    # Externally pre-warped form. Audit HIGH-H1 fix: the paired-warp
+    # residual = | |pred - warp(pred_prev)| - |target - warp(target_prev)| |.
     pwp = _rand((1, 3, 32, 32))
     twp = _rand((1, 3, 32, 32))
     _, parts_temp = composite(
         pred, target, fake_logits=None, step=0,
         pred_warped_prev=pwp, target_warped_prev=twp,
     )
-    expected = float((pwp - twp).abs().mean())
-    assert parts_temp["temporal"] == pytest.approx(expected, rel=1e-5, abs=1e-7)
+    expected_paired = float(
+        ((pred.detach() - pwp).abs() - (target - twp).abs()).abs().mean()
+    )
+    assert parts_temp["temporal"] == pytest.approx(expected_paired, rel=1e-5, abs=1e-7)
 
+    # Bare-form fallback when only pred_prev + motion provided (no target_prev).
+    # Logged under temporal_unpaired, weighted same as paired form.
     pred_prev = _rand((1, 3, 32, 32))
     motion = torch.zeros(1, 2, 16, 16)
     _, parts_motion = composite(
         pred, target, fake_logits=None, step=0,
         pred_prev=pred_prev, motion_lr=motion, scale_factor=2.0,
     )
-    assert parts_motion["temporal"] == pytest.approx(
-        float((pred - pred_prev).abs().mean().detach()), rel=1e-5, abs=1e-7,
+    expected_bare = float((pred - pred_prev).abs().mean().detach())
+    assert parts_motion["temporal"] == pytest.approx(expected_bare, rel=1e-5, abs=1e-7)
+    assert parts_motion.get("temporal_unpaired") == pytest.approx(
+        expected_bare, rel=1e-5, abs=1e-7,
     )
+
+    # Paired form when target_prev IS provided alongside motion: should
+    # match the externally-pre-warped paired form (motion = 0 -> warp is identity).
+    target_prev = _rand((1, 3, 32, 32))
+    _, parts_full = composite(
+        pred, target, fake_logits=None, step=0,
+        pred_prev=pred_prev, target_prev=target_prev,
+        motion_lr=motion, scale_factor=2.0,
+    )
+    expected_full = float(
+        ((pred.detach() - pred_prev).abs() - (target - target_prev).abs()).abs().mean()
+    )
+    assert parts_full["temporal"] == pytest.approx(expected_full, rel=1e-5, abs=1e-7)
+    assert "temporal_unpaired" not in parts_full

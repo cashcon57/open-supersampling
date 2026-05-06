@@ -1,9 +1,11 @@
 """Cosine LR with warm restarts for v6 training.
 
 Per v6 memo §6: ``2e-4 cosine + 3 warm restarts, T_0=50_000, T_mult=1``,
-``max_steps=300_000`` (= 4 × 75K cycles when T_mult=1, but the spec uses
-T_0=50K → 6 cycles; we honor the documented value here and let the caller
-set T_0 if they want a different layout).
+``max_steps=300_000``. With T_mult=1, 3 restarts means 4 cycles × 50K =
+200K total — the last 100K of training would run at LR=0. Pre-launch
+audit caught this. Default ``num_restarts`` here is bumped to 5 so the
+schedule covers 6 cycles × 50K = 300K. Callers running shorter recipes
+should pass ``num_restarts`` explicitly to match their max_steps.
 
 Why hand-roll this instead of using ``torch.optim.lr_scheduler.CosineAnnealingWarmRestarts``?
 The torch built-in counts in epochs and restarts on hitting ``T_cur``; we
@@ -43,7 +45,7 @@ class CosineLRWithWarmRestarts:
         base_lr: float,
         T_0: int = 50_000,
         T_mult: float = 1.0,
-        num_restarts: int = 3,
+        num_restarts: int = 5,
     ):
         if T_0 < 1:
             raise ValueError(f"T_0 must be >= 1, got {T_0}")

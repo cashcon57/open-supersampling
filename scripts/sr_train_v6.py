@@ -114,7 +114,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="GAN warmup until this step (pixel-only before).")
     p.add_argument("--T0", type=int, default=50_000,
                    help="Cosine warm-restart period (T_mult=1).")
-    p.add_argument("--num-restarts", type=int, default=3)
+    p.add_argument(
+        "--num-restarts", type=int, default=5,
+        help="Cosine warm restarts. Default 5 makes the schedule cover "
+             "6 cycles x T_0 = 300K steps with T_0=50000 (memo §6 max_steps). "
+             "Audit found default=3 only covered 200K, leaving 100K at LR=0.",
+    )
 
     p.add_argument("--base-lr", type=float, default=2e-4)
     p.add_argument("--weight-decay", type=float, default=1e-4)
@@ -676,6 +681,7 @@ def train_step(
     with _autocast_for(device, args.bf16):
         traj_len = int(lr_inputs.shape[1])
         pred_prev: Optional[torch.Tensor] = None
+        target_prev: Optional[torch.Tensor] = None
         for frame_idx in range(traj_len):
             module = _unwrap(generator)
             if frame_idx == 1 and hasattr(module, "_canvas_state"):
@@ -701,6 +707,10 @@ def train_step(
                 pred_prev=pred_prev,
                 motion_lr=motion_lr,
                 scale_factor=float(getattr(_unwrap(generator), "scale", 2)),
+                # target_prev enables the paired-warp form of the
+                # temporal-consistency loss (audit HIGH-H1 fix). Without it
+                # the loss penalizes correct frame-to-frame change.
+                target_prev=target_prev,
             )
             total_g_loss = frame_loss if total_g_loss is None else total_g_loss + frame_loss
             for k, v in parts.items():
@@ -708,6 +718,7 @@ def train_step(
             preds.append(pred)
             targets.append(target[:, frame_idx])
             pred_prev = pred
+            target_prev = target[:, frame_idx]
     assert total_g_loss is not None
     g_loss = total_g_loss
     if not torch.isfinite(g_loss):
