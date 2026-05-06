@@ -135,9 +135,9 @@ class V6Model(nn.Module):
         )
 
         # Step counter for periodic prune; advances on every training-step
-        # call to ``maybe_prune()``. Not a buffer — caller is expected to
-        # drive it through the trainer.
-        self._step_count: int = 0
+        # call to ``maybe_prune()``. Registered so checkpoints resume pruning
+        # cadence instead of silently restarting it.
+        self.register_buffer("_step_count", torch.zeros((), dtype=torch.long))
 
         # zero_gbuffer_into_backbone is part of the saved-args contract
         # carried over from v5 for warm-start ckpts. v6 backbones are
@@ -155,6 +155,7 @@ class V6Model(nn.Module):
         self._canvas_state = None
         self._st_state = None
         self.keyframe_mask.reset()
+        self._step_count.zero_()
 
     def has_canvas(self) -> bool:
         return self._canvas_state is not None and self._canvas_state.count > 0
@@ -183,7 +184,7 @@ class V6Model(nn.Module):
         # Construct cross-attention tokens from the active subset of canvas
         # Gaussians. Empty canvas (first frame, fresh state) yields K=0
         # tokens — fusion module short-circuits to identity.
-        tokens = self._build_canvas_tokens(feats)
+        tokens = self._build_canvas_tokens(feats, frame_index=frame_index)
 
         refined = self.fusion(feats, tokens)
         rgb_hr = self.upsample(refined)
@@ -198,14 +199,18 @@ class V6Model(nn.Module):
     # ST-score-driven pruning hook
     # ------------------------------------------------------------------
 
-    def maybe_prune(self) -> int:
+    def maybe_prune(self, step: Optional[int] = None) -> int:
         """Called by the trainer once per step. Returns the number of
         Gaussians pruned (0 if not a prune step or canvas empty).
         """
-        self._step_count += 1
+        if step is None:
+            self._step_count.add_(1)
+            step_index = int(self._step_count.item())
+        else:
+            step_index = int(step)
         if self._canvas_state is None or self._st_state is None:
             return 0
-        if self._step_count % self.cfg.prune_every != 0:
+        if step_index % self.cfg.prune_every != 0:
             return 0
         from oss.sr.v6.st_variation_score import prune_by_st_score
         before = int(self._canvas_state.count)
@@ -220,7 +225,11 @@ class V6Model(nn.Module):
     # Token construction (private)
     # ------------------------------------------------------------------
 
-    def _build_canvas_tokens(self, feats: torch.Tensor) -> torch.Tensor:
+    def _build_canvas_tokens(
+        self,
+        feats: torch.Tensor,
+        frame_index: int = 0,
+    ) -> torch.Tensor:
         """Project the active subset of canvas Gaussians into (B, K, token_dim)
         cross-attention tokens. Empty-canvas case returns shape (B, 0, token_dim)
         which the fusion module handles as identity-passthrough.
@@ -232,9 +241,10 @@ class V6Model(nn.Module):
         # reset, this rebuilds; subsequent intermediate frames inherit.
         # The mask-cache returns a (N,) boolean tensor over alive Gaussians.
         active = self.keyframe_mask.get_mask(
-            frame_index=self._step_count,
+            frame_index=frame_index,
             canvas=self._canvas_state,
             view_matrix=None,  # the cache's bbox-test handles None as identity
+            viewport_hw=tuple(feats.shape[-2:]),
         )
         if active is None or active.sum() == 0:
             return feats.new_zeros((B, 0, self.cfg.token_dim))

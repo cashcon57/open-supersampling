@@ -70,7 +70,7 @@ def _three_sigma_radius(scales: torch.Tensor) -> torch.Tensor:
 
 def _compute_active_mask(
     canvas,
-    view_matrix: torch.Tensor,
+    view_matrix: torch.Tensor | None,
     viewport_hw: tuple[int, int] | None,
 ) -> torch.Tensor:
     """Binary mask of Gaussians whose projected 3-sigma bbox hits the viewport."""
@@ -92,7 +92,13 @@ def _compute_active_mask(
     live_pos = positions[:n_live]
     live_scales = scales[:n_live]
 
-    proj = _project_centers(live_pos, view_matrix.to(live_pos.device).to(live_pos.dtype))
+    if view_matrix is None:
+        proj = live_pos
+    else:
+        proj = _project_centers(
+            live_pos,
+            view_matrix.to(live_pos.device).to(live_pos.dtype),
+        )
     radius = _three_sigma_radius(live_scales).to(proj.dtype)
 
     if viewport_hw is None:
@@ -150,7 +156,7 @@ class KeyframeActiveMaskCache:
         self,
         frame_index: int,
         canvas,
-        view_matrix: torch.Tensor,
+        view_matrix: torch.Tensor | None,
         viewport_hw: tuple[int, int] | None = None,
     ) -> torch.Tensor:
         """Return ``(N,)`` boolean active mask for ``frame_index``.
@@ -161,7 +167,8 @@ class KeyframeActiveMaskCache:
             canvas: duck-typed Gaussian field (must expose ``positions``,
                 ``scales``; may expose ``count``, ``output_hw``).
             view_matrix: 2D affine transform from canvas-space to
-                screen-space (see ``_project_centers``).
+                screen-space (see ``_project_centers``). ``None`` is
+                treated as identity.
             viewport_hw: ``(H, W)``. Defaults to ``canvas.output_hw`` if
                 present.
 

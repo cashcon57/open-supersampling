@@ -8,10 +8,12 @@ forwards work end-to-end.
 """
 from __future__ import annotations
 
+from unittest.mock import Mock
+
 import torch
 import pytest
 
-from oss.sr.v6.model import V6Config, V6Model
+from oss.sr.v6.model import CanvasState, V6Config, V6Model
 
 
 def _tiny_model(**overrides):
@@ -28,6 +30,24 @@ def _tiny_model(**overrides):
     for k, v in overrides.items():
         setattr(cfg, k, v)
     return V6Model(cfg)
+
+
+def _canvas_state(count: int, token_dim: int) -> CanvasState:
+    positions = torch.stack(
+        [
+            torch.linspace(4.0, 28.0, count),
+            torch.linspace(6.0, 26.0, count),
+        ],
+        dim=-1,
+    )
+    return CanvasState(
+        positions=positions,
+        scales=torch.ones(count, 2),
+        rotations=torch.zeros(count),
+        opacities=torch.ones(count),
+        colors=torch.randn(count, token_dim),
+        count=count,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -65,6 +85,38 @@ def test_v6model_forward_first_frame_shape():
     out = m(lr, motion_lr=None, frame_index=0)
     assert out.shape == (1, 3, 64, 64), f"expected HR (1,3,64,64); got {tuple(out.shape)}"
     assert torch.isfinite(out).all()
+
+
+def test_v6model_empty_canvas_tokens_short_circuit():
+    """Empty canvas must keep returning K=0 tokens for first-frame forwards."""
+    m = _tiny_model().train(False)
+    feats = torch.randn(1, m.feat_dim, 32, 32)
+    tokens = m._build_canvas_tokens(feats, frame_index=0)
+    assert tokens.shape == (1, 0, m.cfg.token_dim)
+    assert torch.isfinite(tokens).all()
+
+
+def test_v6model_forward_with_nonempty_canvas():
+    m = _tiny_model()
+    m.train()
+    m._canvas_state = _canvas_state(count=8, token_dim=m.cfg.token_dim)
+    lr = torch.randn(1, 9, 32, 32)
+
+    out = m(lr, frame_index=0)
+    assert out.shape == (1, 3, 64, 64)
+    assert torch.isfinite(out).all()
+
+    loss = out.square().mean()
+    loss.backward()
+
+    canvas_grads = [
+        p.grad for p in m.canvas_to_token.parameters() if p.requires_grad
+    ]
+    fusion_grads = [p.grad for p in m.fusion.parameters() if p.requires_grad]
+    assert all(g is not None and torch.isfinite(g).all() for g in canvas_grads)
+    assert all(g is not None and torch.isfinite(g).all() for g in fusion_grads)
+    assert sum(float(g.abs().sum()) for g in canvas_grads) > 0.0
+    assert sum(float(g.abs().sum()) for g in fusion_grads) > 0.0
 
 
 def test_v6model_forward_softplus_output_is_non_negative():
@@ -157,6 +209,38 @@ def test_v6model_reset_state_clears_canvas_and_score():
     m.reset_state()
     assert m._canvas_state is None
     assert not m.has_canvas()
+
+
+def test_v6model_frame_index_threads_to_keyframe_cache():
+    m = _tiny_model(prune_every=100)
+    m._canvas_state = _canvas_state(count=8, token_dim=m.cfg.token_dim)
+    mask = torch.ones(8, dtype=torch.bool)
+    m.keyframe_mask.get_mask = Mock(return_value=mask)
+    lr = torch.randn(1, 9, 32, 32)
+
+    m.maybe_prune()
+    m(lr, frame_index=0)
+    m.maybe_prune()
+    m(lr, frame_index=10)
+
+    frame_indices = [
+        call.kwargs["frame_index"] for call in m.keyframe_mask.get_mask.call_args_list
+    ]
+    assert frame_indices == [0, 10]
+
+
+def test_v6model_step_count_serializes_and_resets():
+    m = _tiny_model()
+    for _ in range(17):
+        m.maybe_prune()
+    assert int(m._step_count.item()) == 17
+
+    restored = _tiny_model()
+    restored.load_state_dict(m.state_dict())
+    assert int(restored._step_count.item()) == 17
+
+    restored.reset_state()
+    assert int(restored._step_count.item()) == 0
 
 
 def test_v6model_maybe_prune_no_op_on_empty_canvas():
