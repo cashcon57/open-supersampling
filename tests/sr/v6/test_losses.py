@@ -98,7 +98,7 @@ def test_temporal_consistency_re_export_runs():
 
 @pytest.fixture(scope="module")
 def composite() -> V6CompositeLoss:
-    """Single instance to amortize VGG download."""
+    """Single instance to amortize VGG / LPIPS setup."""
     torch.manual_seed(0)
     return V6CompositeLoss(gan_warmup_until_step=20_000)
 
@@ -117,6 +117,29 @@ def test_multi_scale_vgg_min_input_size():
     loss.backward()
     assert pred.grad is not None
     assert torch.isfinite(pred.grad).all()
+
+
+def test_vgg_and_lpips_state_is_fp32(composite: V6CompositeLoss):
+    """Frozen perceptual backbones stay fp32 even when callers use autocast."""
+    vgg_state = [
+        t for t in composite.vgg.state_dict().values()
+        if torch.is_floating_point(t)
+    ]
+    assert vgg_state
+    assert {t.dtype for t in vgg_state} == {torch.float32}
+
+    assert composite._lpips is not None
+    lpips_state = [
+        t for t in composite._lpips.state_dict().values()
+        if torch.is_floating_point(t)
+    ]
+    assert lpips_state
+    assert {t.dtype for t in lpips_state} == {torch.float32}
+
+
+def test_composite_can_opt_out_of_lpips():
+    loss = V6CompositeLoss(gan_warmup_until_step=20_000, use_lpips=False)
+    assert loss._lpips is None
 
 
 def test_composite_forward_returns_parts(composite: V6CompositeLoss):

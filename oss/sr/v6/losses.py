@@ -19,8 +19,9 @@ only consume its logits. ``temporal_consistency_loss`` is re-exported from
 Design notes
 ------------
 - LPIPS and the multi-scale VGG features both walk a frozen torchvision VGG.
-  We instantiate them lazily and freeze (inference-mode + ``requires_grad_(False)``)
-  to keep the discriminator path the only adversarial signal.
+  We instantiate them in ``__init__`` and freeze (inference-mode +
+  ``requires_grad_(False)``) to keep the discriminator path the only
+  adversarial signal and keep the module graph DDP-safe before wrapping.
 - The wavelet term reuses ``oss.model.wavelet.SWT2D`` which already implements
   shift-invariant à trous SWT with circular boundary conditions and is
   unit-tested for round-trip accuracy. We use ``haar`` here (not ``db2`` like
@@ -157,6 +158,7 @@ class MultiScaleVGGLoss(nn.Module):
         # We only need up to the deepest relu we sample (relu5_1 = idx 29).
         max_idx = max(_VGG19_RELU_INDICES.values())
         self.features = nn.Sequential(*list(vgg.children())[: max_idx + 1])
+        self.features.float()
         self.features.train(False)
         for p in self.features.parameters():
             p.requires_grad_(False)
@@ -192,23 +194,24 @@ class MultiScaleVGGLoss(nn.Module):
         return feats
 
     def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        in_dtype = pred.dtype
-        # VGG pretrained weights are fp32; cast to fp32 for the forward.
-        p = pred.float()
-        t = target.float().detach()
-        # Imagenet-normalize.
-        p = (p - self.mean) / self.std
-        t = (t - self.mean) / self.std
+        with torch.autocast(device_type=pred.device.type, enabled=False):
+            in_dtype = pred.dtype
+            # VGG pretrained weights are fp32; cast to fp32 for the forward.
+            p = pred.float()
+            t = target.float().detach()
+            # Imagenet-normalize.
+            p = (p - self.mean) / self.std
+            t = (t - self.mean) / self.std
 
-        with torch.no_grad():
-            target_feats = self._extract(t)
-        # Re-run pred forward with grads enabled.
-        pred_feats = self._extract(p)
+            with torch.no_grad():
+                target_feats = self._extract(t)
+            # Re-run pred forward with grads enabled.
+            pred_feats = self._extract(p)
 
-        loss = p.new_zeros(())
-        for w, pf, tf in zip(self._layer_weights, pred_feats, target_feats):
-            loss = loss + w * (pf - tf).abs().mean()
-        return loss.to(in_dtype)
+            loss = p.new_zeros(())
+            for w, pf, tf in zip(self._layer_weights, pred_feats, target_feats):
+                loss = loss + w * (pf - tf).abs().mean()
+            return loss.to(in_dtype)
 
 
 def multi_scale_vgg_loss(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
@@ -267,19 +270,22 @@ class V6CompositeLoss(nn.Module):
     pre-weight scalar (for dashboard plotting). Total loss is a weighted sum.
     """
 
-    def __init__(self, gan_warmup_until_step: int = 20_000):
+    def __init__(self, gan_warmup_until_step: int = 20_000, use_lpips: bool = True):
         super().__init__()
         self.gan_warmup_until_step = int(gan_warmup_until_step)
+        self.use_lpips = bool(use_lpips)
 
-        # Lazy-instantiated submodules (keep CPU smoke tests cheap).
         self._lpips: Optional[nn.Module] = None
         self.vgg: MultiScaleVGGLoss = MultiScaleVGGLoss()
+        if self.use_lpips:
+            self._init_lpips()
 
     def _init_lpips(self) -> None:
         if self._lpips is not None:
             return
         import lpips as _lpips_pkg
         net = _lpips_pkg.LPIPS(net="vgg", verbose=False)
+        net.float()
         net.train(False)
         for p in net.parameters():
             p.requires_grad_(False)
@@ -305,14 +311,17 @@ class V6CompositeLoss(nn.Module):
         l_vgg = self.vgg.to(pred.device)(pred.clamp(0.0, 1.0), target.clamp(0.0, 1.0))
         parts["vgg"] = float(l_vgg.detach())
 
-        # LPIPS-VGG. lpips expects [-1, 1]; we operate on [0, 1] and remap.
-        self._init_lpips()
-        assert self._lpips is not None
-        lpips_module = self._lpips.to(pred.device)
-        # lpips weights are fp32 — cast and cast back for bf16 safety.
-        p32 = pred.float().clamp(0.0, 1.0) * 2.0 - 1.0
-        t32 = target.float().clamp(0.0, 1.0).detach() * 2.0 - 1.0
-        l_lpips = lpips_module(p32, t32).mean().to(in_dtype)
+        if self.use_lpips:
+            # LPIPS-VGG. lpips expects [-1, 1]; we operate on [0, 1] and remap.
+            assert self._lpips is not None
+            lpips_module = self._lpips.to(pred.device)
+            # lpips weights are fp32 — cast and cast back for bf16 safety.
+            with torch.autocast(device_type=pred.device.type, enabled=False):
+                p32 = pred.float().clamp(0.0, 1.0) * 2.0 - 1.0
+                t32 = target.float().clamp(0.0, 1.0).detach() * 2.0 - 1.0
+                l_lpips = lpips_module(p32, t32).mean().to(in_dtype)
+        else:
+            l_lpips = pred.new_zeros(())
         parts["lpips"] = float(l_lpips.detach())
 
         # Wavelet L1 (haar, 2 levels, HF subbands).
