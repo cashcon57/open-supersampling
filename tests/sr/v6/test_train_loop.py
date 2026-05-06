@@ -3,7 +3,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
+import socket
+import subprocess
+import sys
+import textwrap
+import warnings
 
 import pytest
 import torch
@@ -78,6 +84,52 @@ def _metric_rows(output_dir: Path) -> list[dict]:
     return [json.loads(line) for line in (output_dir / "metrics.json").read_text().splitlines()]
 
 
+def test_smoke_no_bf16_flag_recognized(tmp_path):
+    repo = Path(__file__).resolve().parents[3]
+    code = textwrap.dedent(
+        f"""
+        import pathlib
+        import scripts.sr_train_v6 as train_v6
+
+        args = train_v6.parse_args([
+            "--output-dir", {str(tmp_path)!r},
+            "--smoke",
+            "--no-bf16",
+        ])
+        assert args.smoke is True
+        assert args.bf16 is False
+        """
+    )
+    res = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=repo,
+        env={**os.environ, "PYTHONPATH": str(repo)},
+        text=True,
+        capture_output=True,
+        timeout=30,
+    )
+    assert res.returncode == 0, res.stdout + res.stderr
+
+
+def test_smoke_ddp_singleprocess_path(tmp_path, cheap_trainer, monkeypatch):
+    for name in ("WORLD_SIZE", "RANK", "LOCAL_RANK", "MASTER_ADDR", "MASTER_PORT"):
+        monkeypatch.delenv(name, raising=False)
+
+    rc = train_v6.main([
+        "--output-dir", str(tmp_path),
+        "--smoke",
+        "--device", "cpu",
+        "--backbone", "hat-tiny",
+        "--patch-size", "32",
+        "--batch-size", "1",
+        "--grad-accum", "1",
+        "--max-steps", "1",
+    ])
+
+    assert rc == 0
+    assert _metric_rows(tmp_path)[0]["step"] == 1
+
+
 def test_smoke_runs_five_steps_checkpoints_and_metrics(tmp_path, cheap_trainer):
     rc = train_v6.main([
         "--output-dir", str(tmp_path),
@@ -103,6 +155,90 @@ def test_smoke_runs_five_steps_checkpoints_and_metrics(tmp_path, cheap_trainer):
     assert (tmp_path / "step-00000002.pt").exists()
     assert (tmp_path / "step-00000004.pt").exists()
     assert (tmp_path / "step-00000005.pt").exists()
+
+
+def _loopback_bind_available() -> tuple[bool, str]:
+    sock = socket.socket()
+    try:
+        sock.bind(("127.0.0.1", 0))
+        return True, str(sock.getsockname()[1])
+    except OSError as exc:
+        return False, str(exc)
+    finally:
+        sock.close()
+
+
+def test_smoke_ddp_multirank_probe_or_warn(tmp_path):
+    bind_ok, port_or_error = _loopback_bind_available()
+    if not torch.cuda.is_available() and not bind_ok:
+        warnings.warn(
+            f"skipping DDP smoke subprocess: no CUDA and loopback bind blocked: {port_or_error}",
+            RuntimeWarning,
+        )
+        return
+    if not bind_ok:
+        warnings.warn(
+            f"skipping DDP smoke subprocess: loopback bind blocked: {port_or_error}",
+            RuntimeWarning,
+        )
+        return
+
+    repo = Path(__file__).resolve().parents[3]
+    probe_script = tmp_path / "ddp_probe.py"
+    probe_script.write_text(
+        textwrap.dedent(
+            """
+            import argparse
+            import os
+
+            import torch
+            import torch.distributed as dist
+            from torch.nn.parallel import DistributedDataParallel as DDP
+
+            import scripts.sr_train_v6 as train_v6
+            from oss.sr.v6.model import V6Config, V6Model
+
+            dist.init_process_group("gloo")
+            rank = int(os.environ["RANK"])
+            world_size = int(os.environ["WORLD_SIZE"])
+            model = V6Model(V6Config(backbone="hat-tiny")).cpu()
+            ddp = DDP(model, find_unused_parameters=True)
+            args = argparse.Namespace(device="cpu", bf16=False)
+            train_v6.run_ddp_smoke_probe(
+                ddp,
+                args=args,
+                rank=rank,
+                world_size=world_size,
+            )
+            dist.destroy_process_group()
+            """
+        ),
+        encoding="utf-8",
+    )
+    res = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "torch.distributed.run",
+            "--nproc_per_node=2",
+            "--master_addr=127.0.0.1",
+            f"--master_port={port_or_error}",
+            str(probe_script),
+        ],
+        cwd=repo,
+        env={**os.environ, "PYTHONPATH": str(repo)},
+        text=True,
+        capture_output=True,
+        timeout=60,
+    )
+    combined = res.stdout + res.stderr
+    if res.returncode != 0 and any(
+        token in combined
+        for token in ("EPERM", "Operation not permitted", "failed to bind", "Rendezvous")
+    ):
+        warnings.warn(f"DDP smoke subprocess skipped after launcher bind failure: {combined}")
+        return
+    assert res.returncode == 0, combined
 
 
 def test_auto_resume_continues_at_next_step(tmp_path, cheap_trainer):

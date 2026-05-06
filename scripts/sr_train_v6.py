@@ -125,7 +125,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     p.add_argument("--device",
                    default="cuda" if torch.cuda.is_available() else "cpu")
-    p.add_argument("--bf16", action="store_true", default=True)
+    p.add_argument("--bf16", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--num-workers", type=int, default=4)
     p.add_argument("--seed", type=int, default=0)
 
@@ -560,6 +560,84 @@ def train_step(
     }
 
 
+def _install_synthetic_canvas_state(model: torch.nn.Module, device: torch.device) -> None:
+    from oss.sr.v6.model import CanvasState
+
+    token_dim = int(model.cfg.token_dim)
+    canvas = CanvasState(
+        positions=torch.tensor([[4.0, 4.0], [10.0, 10.0]], device=device),
+        scales=torch.ones(2, 2, device=device),
+        rotations=torch.zeros(2, device=device),
+        opacities=torch.ones(2, device=device),
+        colors=torch.randn(2, token_dim, device=device) * 0.01,
+        count=2,
+    )
+    model._canvas_state = canvas
+    model.keyframe_mask._cached_mask = torch.ones(2, dtype=torch.bool, device=device)
+    model.keyframe_mask._cached_keyframe = 0
+    if torch.is_tensor(model._step_count):
+        model._step_count.fill_(1)
+    else:
+        model._step_count = 1
+
+
+def run_ddp_smoke_probe(
+    generator: torch.nn.Module,
+    *,
+    args: argparse.Namespace,
+    rank: int,
+    world_size: int,
+) -> None:
+    """Exercise DDP sync on both empty-canvas and non-empty-canvas branches."""
+    if world_size <= 1:
+        return
+
+    import torch.distributed as dist
+
+    if not dist.is_available() or not dist.is_initialized():
+        raise RuntimeError("DDP smoke probe requires an initialized process group")
+
+    module = _unwrap(generator)
+    device = next(module.parameters()).device
+    generator.train()
+
+    lr_inputs = torch.randn(
+        1,
+        int(module.cfg.in_channels),
+        16,
+        16,
+        device=device,
+    )
+    motion = torch.zeros(1, 2, 16, 16, device=device)
+
+    for p in generator.parameters():
+        p.grad = None
+    module.reset_state(device=device)
+    empty_out = generator(lr_inputs, motion_lr=motion, frame_index=0)
+    empty_loss = empty_out.mean()
+    empty_loss.backward()
+
+    for p in generator.parameters():
+        p.grad = None
+    module.reset_state(device=device)
+    _install_synthetic_canvas_state(module, device)
+    canvas_out = generator(lr_inputs, motion_lr=motion, frame_index=1)
+    canvas_loss = canvas_out.mean()
+    canvas_loss.backward()
+
+    canvas_grad = module.canvas_to_token.weight.grad
+    if canvas_grad is None or not torch.isfinite(canvas_grad).all():
+        raise RuntimeError("DDP smoke probe did not exercise canvas_to_token gradients")
+
+    probe = torch.tensor([float(rank + 1)], device=device)
+    dist.all_reduce(probe, op=dist.ReduceOp.SUM)
+    expected = world_size * (world_size + 1) / 2.0
+    if not torch.isfinite(probe).all() or abs(float(probe.item()) - expected) > 1e-5:
+        raise RuntimeError(
+            f"DDP all_reduce probe returned {float(probe.item())}, expected {expected}"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Dataset construction
 # ---------------------------------------------------------------------------
@@ -680,6 +758,16 @@ def main(argv: list[str] | None = None) -> int:
             }
             generator_for_train = DDP(generator, **ddp_kwargs)
             discriminator_for_train = DDP(discriminator, **ddp_kwargs)
+
+        if args.smoke and world_size > 1:
+            run_ddp_smoke_probe(
+                generator_for_train,
+                args=args,
+                rank=rank,
+                world_size=world_size,
+            )
+            for p in generator.parameters():
+                p.grad = None
 
         resume_step = load_latest_checkpoint(
             args.output_dir,
