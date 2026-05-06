@@ -54,8 +54,13 @@ CODEX_TIMESTAMP_RE = re.compile(
 RUN_DIR_PATTERNS = (
     "srcnn-v*-temporal*",
     "srcnn-v6-*",
+    "srcnn-v5-*",
+    "srcnn-v4-*",
+    "srcnn-v3-*",
     "srcnn-v5-pixel-temporal*",
     "srcnn-v5-gaussian-temporal*",
+    "srcnn-prod-v*",   # legacy v3 / v4 dirs (e.g. srcnn-prod-v4-lpips)
+    "srcnn-prod",      # earliest v3-pre dir
 )
 
 # ---------------------------------------------------------------------------
@@ -237,6 +242,27 @@ HTML = """<!DOCTYPE html>
   .status-dot.live { background: var(--good); animation: pulse 1.5s infinite; }
   .status-dot.idle { background: var(--muted); }
   .status-dot.dead { background: var(--bad); }
+  .training-active-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    margin-left: 12px; padding: 3px 10px;
+    border: 1px solid #1e4f29; border-radius: 999px;
+    background: rgba(63,185,80,0.08);
+    font-size: 12px; font-weight: 500; vertical-align: middle;
+    color: var(--good); animation: trainingPulse 2.4s ease-in-out infinite;
+  }
+  .training-active-chip[hidden] { display: none; }
+  .training-active-label { letter-spacing: 0.4px; text-transform: uppercase; font-size: 11px; }
+  .training-spinner {
+    width: 10px; height: 10px; border-radius: 50%;
+    border: 1.5px solid rgba(63,185,80,0.25);
+    border-top-color: var(--good); border-right-color: var(--good);
+    animation: trainingSpin 0.8s linear infinite;
+  }
+  @keyframes trainingSpin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  @keyframes trainingPulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(63,185,80,0.0); }
+    50%      { box-shadow: 0 0 0 6px rgba(63,185,80,0.18); }
+  }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
   @keyframes codexFadeIn {
     from { opacity: 0; transform: translateY(4px); }
@@ -268,7 +294,13 @@ HTML = """<!DOCTYPE html>
 
 <div class="topbar">
   <div>
-    <h1><span class="status-dot" id="status-dot"></span>OSS Training Dashboard</h1>
+    <h1>
+      <span class="status-dot" id="status-dot"></span>OSS Training Dashboard
+      <span class="training-active-chip" id="training-active-chip" hidden>
+        <span class="training-spinner"></span>
+        <span class="training-active-label">training active</span>
+      </span>
+    </h1>
     <div class="sub" id="header-sub">loading…</div>
   </div>
   <div class="run-picker">
@@ -511,6 +543,12 @@ function setStatus(state, text) {
   const dot = document.getElementById('status-dot');
   dot.className = 'status-dot ' + state;
   document.getElementById('header-sub').textContent = text;
+  // 'live' state means metrics.json was modified within the last
+  // STALE_MS — surface the pulsing "training active" chip in the
+  // header so the user immediately sees a run is in progress
+  // (independent of any panel data showing).
+  const chip = document.getElementById('training-active-chip');
+  if (chip) chip.hidden = (state !== 'live');
 }
 
 function lineChart(canvasId, label, color, opts = {}) {
@@ -879,6 +917,26 @@ function withRun(url) {
   return u.pathname + u.search;
 }
 
+function shortRunLabel(name) {
+  // Strip the noisy srcnn- / srcnn-prod- prefix and collapse known suffixes
+  // so the run dropdown shows e.g. "v5-pixel" instead of
+  // "srcnn-v5-pixel-temporal-validated (metrics, score, viz)".
+  if (!name) return '';
+  let n = String(name);
+  // Common prefixes
+  n = n.replace(/^srcnn-prod-/, '');
+  n = n.replace(/^srcnn-/, '');
+  // Common verbose suffixes
+  n = n.replace(/-validated$/, '');
+  n = n.replace(/-temporal$/, '');
+  n = n.replace(/-codex-only$/, '');
+  // Pixel-temporal -> pixel; gaussian-temporal -> gaussian
+  n = n.replace(/-pixel-temporal/, '-pixel');
+  n = n.replace(/-gaussian-temporal/, '-gaussian');
+  // Heavy / standard / pico tier suffixes pass through.
+  return n;
+}
+
 async function initRunPicker() {
   const select = document.getElementById('run-select');
   if (!select) return;
@@ -910,11 +968,8 @@ async function initRunPicker() {
     for (const run of runs) {
       const opt = document.createElement('option');
       opt.value = run.name;
-      const bits = [];
-      if (run.has_train_log) bits.push('metrics');
-      if (run.has_score_log) bits.push('score');
-      if (run.has_viz) bits.push('viz');
-      opt.textContent = bits.length ? `${run.name} (${bits.join(', ')})` : run.name;
+      opt.textContent = shortRunLabel(run.name);
+      opt.title = run.name;  // full name on hover
       select.appendChild(opt);
     }
     select.value = currentRun;
