@@ -136,72 +136,51 @@ HTML = """<!DOCTYPE html>
   .log { font-family: var(--mono); font-size: 12px; white-space: pre-wrap;
          background: #0d1117; border: 1px solid var(--border); border-radius: 4px;
          padding: 12px; max-height: 360px; overflow-y: auto; line-height: 1.5; }
+  /* Codex log panel — match the real codex TUI: plain text inside a
+     <pre>, no per-line boxes, action blocks (exec+result) collapsed
+     into a one-line summary that expands to show the full output. */
   .codex-log {
-    font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-word;
+    font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: normal;
     background: #0d1117; border: 1px solid var(--border); border-radius: 4px;
-    padding: 12px; max-height: 480px; overflow-y: auto; line-height: 1.45;
-    color: var(--fg); display: block;
+    padding: 12px; max-height: 560px; overflow-y: auto; line-height: 1.45;
+    color: var(--fg); display: block; margin: 0;
   }
-  .codex-log .codex-entry-source {
-    display: flex; align-items: center; gap: 8px; margin: 12px 0 4px 0;
-    color: var(--muted); font-size: 11px; font-family: var(--mono);
+  .codex-log .codex-mode-label {
+    color: var(--muted); font-weight: 700; letter-spacing: 0.2px;
+    text-transform: lowercase;
   }
-  .codex-log .codex-entry-source::before {
-    content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--link);
-    opacity: 0.8;
+  .codex-log .codex-header { color: #6e7681; opacity: 0.7; }
+  .codex-log .codex-prompt { color: #79c0ff; opacity: 0.85; }
+  .codex-log .codex-reason { color: #c9d1d9; }
+  /* Action block: <details> wrapping exec command + result body. */
+  .codex-log .codex-action {
+    margin: 0; padding: 0; display: block;
   }
-  .codex-log .codex-section-header {
-    display: flex; align-items: center; gap: 7px; padding: 7px 0 3px 0; margin-top: 8px;
-    border-top: 1px solid #1b2129; font-weight: 700; letter-spacing: 0;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    text-transform: uppercase; font-size: 11px;
+  .codex-log .codex-action > summary {
+    cursor: pointer; padding: 1px 0; user-select: none;
+    list-style: none; white-space: pre-wrap; line-height: 1.5;
   }
-  .codex-log .codex-section-caret { width: 10px; color: var(--muted); font-size: 10px; }
-  .codex-log .codex-section-bar {
-    width: 3px; height: 14px; border-radius: 2px; background: currentColor;
+  .codex-log .codex-action > summary::-webkit-details-marker { display: none; }
+  .codex-log .codex-action > summary::before {
+    content: "▶ "; color: var(--muted); font-size: 10px; margin-right: 2px;
   }
-  .codex-log .codex-section-icon {
-    min-width: 32px; padding: 1px 5px; border: 1px solid currentColor; border-radius: 4px;
-    font-size: 10px; line-height: 1.2; text-align: center; opacity: 0.9;
+  .codex-log .codex-action[open] > summary::before { content: "▼ "; }
+  .codex-log .codex-action-prompt { color: #d2a8ff; font-weight: 700; }
+  .codex-log .codex-action-cmd    { color: #ffdf5d; }
+  .codex-log .codex-action-status { color: var(--muted); font-size: 11px; margin-left: 6px; }
+  .codex-log .codex-status-ok    { color: #3fb950; }
+  .codex-log .codex-status-err   { color: #f85149; }
+  .codex-log .codex-action-body {
+    margin: 4px 0 6px 14px; padding: 6px 8px;
+    background: #0f151c; border-left: 2px solid #27313a;
+    color: var(--fg); font-family: var(--mono); font-size: 11px;
+    white-space: pre; overflow-x: auto; max-height: 280px; overflow-y: auto;
   }
-  .codex-log .codex-section-prompt { color: #58a6ff; }
-  .codex-log .codex-section-reason { color: #79c0ff; }
-  .codex-log .codex-section-exec   { color: #d29922; }
-  .codex-log .codex-section-ok     { color: #3fb950; }
-  .codex-log .codex-section-err    { color: #f85149; }
-  .codex-log .codex-header { display: block; color: #6e7681; opacity: 0.7; }
-  .codex-log .codex-prompt { display: block; color: #79c0ff; opacity: 0.8; }
-  .codex-log .codex-reason {
-    display: block; color: #b7d9ff; padding-left: 18px; margin: 1px 0;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    line-height: 1.5; max-width: 104ch; word-break: normal;
-  }
-  .codex-log .codex-exec   { display: block; color: #ffdf5d; }
-  .codex-log code.cmd {
-    display: block; color: #ffdf5d; background: #111820; border: 1px solid #2b3139;
-    border-radius: 4px; padding: 6px 8px; margin: 4px 0; overflow-x: auto;
-    white-space: nowrap; font-family: var(--mono); word-break: normal;
-  }
-  .codex-log .codex-result { display: block; color: var(--fg); }
-  .codex-log .codex-diff-block {
-    display: block; margin: 6px 0; border: 1px solid #27313a; border-radius: 6px;
-    background: #0f151c; overflow: hidden;
-  }
-  .codex-log .codex-diff-block summary {
-    cursor: pointer; color: #d2a8ff; padding: 7px 9px; user-select: none;
-    font-family: var(--mono); font-size: 12px; list-style: none;
-  }
-  .codex-log .codex-diff-block summary::-webkit-details-marker { display: none; }
-  .codex-log .codex-diff-block[open] .codex-diff-carat { display: inline-block; transform: rotate(90deg); }
-  .codex-log .codex-diff-body {
-    border-top: 1px solid #27313a; padding: 6px 9px 8px 9px; overflow-x: auto;
-    white-space: pre; word-break: normal;
-  }
-  .codex-log .codex-diff-add    { display: block; color: #56d364; }
-  .codex-log .codex-diff-rm     { display: block; color: #ff7b72; }
-  .codex-log .codex-diff-add-hd { display: block; color: #3fb950; font-weight: 700; }
-  .codex-log .codex-diff-rm-hd  { display: block; color: #f85149; font-weight: 700; }
-  .codex-log .codex-diff-hunk   { display: block; color: #d2a8ff; font-weight: 700; }
+  .codex-log .codex-diff-add    { color: #56d364; }
+  .codex-log .codex-diff-rm     { color: #ff7b72; }
+  .codex-log .codex-diff-add-hd { color: #3fb950; font-weight: 700; }
+  .codex-log .codex-diff-rm-hd  { color: #f85149; font-weight: 700; }
+  .codex-log .codex-diff-hunk   { color: #d2a8ff; font-weight: 700; }
   .codex-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
                    margin-bottom: 8px; font-size: 12px; color: var(--muted); }
   .codex-toolbar select {
@@ -449,7 +428,7 @@ HTML = """<!DOCTYPE html>
         <span class="meta" id="codex-meta">–</span>
       </div>
     </div>
-    <div class="codex-log" id="codex-log">waiting for active codex logs…</div>
+    <pre class="codex-log" id="codex-log">waiting for active codex logs…</pre>
   </div>
 
 </div>

@@ -146,162 +146,144 @@ class Pretty:
 
 
 def render_html(text: str, keep_mcp: bool = False) -> str:
-    """Convert a codex-exec log body into an HTML fragment.
+    """Render a codex-exec log body as HTML that matches the real codex
+    TUI as closely as possible inside a single ``<pre>`` container.
 
-    Returns one big string of styled block/span elements for the OSS training
-    dashboard, which provides the matching CSS classes.
+    Layout principles:
+      * Reasoning + user prompts flow as plain colored text — no per-line
+        boxes, no per-line decorators. Newlines come from the source.
+      * Each ``exec`` + matching ``succeeded/exited`` block collapses into
+        a single ``<details>`` whose summary is ``$ <command>`` plus the
+        result status. The full result body lives in the expanded view.
+      * Diff hunks inside an action body get +/- coloring inline (still
+        plain text, no boxes).
+      * The dashboard CSS turns the wrapping ``<pre>`` into the scrollable
+        viewport; this renderer just emits inline spans + the action
+        ``<details>`` blocks.
     """
     import html as _html
 
     out: list[str] = []
-    pending_diff: list[str] = []
-    mode = HEADER
 
-    def html_escape(s: str) -> str:
+    def esc(s: str) -> str:
         return _html.escape(s, quote=False)
 
-    def line_class_for_mode(m: str) -> str:
-        return {
-            HEADER: "codex-header",
-            PROMPT: "codex-prompt",
-            REASON: "codex-reason",
-            EXEC: "codex-exec",
-            RESULT: "codex-result",
-        }.get(m, "codex-other")
-
-    def diff_html(line: str) -> str:
-        esc = html_escape(line)
+    def color_diff_line(line: str) -> str:
+        e = esc(line)
         if line.startswith("+++"):
-            return f'<span class="codex-diff-add-hd">{esc}</span>'
+            return f'<span class="codex-diff-add-hd">{e}</span>'
         if line.startswith("---") and not line.startswith("----"):
-            return f'<span class="codex-diff-rm-hd">{esc}</span>'
+            return f'<span class="codex-diff-rm-hd">{e}</span>'
         if line.startswith("@@"):
-            return f'<span class="codex-diff-hunk">{esc}</span>'
+            return f'<span class="codex-diff-hunk">{e}</span>'
         if line[:1] == "+":
-            return f'<span class="codex-diff-add">{esc}</span>'
+            return f'<span class="codex-diff-add">{e}</span>'
         if line[:1] == "-":
-            return f'<span class="codex-diff-rm">{esc}</span>'
-        return f'<span class="codex-result">{esc}</span>'
+            return f'<span class="codex-diff-rm">{e}</span>'
+        return e
 
-    def is_diff_line(line: str) -> bool:
-        return line.startswith("@@") or line[:1] in ("+", "-")
+    # --- action accumulation (exec + result rolled into one <details>) ---
+    action_cmd_lines: list[str] = []   # everything between `exec` and the
+                                       # ` succeeded/exited` marker.
+    action_status: Optional[str] = None  # "ok in 12ms" / "exit 1 in 5ms"
+    action_status_class: str = "ok"
+    action_body_lines: list[str] = []  # everything after the marker.
+    in_exec = False  # accumulating command lines
+    in_result = False  # accumulating result body
 
-    def diff_file(lines: list[str]) -> str:
-        for line in lines:
-            m = re.match(r"^\+\+\+ b/(.+)$", line)
-            if m:
-                return m.group(1)
-        return "(unnamed diff)"
+    def open_action() -> None:
+        nonlocal in_exec, in_result
+        nonlocal action_cmd_lines, action_status, action_status_class, action_body_lines
+        action_cmd_lines = []
+        action_status = None
+        action_status_class = "ok"
+        action_body_lines = []
+        in_exec = True
+        in_result = False
 
-    def flush_diff() -> None:
-        if not pending_diff:
+    def close_action() -> None:
+        nonlocal in_exec, in_result
+        if not (in_exec or in_result):
             return
-        added = sum(
-            1 for line in pending_diff
-            if line.startswith("+") and not line.startswith("+++")
+        # Render: <details><summary>$ cmd ⌁ status</summary><body></details>
+        cmd = " ".join(s.strip() for s in action_cmd_lines if s.strip()).strip()
+        if not cmd:
+            cmd = "(empty exec)"
+        # Collapse multi-shell prefixes for legibility:
+        #   "/bin/zsh -lc 'sed -n 1,40p file'" -> "sed -n 1,40p file"
+        m = re.match(r"^/bin/zsh -lc ['\"](.+)['\"](?:\s+in\s+.+)?$", cmd)
+        if m:
+            cmd = m.group(1)
+        status_txt = action_status or "running"
+        summary = (
+            f'<span class="codex-action-prompt">$</span> '
+            f'<span class="codex-action-cmd">{esc(cmd)}</span> '
+            f'<span class="codex-action-status codex-status-{action_status_class}">'
+            f'{esc(status_txt)}</span>'
         )
-        removed = sum(
-            1 for line in pending_diff
-            if line.startswith("-") and not line.startswith("---")
-        )
-        fname = html_escape(diff_file(pending_diff))
-        summary = f"diff: {added} lines added, {removed} lines removed, in {fname}"
-        body = "\n".join(diff_html(line) for line in pending_diff)
+        body_html = "\n".join(color_diff_line(b) for b in action_body_lines)
         out.append(
-            '<details class="codex-diff-block">'
-            f'<summary><span class="codex-diff-carat">▶</span> {summary}</summary>'
-            f'<div class="codex-diff-body">{body}</div>'
+            '<details class="codex-action">'
+            f'<summary>{summary}</summary>'
+            f'<pre class="codex-action-body">{body_html}</pre>'
             '</details>'
         )
-        pending_diff.clear()
+        in_exec = False
+        in_result = False
 
-    def reason_lines(line: str) -> list[str]:
-        if not line:
-            return [""]
-        return textwrap.wrap(
-            line,
-            width=100,
-            break_long_words=False,
-            break_on_hyphens=False,
-            replace_whitespace=False,
-            drop_whitespace=True,
-        ) or [line]
-
-    def section_html(label: str, kind: str) -> str:
-        return (
-            f'<div class="codex-section-header codex-section-{kind}">'
-            '<span class="codex-section-caret">▾</span>'
-            '<span class="codex-section-bar"></span>'
-            f'<span class="codex-section-icon" aria-hidden="true">{section_icon(kind)}</span>'
-            f'<span class="codex-section-label">{html_escape(label)}</span>'
-            '</div>'
-        )
-
-    def section_icon(kind: str) -> str:
-        return {
-            "prompt": "user",
-            "reason": "think",
-            "exec": "$",
-            "ok": "ok",
-            "err": "!",
-        }.get(kind, "log")
-
+    mode = HEADER
     for raw in text.splitlines():
         if not keep_mcp and MCP_ERROR_RE.search(raw):
             continue
         line = raw
 
-        # Mode transitions.
+        # Mode transitions: an action (exec block) gets closed and emitted
+        # the moment we see any non-action marker.
         if line == "user" and mode == HEADER:
-            flush_diff()
-            out.append(section_html("USER PROMPT", "prompt"))
+            close_action()
+            out.append('<span class="codex-mode-label">user prompt:</span>')
             mode = PROMPT
             continue
         if line == "codex":
-            flush_diff()
-            out.append(section_html("REASONING", "reason"))
+            close_action()
+            out.append('<span class="codex-mode-label">codex:</span>')
             mode = REASON
             continue
         if line == "exec":
-            flush_diff()
-            out.append(section_html("EXEC", "exec"))
+            close_action()
+            open_action()
             mode = EXEC
             continue
 
         m_ok = SUCCESS_RE.match(line)
         m_err = EXIT_RE.match(line)
         if m_ok and mode in (EXEC, RESULT):
-            flush_diff()
-            out.append(section_html(f"RESULT (ok in {m_ok.group(1)}ms)", "ok"))
+            action_status = f"✓ ok in {m_ok.group(1)}ms"
+            action_status_class = "ok"
+            in_exec = False
+            in_result = True
             mode = RESULT
             continue
         if m_err and mode in (EXEC, RESULT):
-            flush_diff()
-            out.append(
-                section_html(
-                    f"RESULT (exit {m_err.group(1)} in {m_err.group(2)}ms)",
-                    "err",
-                )
-            )
+            action_status = f"✗ exit {m_err.group(1)} in {m_err.group(2)}ms"
+            action_status_class = "err"
+            in_exec = False
+            in_result = True
             mode = RESULT
             continue
 
         if mode == RESULT:
-            if is_diff_line(line):
-                pending_diff.append(line)
-            else:
-                flush_diff()
-                out.append(diff_html(line))
-        elif mode == REASON:
-            for wrapped in reason_lines(line):
-                out.append(f'<span class="codex-reason">{html_escape(wrapped)}</span>')
+            action_body_lines.append(line)
         elif mode == EXEC:
-            out.append(f'<code class="cmd">{html_escape(line)}</code>')
-        else:
-            cls = line_class_for_mode(mode)
-            out.append(f'<span class="{cls}">{html_escape(line)}</span>')
+            action_cmd_lines.append(line)
+        elif mode == REASON:
+            out.append(f'<span class="codex-reason">{esc(line)}</span>')
+        elif mode == PROMPT:
+            out.append(f'<span class="codex-prompt">{esc(line)}</span>')
+        elif mode == HEADER:
+            out.append(f'<span class="codex-header">{esc(line)}</span>')
 
-    flush_diff()
+    close_action()
     return "\n".join(out)
 
 
