@@ -123,8 +123,9 @@ def _vdf_extract_keys(text: str, key: str) -> List[str]:
     """Return every value associated with ``key`` in a VDF text, in order."""
     results: List[str] = []
     tokens = _QUOTED.findall(text)
-    # Pairs of consecutive tokens are (key, value).
-    for i in range(0, len(tokens) - 1, 2):
+    # Objects and braces are not tokens here, so nested key/value pairs can
+    # start at any quoted-token index.
+    for i in range(0, len(tokens) - 1):
         if tokens[i] == key:
             results.append(tokens[i + 1])
     return results

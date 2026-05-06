@@ -13,12 +13,8 @@ What this file implements (the v0 UI shell):
   - Background timer that periodically refreshes drive-space stats and
     runs the disk-cap janitor.
   - Persistent config via ``oss.capture.tray.config``.
-
-What this file does NOT yet implement (next session):
-  - Steam library scanner (parse libraryfolders.vdf + appmanifest_*.acf).
-  - Process watcher that detects when a known game launches.
-  - DLL injection (LoadLibrary via CreateRemoteThread).
-  - Anti-cheat allowlist enforcement before injection.
+  - Steam allowlist menu, process watcher, per-session config write, and
+    DLL injection for allowlisted/enabled game launches.
 
 Entry point: ``python -m oss.capture.tray``.
 """
@@ -28,8 +24,7 @@ import logging
 import platform
 import sys
 import threading
-import time
-from typing import Optional
+from typing import List, Optional
 
 try:
     import pystray  # type: ignore[import-not-found]
@@ -39,7 +34,12 @@ except ImportError:
     _HAS_PYSTRAY = False
 
 from oss.capture.tray import config as cfg_mod
+from oss.capture.tray import dll_inject
+from oss.capture.tray import session_config
 from oss.capture.tray import storage
+from oss.capture.tray import steam_library
+from oss.capture.tray import allowlist
+from oss.capture.tray import process_watcher
 
 log = logging.getLogger("oss.capture.tray.app")
 
@@ -60,6 +60,7 @@ class TrayApp:
         self.icon: Optional["pystray.Icon"] = None
         self._janitor_stop = threading.Event()
         self._janitor_thread: Optional[threading.Thread] = None
+        self._process_watcher: Optional[process_watcher.ProcessWatcher] = None
 
     # -----------------------------------------------------------------
     # Mode switcher
@@ -91,6 +92,29 @@ class TrayApp:
         log.info("paused -> %s", self.cfg.paused)
         if self.icon is not None:
             self.icon.update_menu()
+
+    # -----------------------------------------------------------------
+    # Per-game enable toggles
+    # -----------------------------------------------------------------
+
+    def set_game_enabled(self, game_id: str, enabled: bool) -> None:
+        self.cfg.enabled_games[game_id] = enabled
+        cfg_mod.save(self.cfg)
+        log.info("game %s enabled -> %s", game_id, enabled)
+        if self.icon is not None:
+            self.icon.update_menu()
+
+    def toggle_game_enabled(self, game_id: str) -> None:
+        self.set_game_enabled(game_id, not self.cfg.enabled_games.get(game_id, False))
+
+    def _available_allowed_games(self) -> List[allowlist.AllowedGame]:
+        games = []
+        for installed in steam_library.all_installed_games():
+            allowed = allowlist.lookup_by_app_id(installed.app_id)
+            if allowed is not None:
+                games.append(allowed)
+        games.sort(key=lambda g: g.display_name.lower())
+        return games
 
     # -----------------------------------------------------------------
     # Output drive resolution
@@ -145,6 +169,79 @@ class TrayApp:
             self._janitor_thread.join(timeout=2.0)
 
     # -----------------------------------------------------------------
+    # Process watcher + launch handling
+    # -----------------------------------------------------------------
+
+    def _start_process_watcher(self) -> None:
+        if self._process_watcher is not None:
+            return
+        self._process_watcher = process_watcher.ProcessWatcher(
+            on_game_launch=self._on_game_launch,
+            on_anticheat_block=self._on_anticheat_block,
+        )
+        self._process_watcher.start()
+
+    def _stop_process_watcher(self) -> None:
+        if self._process_watcher is not None:
+            self._process_watcher.stop()
+
+    def _on_anticheat_block(self, event: process_watcher.AntiCheatBlockEvent) -> None:
+        log.warning(
+            "refusing to inject into %s pid=%d; blocking processes=%s",
+            event.exe_basename,
+            event.pid,
+            ", ".join(event.blocking_processes),
+        )
+
+    def _on_game_launch(self, event: process_watcher.GameLaunchEvent) -> None:
+        self.cfg = cfg_mod.load()
+        game = event.allowed
+        if self.cfg.paused:
+            log.info("capture paused; skipping %s pid=%d", game.display_name, event.pid)
+            return
+        if not self.cfg.enabled_games.get(game.game_id, False):
+            log.info("game %s is disabled; skipping pid=%d", game.game_id, event.pid)
+            return
+
+        drive = self.current_output_drive()
+        if drive is None:
+            log.warning("no output drive available; skipping %s pid=%d", game.game_id, event.pid)
+            return
+
+        output_dir = storage.captures_dir(drive) / game.game_id
+        output_dir.mkdir(parents=True, exist_ok=True)
+        config_path = session_config.write_session_config(
+            game=game,
+            capture_mode=self.cfg.capture_mode,
+            output_dir=output_dir,
+        )
+        result = dll_inject.inject_dll(event.pid)
+        if result.injected:
+            log.info(
+                "injected %s into %s pid=%d config=%s output=%s",
+                result.dll_path,
+                game.display_name,
+                event.pid,
+                config_path,
+                output_dir,
+            )
+        elif result.skipped:
+            log.info(
+                "skipped DLL injection for %s pid=%d: %s",
+                game.display_name,
+                event.pid,
+                result.message,
+            )
+        else:
+            log.error(
+                "DLL injection failed for %s pid=%d dll=%s: %s",
+                game.display_name,
+                event.pid,
+                result.dll_path,
+                result.message,
+            )
+
+    # -----------------------------------------------------------------
     # pystray menu construction
     # -----------------------------------------------------------------
 
@@ -160,6 +257,20 @@ class TrayApp:
                 checked=lambda _item, m=mode: self.cfg.capture_mode == m,
             )
 
+        def _game_item(game: allowlist.AllowedGame) -> "pystray.MenuItem":
+            return pystray.MenuItem(
+                game.display_name,
+                lambda _icon, _item, gid=game.game_id: self.toggle_game_enabled(gid),
+                checked=lambda _item, gid=game.game_id: self.cfg.enabled_games.get(gid, False),
+            )
+
+        games = self._available_allowed_games()
+        games_menu = (
+            pystray.Menu(*[_game_item(game) for game in games])
+            if games
+            else pystray.Menu(pystray.MenuItem("No allowlisted Steam games found", None, enabled=False))
+        )
+
         return pystray.Menu(
             pystray.MenuItem(self.status_string, None, enabled=False),
             pystray.Menu.SEPARATOR,
@@ -167,6 +278,7 @@ class TrayApp:
                 "Capture mode",
                 pystray.Menu(*[_mode_item(m) for m in CAPTURE_MODES]),
             ),
+            pystray.MenuItem("Enabled games", games_menu),
             pystray.MenuItem(
                 lambda _item: ("Resume captures" if self.cfg.paused else "Pause captures"),
                 lambda _icon, _item: self.toggle_pause(),
@@ -232,6 +344,7 @@ class TrayApp:
             format="%(asctime)s %(levelname)s %(name)s %(message)s",
         )
         self._start_janitor()
+        self._start_process_watcher()
 
         self.icon = pystray.Icon(
             "oss-capture",
@@ -243,6 +356,7 @@ class TrayApp:
         try:
             self.icon.run()
         finally:
+            self._stop_process_watcher()
             self._stop_janitor()
 
 

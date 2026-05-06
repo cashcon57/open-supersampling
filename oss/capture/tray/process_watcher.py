@@ -1,7 +1,7 @@
 """Win32 process watcher for the OSS Capture tray app.
 
 Polls the running-process list once per second using
-``CreateToolhelp32Snapshot`` (via pywin32 / win32process). When a new
+``CreateToolhelp32Snapshot``. When a new
 process matches an allowlisted game executable AND no kernel-anti-cheat
 process is also resident on the system, fires a callback so the tray app
 can decide whether to inject.
@@ -11,10 +11,11 @@ This is a polling watcher rather than an event-driven one because:
     service dependency (sometimes flaky on Windows).
   - 1 Hz is fast enough for a "user just launched a game" UX latency
     target (0-1 second between game-window-shown and tray-app-injects).
-  - Polling can be implemented in pure pywin32 with no extra deps.
+  - Polling can be implemented with Win32 Toolhelp APIs with no extra deps.
 """
 from __future__ import annotations
 
+import ctypes
 import logging
 import platform
 import threading
@@ -58,41 +59,40 @@ AntiCheatBlockCallback = Callable[[AntiCheatBlockEvent], None]
 def _list_processes_win32() -> Dict[int, str]:
     """Return {pid: exe_basename_lower} for every running process.
 
-    Uses pywin32's win32process + win32api. Requires the tray app to be
-    running on Windows; raises ImportError on other platforms.
+    Uses Win32 Toolhelp32 polling. Requires the tray app to be running on
+    Windows; raises RuntimeError if the snapshot cannot be created.
     """
-    try:
-        import win32process  # type: ignore[import-not-found]
-        import win32api      # type: ignore[import-not-found]
-        import win32con      # type: ignore[import-not-found]
-    except ImportError as exc:
-        raise RuntimeError(
-            "process_watcher requires pywin32; install with: pip install pywin32"
-        ) from exc
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    snapshot = kernel32.CreateToolhelp32Snapshot(0x00000002, 0)  # TH32CS_SNAPPROCESS
+    if snapshot == ctypes.c_void_p(-1).value:
+        err = ctypes.get_last_error()
+        raise RuntimeError(f"CreateToolhelp32Snapshot failed: winerror={err}")
 
-    pids = win32process.EnumProcesses()
+    class PROCESSENTRY32W(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", ctypes.c_uint32),
+            ("cntUsage", ctypes.c_uint32),
+            ("th32ProcessID", ctypes.c_uint32),
+            ("th32DefaultHeapID", ctypes.c_void_p),
+            ("th32ModuleID", ctypes.c_uint32),
+            ("cntThreads", ctypes.c_uint32),
+            ("th32ParentProcessID", ctypes.c_uint32),
+            ("pcPriClassBase", ctypes.c_long),
+            ("dwFlags", ctypes.c_uint32),
+            ("szExeFile", ctypes.c_wchar * 260),
+        ]
+
     out: Dict[int, str] = {}
-    for pid in pids:
-        try:
-            handle = win32api.OpenProcess(
-                win32con.PROCESS_QUERY_LIMITED_INFORMATION, False, pid,
-            )
-        except Exception:
-            # Many system PIDs cannot be opened by a non-elevated tray app.
-            # That's fine — those PIDs are not games we'd inject into
-            # anyway. Skip silently.
-            continue
-        try:
-            exe_path = win32process.GetModuleFileNameEx(handle, 0)
-            basename = exe_path.rsplit("\\", 1)[-1].lower()
-            out[pid] = basename
-        except Exception:
-            continue
-        finally:
-            try:
-                win32api.CloseHandle(handle)
-            except Exception:
-                pass
+    try:
+        entry = PROCESSENTRY32W()
+        entry.dwSize = ctypes.sizeof(PROCESSENTRY32W)
+        ok = kernel32.Process32FirstW(snapshot, ctypes.byref(entry))
+        while ok:
+            if entry.th32ProcessID:
+                out[int(entry.th32ProcessID)] = str(entry.szExeFile).lower()
+            ok = kernel32.Process32NextW(snapshot, ctypes.byref(entry))
+    finally:
+        kernel32.CloseHandle(snapshot)
     return out
 
 
