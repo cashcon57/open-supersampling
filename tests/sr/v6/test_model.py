@@ -1,10 +1,8 @@
 """V6Model orchestrator tests.
 
-Verifies the integration between HAT backbone, cross-attention, canvas
-state hooks, ST-score pruning hook, and softplus / sigmoid output. The
-canvas-update path (writing into the canvas from the model's residual)
-is not yet wired in v6.0; tests pin the empty-canvas case so first-frame
-forwards work end-to-end.
+Verifies the canonical v6 Stage 2 path: HAT features, warped persistent
+canvas, active-mask fusion, HR rasterization, composite RGB head, Gaussian
+write-back, ST-score state, and softplus / sigmoid output.
 """
 from __future__ import annotations
 
@@ -50,6 +48,19 @@ def _canvas_state(count: int, token_dim: int) -> CanvasState:
     )
 
 
+def _motion(
+    dx: float,
+    dy: float,
+    h: int = 32,
+    w: int = 32,
+    batch: int = 1,
+) -> torch.Tensor:
+    motion = torch.zeros(batch, 2, h, w)
+    motion[:, 0].fill_(dx)
+    motion[:, 1].fill_(dy)
+    return motion
+
+
 # ---------------------------------------------------------------------------
 # Construction
 # ---------------------------------------------------------------------------
@@ -79,12 +90,17 @@ def test_v6model_rejects_invalid_color_activation():
 
 
 def test_v6model_forward_first_frame_shape():
-    """First-frame forward with empty canvas must produce correctly-shaped HR."""
+    """First-frame empty canvas populates via write-back and renders HR."""
     m = _tiny_model().train(False)
     lr = torch.randn(1, 9, 32, 32)
     out = m(lr, motion_lr=None, frame_index=0)
     assert out.shape == (1, 3, 64, 64), f"expected HR (1,3,64,64); got {tuple(out.shape)}"
     assert torch.isfinite(out).all()
+    assert m.has_canvas()
+    assert m._canvas_state is not None
+    assert m._canvas_state.count == 16
+    assert m._st_state is not None
+    assert m._st_state.spatial_accumulator.shape == (16,)
 
 
 def test_v6model_empty_canvas_tokens_short_circuit():
@@ -117,6 +133,60 @@ def test_v6model_forward_with_nonempty_canvas():
     assert all(g is not None and torch.isfinite(g).all() for g in fusion_grads)
     assert sum(float(g.abs().sum()) for g in canvas_grads) > 0.0
     assert sum(float(g.abs().sum()) for g in fusion_grads) > 0.0
+
+
+def test_v6model_multiframe_canvas_warps_and_stays_bounded():
+    m = _tiny_model(canvas_capacity=10, tile_size_lr=16).train(False)
+    lr = torch.randn(1, 9, 32, 32)
+    step_motion = _motion(2.0, 1.0)
+
+    out = m(lr, motion_lr=None, frame_index=0)
+    assert out.shape == (1, 3, 64, 64)
+    assert m._canvas_state is not None
+    assert m._canvas_state.count == 4
+
+    for frame_index in range(1, 4):
+        before = m._canvas_state.positions.detach().clone()
+        prev_count = int(m._canvas_state.count)
+        out = m(lr, motion_lr=step_motion, frame_index=frame_index)
+        assert out.shape == (1, 3, 64, 64)
+        assert torch.isfinite(out).all()
+        assert m._canvas_state is not None
+        assert m._canvas_state.count <= m.cfg.canvas_capacity
+
+        spawned_per_frame = 4
+        survivors = min(prev_count, m.cfg.canvas_capacity - spawned_per_frame)
+        if survivors > 0:
+            expected = before[-survivors:] + torch.tensor([2.0, 1.0])
+            actual = m._canvas_state.positions[:survivors].detach()
+            torch.testing.assert_close(actual, expected, atol=1.0e-4, rtol=1.0e-4)
+
+
+def test_v6model_gradient_flows_through_stage2_path():
+    m = _tiny_model(tile_size_lr=16)
+    m.train()
+    lr0 = torch.randn(1, 9, 32, 32)
+    lr1 = torch.randn(1, 9, 32, 32)
+
+    m(lr0, motion_lr=None, frame_index=0)
+    out = m(lr1, motion_lr=_motion(0.5, 0.25), frame_index=1)
+    loss = out.sum()
+    loss.backward()
+
+    assert m.gaussian_spawner.conv.weight.grad is not None
+    assert float(m.gaussian_spawner.conv.weight.grad.abs().sum()) > 0.0
+    assert m.fusion.q_proj.weight.grad is not None
+    assert float(m.fusion.q_proj.weight.grad.abs().sum()) > 0.0
+    assert m.canvas_to_token.weight.grad is not None
+    assert float(m.canvas_to_token.weight.grad.abs().sum()) > 0.0
+    assert m.composite_head[0].weight.grad is not None
+    assert float(m.composite_head[0].weight.grad.abs().sum()) > 0.0
+
+    backbone_grads = [
+        p.grad for p in m.backbone.parameters() if p.requires_grad and p.grad is not None
+    ]
+    assert backbone_grads
+    assert sum(float(g.abs().sum()) for g in backbone_grads) > 0.0
 
 
 def test_v6model_forward_softplus_output_is_non_negative():
@@ -154,6 +224,18 @@ def test_v6model_forward_bf16_autocast():
         out = m(lr)
     assert torch.isfinite(out).all()
     assert out.shape == (1, 3, 64, 64)
+
+
+def test_v6model_bf16_autocast_multiframe_forward_stays_finite():
+    m = _tiny_model(tile_size_lr=16).train(False)
+    lr = torch.randn(1, 9, 32, 32)
+    with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
+        out0 = m(lr, motion_lr=None, frame_index=0)
+        out1 = m(lr, motion_lr=_motion(1.0, 0.0), frame_index=1)
+        out2 = m(lr, motion_lr=_motion(1.0, 0.0), frame_index=2)
+    for out in (out0, out1, out2):
+        assert out.shape == (1, 3, 64, 64)
+        assert torch.isfinite(out).all()
 
 
 # ---------------------------------------------------------------------------
@@ -209,6 +291,26 @@ def test_v6model_reset_state_clears_canvas_and_score():
     m.reset_state()
     assert m._canvas_state is None
     assert not m.has_canvas()
+
+
+def test_v6model_reset_between_trajectories_repopulates_from_frame_zero():
+    m = _tiny_model(tile_size_lr=16).train(False)
+    lr = torch.randn(1, 9, 32, 32)
+
+    m(lr, motion_lr=None, frame_index=0)
+    m(lr, motion_lr=_motion(1.0, 0.0), frame_index=1)
+    assert m._canvas_state is not None
+    assert m._canvas_state.count == 8
+
+    m.reset_state()
+    assert m._canvas_state is None
+    assert m._st_state is None
+    assert int(m._step_count.item()) == 0
+
+    out = m(lr, motion_lr=None, frame_index=0)
+    assert out.shape == (1, 3, 64, 64)
+    assert m._canvas_state is not None
+    assert m._canvas_state.count == 4
 
 
 def test_v6model_frame_index_threads_to_keyframe_cache():

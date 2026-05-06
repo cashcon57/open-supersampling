@@ -10,11 +10,15 @@ Wires the v6 architecture:
   Stage 3: KeyframeActiveMaskCache picks the active subset every K frames.
   Stage 4: PixelGaussianFusion cross-attends pixel queries to active canvas
            tokens (K=0 is identity — first frame, fresh-canvas case).
-  Stage 5: Lightweight pixel head + sub-pixel upsample produce HR RGB.
-  Stage 6: Softplus output activation supports HDR linear-light values >1.0
+  Stage 5: Active canvas subset rasterizes to HR feature image.
+  Stage 6: Refined HAT features are upsampled to HR and composited with
+           rasterized canvas features by a lightweight conv head.
+  Stage 7: Fresh Gaussians are spawned from refined features and written back
+           into the persistent per-rank canvas.
+  Stage 8: Softplus output activation supports HDR linear-light values >1.0
            (the model defaults to softplus per commit 43755fc — flag-
            configurable for SDR-only callers).
-  Stage 7: STVScoreState aggregates per-Gaussian contribution + lifespan
+  Stage 9: STVScoreState aggregates per-Gaussian contribution + lifespan
            every step; periodic prune_by_st_score() drops the bottom
            fraction every ``prune_every`` steps.
 
@@ -45,9 +49,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from oss.sr.v6.cross_attention import PixelGaussianFusion
+from oss.sr.v6.gaussian_spawner import GaussianSpawner, GaussianSpawnState
 from oss.sr.v6.hat import HAT, hat_l, hat_small, hat_tiny
 from oss.sr.v6.keyframe_active_mask import KeyframeActiveMaskCache
-from oss.sr.v6.st_variation_score import STVScoreState
+from oss.sr.v6.st_variation_score import (
+    STVScoreState,
+    init_st_score_state,
+    update_st_score,
+)
 
 
 _BACKBONE_REGISTRY = {
@@ -76,6 +85,7 @@ class V6Config:
     window_size: int = 16
     color_activation: str = "softplus"   # "softplus" (HDR) | "sigmoid" (SDR)
     tile_size_lr: int = 8
+    tile_size_hr: int = 16
     keyframe_interval: int = 10
     prune_every: int = 200
     prune_fraction: float = 0.7
@@ -118,13 +128,30 @@ class V6Model(nn.Module):
             window_size=self.cfg.window_size,
         )
 
-        # Pixel head + sub-pixel upsample. Conv to RGB*scale*scale, then
-        # PixelShuffle. Standard SRCNN-style decoder.
+        # LR feature refinement before canvas fusion. The old PixelShuffle
+        # decoder is replaced below by rasterize + composite.
         self.pixel_head = nn.Conv2d(self.feat_dim, self.feat_dim, 3, padding=1)
         self.activation = nn.GELU()
-        self.upsample = nn.Sequential(
-            nn.Conv2d(self.feat_dim, 3 * (self.scale ** 2), 3, padding=1),
-            nn.PixelShuffle(self.scale),
+
+        self.gaussian_spawner = GaussianSpawner(
+            feat_dim=self.feat_dim,
+            token_dim=self.cfg.token_dim,
+            scale=self.scale,
+            tile_size_lr=self.cfg.tile_size_lr,
+        )
+        from oss.sr.v6.rasterizer import V6Rasterizer
+
+        self.rasterizer = V6Rasterizer(
+            token_dim=self.cfg.token_dim,
+            tile_size=self.cfg.tile_size_hr,
+        )
+        hidden = max(16, self.feat_dim // 2)
+        self.composite_head = nn.Sequential(
+            nn.Conv2d(self.feat_dim + self.cfg.token_dim, self.feat_dim, 3, padding=1),
+            nn.GELU(),
+            nn.Conv2d(self.feat_dim, hidden, 3, padding=1),
+            nn.GELU(),
+            nn.Conv2d(hidden, 3, 3, padding=1),
         )
 
         # Per-rank-local stateful pieces. NOT registered as buffers so DDP
@@ -181,14 +208,52 @@ class V6Model(nn.Module):
         """
         feats = self.backbone(lr_inputs)         # (B, feat_dim, H, W)
         feats = self.activation(self.pixel_head(feats))
+        b, _, h_lr, w_lr = feats.shape
+        output_hw = (h_lr * self.scale, w_lr * self.scale)
 
-        # Construct cross-attention tokens from the active subset of canvas
-        # Gaussians. Empty canvas (first frame, fresh state) yields K=0
-        # tokens — fusion module short-circuits to identity.
-        tokens = self._build_canvas_tokens(feats, frame_index=frame_index)
+        warped_canvas = self._warped_canvas(motion_lr=motion_lr, output_hw=output_hw)
+        active_mask = self._active_mask(
+            warped_canvas,
+            frame_index=frame_index,
+            output_hw=output_hw,
+        )
+        tokens = self._tokens_from_canvas(feats, warped_canvas, active_mask)
 
         refined = self.fusion(feats, tokens)
-        rgb_hr = self.upsample(refined)
+        spawned = self.gaussian_spawner(refined)
+        spawned_canvas = self._flatten_spawned(spawned)
+        previous_st_state = self._st_state
+        old_count = 0 if warped_canvas is None else int(warped_canvas.count)
+        render_canvas = self._concat_canvas(warped_canvas, spawned_canvas)
+        self._canvas_state = render_canvas
+        self.keyframe_mask.reset()
+
+        render_active = self._render_active_mask(
+            old_active=active_mask,
+            old_count=old_count,
+            new_count=int(spawned_canvas.count),
+            canvas=render_canvas,
+        )
+        canvas_hr = self.rasterizer(
+            render_canvas,
+            render_active.unsqueeze(0).expand(b, -1),
+            output_hw=output_hw,
+        )
+        refined_hr = F.interpolate(
+            refined,
+            size=output_hw,
+            mode="bilinear",
+            align_corners=False,
+        )
+        rgb_hr = self.composite_head(torch.cat([refined_hr, canvas_hr], dim=1))
+        self._update_st_state(
+            render_canvas,
+            render_active,
+            previous_state=previous_st_state,
+            old_count=old_count,
+            new_count=int(spawned_canvas.count),
+        )
+
         if self.cfg.color_activation == "sigmoid":
             rgb_hr = torch.sigmoid(rgb_hr)
         else:
@@ -245,14 +310,26 @@ class V6Model(nn.Module):
             frame_index=frame_index,
             canvas=self._canvas_state,
             view_matrix=None,  # the cache's bbox-test handles None as identity
-            viewport_hw=tuple(feats.shape[-2:]),
+            viewport_hw=(feats.shape[-2] * self.scale, feats.shape[-1] * self.scale),
         )
+        return self._tokens_from_canvas(feats, self._canvas_state, active)
+
+    def _tokens_from_canvas(
+        self,
+        feats: torch.Tensor,
+        canvas: Optional[CanvasState],
+        active: Optional[torch.Tensor],
+    ) -> torch.Tensor:
+        B = feats.shape[0]
+        if canvas is None or canvas.count == 0 or active is None:
+            return feats.new_zeros((B, 0, self.cfg.token_dim))
+        active = self._normalize_mask(active, canvas.count, canvas.positions.device)
         if active is None or active.sum() == 0:
             return feats.new_zeros((B, 0, self.cfg.token_dim))
         # Project active Gaussian colors into token_dim. The canvas stores
         # per-Gaussian feature/color tensors; we feed those through a
         # learnable Linear so the embedding can be optimized end-to-end.
-        active_feats = self._canvas_state.colors[active]  # (K_active, F_canvas)
+        active_feats = canvas.colors[active]  # (K_active, F_canvas)
         # Truncate or pad to token_dim before the Linear so the canvas's
         # native feat_dim doesn't have to match exactly.
         if active_feats.shape[-1] != self.cfg.token_dim:
@@ -266,6 +343,173 @@ class V6Model(nn.Module):
         # element of the batch (per-rank shared canvas; DDP cross-rank state
         # is not synced here, only model params).
         return tokens_1.unsqueeze(0).expand(B, -1, -1).contiguous()
+
+    def _warped_canvas(
+        self,
+        motion_lr: Optional[torch.Tensor],
+        output_hw: tuple[int, int],
+    ) -> Optional[CanvasState]:
+        if self.has_canvas() and motion_lr is not None:
+            from oss.sr.v6.canvas_warp import warp_canvas
+
+            return warp_canvas(self._canvas_state, motion_lr, output_hw)
+        return self._canvas_state
+
+    def _active_mask(
+        self,
+        canvas: Optional[CanvasState],
+        frame_index: int,
+        output_hw: tuple[int, int],
+    ) -> Optional[torch.Tensor]:
+        if canvas is None or canvas.count == 0:
+            return None
+        view_matrix = torch.eye(3, device=canvas.positions.device, dtype=canvas.positions.dtype)
+        return self.keyframe_mask.get_mask(
+            frame_index=frame_index,
+            canvas=canvas,
+            view_matrix=view_matrix,
+            viewport_hw=output_hw,
+        )
+
+    def _flatten_spawned(self, spawned: GaussianSpawnState) -> CanvasState:
+        b, k = spawned.positions.shape[:2]
+        count = int(b * k)
+        return CanvasState(
+            positions=spawned.positions.reshape(count, 2).contiguous(),
+            scales=spawned.scales.reshape(count, 2).contiguous(),
+            rotations=spawned.rotations.reshape(count).contiguous(),
+            opacities=spawned.opacities.reshape(count).contiguous(),
+            colors=spawned.colors.reshape(count, spawned.colors.shape[-1]).contiguous(),
+            count=count,
+        )
+
+    def _concat_canvas(
+        self,
+        warped: Optional[CanvasState],
+        spawned: CanvasState,
+    ) -> CanvasState:
+        if warped is None or warped.count == 0:
+            combined = spawned
+        elif spawned.count == 0:
+            combined = warped
+        else:
+            combined = CanvasState(
+                positions=torch.cat([warped.positions[: warped.count], spawned.positions], dim=0),
+                scales=torch.cat([warped.scales[: warped.count], spawned.scales], dim=0),
+                rotations=torch.cat([warped.rotations[: warped.count], spawned.rotations], dim=0),
+                opacities=torch.cat([warped.opacities[: warped.count], spawned.opacities], dim=0),
+                colors=torch.cat([warped.colors[: warped.count], spawned.colors], dim=0),
+                count=int(warped.count) + int(spawned.count),
+            )
+        return self._drop_oldest(combined)
+
+    def _drop_oldest(self, canvas: CanvasState) -> CanvasState:
+        capacity = int(self.cfg.canvas_capacity)
+        if capacity <= 0:
+            raise ValueError(f"canvas_capacity must be positive; got {capacity}")
+        count = int(canvas.count)
+        if count <= capacity:
+            return canvas
+        start = count - capacity
+        return CanvasState(
+            positions=canvas.positions[start:count].contiguous(),
+            scales=canvas.scales[start:count].contiguous(),
+            rotations=canvas.rotations[start:count].contiguous(),
+            opacities=canvas.opacities[start:count].contiguous(),
+            colors=canvas.colors[start:count].contiguous(),
+            count=capacity,
+        )
+
+    def _render_active_mask(
+        self,
+        old_active: Optional[torch.Tensor],
+        old_count: int,
+        new_count: int,
+        canvas: CanvasState,
+    ) -> torch.Tensor:
+        old_count = int(old_count)
+        if old_count > 0 and old_active is not None:
+            old = self._normalize_mask(old_active, old_count, canvas.positions.device)
+        else:
+            old = torch.zeros((0,), device=canvas.positions.device, dtype=torch.bool)
+        new = torch.ones((new_count,), device=canvas.positions.device, dtype=torch.bool)
+        active = torch.cat([old, new], dim=0)
+        if active.shape[0] > canvas.count:
+            active = active[-int(canvas.count):]
+        elif active.shape[0] < canvas.count:
+            pad = canvas.count - active.shape[0]
+            active = F.pad(active, (pad, 0), value=False)
+        return active.contiguous()
+
+    def _normalize_mask(
+        self,
+        mask: torch.Tensor,
+        length: int,
+        device: torch.device,
+    ) -> torch.Tensor:
+        mask = mask.to(device=device, dtype=torch.bool).flatten()
+        length = int(length)
+        if mask.shape[0] == length:
+            return mask
+        if mask.shape[0] > length:
+            return mask[:length]
+        return F.pad(mask, (0, length - mask.shape[0]), value=False)
+
+    def _update_st_state(
+        self,
+        canvas: CanvasState,
+        active: torch.Tensor,
+        previous_state: Optional[STVScoreState],
+        old_count: int,
+        new_count: int,
+    ) -> None:
+        n = int(canvas.count)
+        state = self._st_state_after_write(
+            previous_state=previous_state,
+            old_count=old_count,
+            new_count=new_count,
+            final_count=n,
+            device=canvas.opacities.device,
+        )
+        alpha = canvas.opacities[:n].to(dtype=torch.float32).unsqueeze(1)
+        transmittance = torch.ones_like(alpha)
+        self._st_state = update_st_score(state, alpha, transmittance, active[:n])
+
+    def _st_state_after_write(
+        self,
+        previous_state: Optional[STVScoreState],
+        old_count: int,
+        new_count: int,
+        final_count: int,
+        device: torch.device,
+    ) -> STVScoreState:
+        if previous_state is None or previous_state.spatial_accumulator.numel() == 0:
+            return init_st_score_state(final_count, device=device, dtype=torch.float32)
+
+        old_keep = min(
+            int(old_count),
+            int(previous_state.spatial_accumulator.shape[0]),
+        )
+        spatial_old = previous_state.spatial_accumulator[:old_keep].to(device=device)
+        lifespan_old = previous_state.lifespan_count[:old_keep].to(device=device)
+        spatial_new = torch.zeros(int(new_count), device=device, dtype=torch.float32)
+        lifespan_new = torch.zeros(int(new_count), device=device, dtype=torch.int64)
+
+        spatial = torch.cat([spatial_old, spatial_new], dim=0)
+        lifespan = torch.cat([lifespan_old, lifespan_new], dim=0)
+        if spatial.shape[0] > final_count:
+            spatial = spatial[-final_count:]
+            lifespan = lifespan[-final_count:]
+        elif spatial.shape[0] < final_count:
+            pad = final_count - spatial.shape[0]
+            spatial = F.pad(spatial, (pad, 0), value=0.0)
+            lifespan = F.pad(lifespan, (pad, 0), value=0)
+
+        return STVScoreState(
+            spatial_accumulator=spatial.contiguous(),
+            lifespan_count=lifespan.contiguous(),
+            frames_observed=previous_state.frames_observed,
+        )
 
 
 @dataclass

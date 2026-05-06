@@ -105,8 +105,8 @@ class GaussianSpawner(nn.Module):
         """Initialize neutral proposals at tile centers.
 
         Scales start near half an HR tile, rotations / offsets / confidence
-        logits start at zero, and colors start as a neutral embedding. The
-        conv weights are zero so first-frame proposals are geometrically
+        logits start at zero, and colors start as a small neutral embedding.
+        The conv weights are zero so first-frame proposals are geometrically
         stable before training.
         """
         nn.init.zeros_(self.conv.weight)
@@ -115,6 +115,7 @@ class GaussianSpawner(nn.Module):
         scale_bias = torch.log(torch.expm1(target_scale)).item()
         with torch.no_grad():
             self.conv.bias[3:5].fill_(scale_bias)
+            self.conv.bias[6:].fill_(0.01)
 
     def forward(self, features: torch.Tensor) -> GaussianSpawnState:
         """Return one Gaussian proposal per LR tile.
