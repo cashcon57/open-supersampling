@@ -236,7 +236,7 @@ SDK and shaders: Apache-2.0. Plugins: MIT. Model weights: CC-BY-4.0.
 
 ## Repository
 
-Active development branch: `v0.2-dev`. Track docs:
+Active development branch: `main`. Track docs:
 
 - [oss-sr-cnn-track](docs/superpowers/oss-sr-cnn-track.md): single-frame pixel upscaler, current production candidate
 - [oss-gaussian-rr-track](docs/superpowers/oss-gaussian-rr-track.md): Gaussian-based ray-reconstruction denoiser

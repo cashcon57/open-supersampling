@@ -10,7 +10,7 @@ The full README is at `README.md`. The paper-style overview for academic readers
 
 ## Branch + version
 
-Active development branch: `v0.2-dev`. Always commit + push there.
+Active development branch: `main`. Always commit + push there. (Renamed from `v0.2-dev` on 2026-05-06; the old branch no longer exists on origin.)
 
 | Version | State |
 |---|---|
@@ -81,7 +81,7 @@ Codex sessions write findings to `docs/coordination/codex-review-YYYY-MM-DD-<slu
 - Description of the issue
 - Suggested fix
 
-Claude reads these and either acts on them or notes why an item is wontfix (and pushes the wontfix-rationale to the same file as a reply). All review work is committed to `v0.2-dev`.
+Claude reads these and either acts on them or notes why an item is wontfix (and pushes the wontfix-rationale to the same file as a reply). All review work is committed to `main`.
 
 ## Honest limits
 
