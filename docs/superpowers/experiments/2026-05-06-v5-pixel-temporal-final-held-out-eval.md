@@ -150,13 +150,13 @@ same band as DLSS 4's published ~0.17 LPIPS on AAA games. **This is not a
 AAA games DLSS is benchmarked on; the number difference is mostly content,
 not method. Apples-to-apples comparison vs DLSS / FSR / XeSS requires the S7
 DLL-shim infrastructure (unbuilt) that lets all three run on identical input
-in identical content. The honest take is: v5-pixel-temporal is in the
+in identical content. Current conclusion: v5-pixel-temporal is in the
 quality band that competitive temporal SR systems occupy. Whether it stays in
 that band on AAA content is unmeasured.
 
 v4 baseline's 11.7 dB on this batch is the SRGD-trained-model-on-TartanAir
 distribution-shift failure mode and has been documented separately (commit
-`b2fa647` post-mortem). It is not v4's "real" performance — v4 measured
+`b2fa647` post-mortem). It is not v4's native SRGD performance — v4 measured
 ~30.1 dB / 0.30 LPIPS on its native SRGD held-out batch.
 
 ## Followups

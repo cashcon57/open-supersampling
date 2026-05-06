@@ -15,12 +15,12 @@ This plan converts those memos into concrete OSS engineering actions, sequenced 
 
 Five external systems materially de-risk v6 implementation:
 
-1. **GSASR** has already published the cross-attention pixel↔Gaussian fusion module OSS proposed for v6 (`fea2gsropeamp_arch.py`). Adopt its window-cross-attention + ROPE + 5-head MLP-decoder + reference-grid-offset structure as the v6 fusion-block starting point. Warm-start v6's HAT backbone from their HATL_SA1B checkpoint.
+1. **GSASR** has already published a cross-attention pixel↔Gaussian fusion module related to what OSS proposed for v6. Adopt GSASR-style window cross-attention; RoPE is unconfirmed upstream and currently an OSS adaptation pending source inspection. Treat its 5-head MLP-decoder + reference-grid-offset structure as the v6 fusion-block starting point after source inspection. Warm-starting from HATL_SA1B is a separate compatibility task, not current parity.
 2. **AAA-Gaussians**, **AA-2DGS**, and **Analytic-Splatting** combine into a coherent rasterizer-level AA stack: train-time world-space clamp → perpendicular-ray dilation at projection → view-space angular tile-binning → object-space Mip per splat → analytical CDF integration per pixel. Stacked, expected joint quality lift is 2–3 PSNR vs vanilla EWA, with anti-popping as a side benefit. Engineering effort is ~6–8 weeks sequential.
 3. **vk_gaussian_splatting** (NVIDIA, 2026.1) is the upper-bound benchmark target: 33.88 PSNR / 846 FPS at 3DGUT on RTX 5090. The DLSS-RR input contract is undocumented — first OSS action is to clone the repo and read the integration source.
 4. **cyberiada/GaussianVideo** offers a B-spline trajectory parameterization that maps cleanly onto OSS-FX's α-conditioned rendering. Adopt the B-spline; reject the Neural-ODE (wrong inference profile for real-time).
 
-The net of this research pass: most of v6's "cross-attention pixel↔Gaussian fusion" novelty has already been published. OSS's actual contributions are (a) the streaming + temporal extension on top of stateless GSASR-style fusion, (b) the four-paper combined AA stack neither system has assembled, (c) custom per-vendor kernels covering NVIDIA / AMD / Intel / Apple / Vulkan-fallback. Worth recognizing this honestly: the architectural risk on v6 dropped substantially after this research pass.
+The net of this research pass: most of v6's "cross-attention pixel↔Gaussian fusion" risk has related published precedent. OSS's contributions are (a) the streaming + temporal extension on top of stateless GSASR-style fusion, (b) the four-paper combined AA stack neither system has assembled, (c) custom per-vendor kernels covering NVIDIA / AMD / Intel / Apple / Vulkan-fallback. The architectural risk on v6 dropped substantially after this research pass.
 
 ---
 
@@ -28,17 +28,17 @@ The net of this research pass: most of v6's "cross-attention pixel↔Gaussian fu
 
 ### 1. v6 cross-attention fusion module — adopt GSASR structure
 
-**Source:** GSASR (`ChrisDud0257/GSASR`, ICCV 2025), specifically `fea2gsropeamp_arch.py`.
+**Source:** GSASR (`ChrisDud0257/GSASR`, ICCV 2025), with `fea2gsropeamp_arch.py` pending source inspection.
 
 **What GSASR shipped that maps directly onto v6's fusion block:**
 
 - Learnable Gaussian-seed queries cross-attend to HAT-L feature windows
-- ROPE-mixed attention (rotary positional embeddings on the cross-attention)
+- GSASR-style window cross-attention; RoPE is unconfirmed upstream and currently an OSS adaptation pending source inspection
 - Scale-conditioning via multi-head attention (lets the same module handle ×2, ×4, ×6, ×12)
 - Reference-grid offset μ parameterization (predicts per-Gaussian center as offset from a reference grid, not absolute coordinates)
 - Five parallel MLP heads decoding (μ, Σ-rotation, Σ-scale, opacity, RGB)
 
-**What v6 adds on top that GSASR does not:** the temporal axis. GSASR is stateless (per-frame, no canvas memory). OSS extends this exact fusion block with:
+**What v6 adds on top that GSASR does not:** the temporal axis. GSASR is stateless (per-frame, no canvas memory). OSS extends this fusion pattern with:
 - Persistent Gaussian canvas as a queryable history of K/V tokens across frames
 - Engine-motion-vector-driven analytical warp on the canvas before each forward pass
 - Spatial-Temporal Variation Score pruning (4DGS-1K, NeurIPS 2025) on the canvas
@@ -49,28 +49,28 @@ The net of this research pass: most of v6's "cross-attention pixel↔Gaussian fu
 |---|---|---|---|
 | 1.1 | Clone GSASR locally; read `fea2gsropeamp_arch.py` end-to-end | 1 day | none |
 | 1.2 | Document GSASR's exact attention dim / head count / hidden width for each block | 0.5 day | 1.1 |
-| 1.3 | Implement v6 fusion module mirroring GSASR's structure, plus the temporal cross-attend over canvas K/V | ~1 week | 1.1, 1.2 |
+| 1.3 | Implement v6 fusion module following GSASR's structure where confirmed, plus the OSS RoPE adaptation and temporal cross-attend over canvas K/V | ~1 week | 1.1, 1.2 |
 | 1.4 | Verify forward-pass parity at v6-fusion-block-frozen vs GSASR-published-fusion when canvas is empty (confirms our adaptation is correct) | 1 day | 1.3 |
 
 **Risk:** GSASR is single-image SR; OSS adds frame-to-frame temporal cross-attention. The Gaussian seed queries become persistent canvas tokens. Whether GSASR's published hyperparameters transfer to the temporal regime needs measurement.
 
-### 2. v6 backbone warm-start — HATL_SA1B checkpoint
+### 2. v6 backbone warm-start — OSS HAT-L-derived Heavy compatibility
 
 **Source:** GSASR's published HAT-L checkpoint, trained on the SA-1B-derived corpus.
 
 **What this saves OSS:** ~1–2 weeks of HAT pretraining time. GSASR's checkpoint is already converged on diverse natural-image content; OSS warm-starts from it instead of scratch-training the HAT backbone.
 
-**Compatibility check:** GSASR uses HAT-L with the published hyperparameters (window=16, depth=6, embed_dim=180). v6 canonical memo currently spec'd HAT-Base for the teacher (see `2026-05-05-v6-architecture-canonical.md` §3). HAT-Base and HAT-L are different parameterizations; the warm-start works only if v6 uses HAT-L for the teacher. **Decision required:** match GSASR's HAT-L for free warm-start, or stay with HAT-Base and pay the pretraining cost.
+**Compatibility check:** Current OSS v6 code uses an OSS HAT-L-derived trimmed Heavy backbone (~17M target params): `depth=6`, `blocks_per_group=5`, not upstream HAT-L `[6]*12`. Use the OSS Heavy name consistently and do not equate it with upstream HAT-L. Upstream HAT-L warm-start would require a separate factory that mirrors the published YAML before loading `HATL_SA1B`.
 
 **Action items:**
 
 | # | Task | Effort | Dependencies |
 |---|---|---|---|
-| 2.1 | Pull HATL_SA1B checkpoint, verify it loads into a fresh HAT-L instance | 2 hours | none |
-| 2.2 | Decide HAT-L vs HAT-Base for v6 teacher | meeting | 2.1 |
-| 2.3 | If HAT-L: update v6 canonical memo + sizing tables to reflect | 1 hour | 2.2 |
+| 2.1 | Pull HATL_SA1B checkpoint, verify it loads into a separate upstream-HAT-L factory | 2 hours | none |
+| 2.2 | Decide whether upstream HAT-L warm-start is worth adding beside OSS HAT-L-derived Heavy | meeting | 2.1 |
+| 2.3 | If upstream warm-start is adopted: add the separate factory and document the distinction from OSS Heavy | 1 day | 2.2 |
 
-**Recommendation:** Match GSASR (use HAT-L). The free warm-start is more valuable than the small parameter-count delta vs HAT-Base, and HAT-L is at least as well-validated.
+**Recommendation:** Keep OSS HAT-L-derived Heavy as the current teacher naming. Add upstream HAT-L warm-start only if the separate factory is implemented and verified.
 
 ### 3. Rasterizer-level anti-aliasing stack
 
@@ -117,7 +117,7 @@ INFERENCE TIME (per-frame rasterization)
 
 **Source:** `nvpro-samples/vk_gaussian_splatting` 2026.1 (released at NVIDIA GTC 2026 keynote).
 
-**Concrete numbers to beat (or honestly fall behind):**
+**Concrete numbers to beat or fall behind:**
 
 | Scene | Backend | PSNR | FPS (RTX 5090) |
 |---|---|---|---|
@@ -178,12 +178,12 @@ These are pre-DLSS-RR baselines from `nv-tlabs/3dgrut`. The DLSS-RR-integrated p
 
 | Phase | What | Wall time | Blocker chain |
 |---|---|---|---|
-| **Pre-v6 (now → before v6 implementation)** | 1.1, 1.2, 2.1, 2.2, 3.1, 4.1, 4.2, 5.1 — read source, resolve open questions, decide HAT-L vs HAT-Base | ~1 week | — |
-| **v6.0a (architecture port)** | 1.3, 1.4 (fusion module port), 2.3 (HAT-L decision documented) | ~1.5 weeks | Pre-v6 done |
-| **v6.0b (rasterizer AA — staged)** | 3.2, 3.3 in parallel (AAA + AA-2DGS clamp) | ~2 weeks | v6.0a |
-| **v6.0c (rasterizer AA continued)** | 3.4, 3.5 (Mip + CDF integral) | ~3.5 weeks | v6.0b |
-| **v6 training (teacher)** | Train HAT-L teacher with full AA stack | ~50–60h GPU | v6.0c |
-| **OSS-FX integration** | 5.2, 5.3 — concurrent with v6 training, on local 3080 Ti or M3 Max | ~2 weeks | v6.0a |
+| **v6.0a (architecture port followup)** | 1.1, 1.2, 2.1, 2.2, 3.1, 4.1, 4.2, 5.1 — read source, resolve open questions, decide whether to add upstream HAT-L warm-start beside OSS Heavy | ~1 week | — |
+| **v6.0b (fusion/backbone followup)** | 1.3, 1.4 (fusion module parity where confirmed), 2.3 (optional upstream HAT-L factory if adopted) | ~1.5 weeks | v6.0a done |
+| **v6.0c (rasterizer AA — staged)** | 3.2, 3.3 in parallel (AAA + AA-2DGS clamp) | ~2 weeks | v6.0b |
+| **v6.0d (rasterizer AA continued)** | 3.4, 3.5 (Mip + CDF integral) | ~3.5 weeks | v6.0c |
+| **v6 training (teacher)** | Train OSS HAT-L-derived Heavy teacher with full AA stack | ~50–60h GPU | v6.0d |
+| **OSS-FX integration** | 5.2, 5.3 — concurrent with v6 training, on local 3080 Ti or M3 Max | ~2 weeks | v6.0b |
 | **v6 benchmark prep** | 4.3 — DLL-shim DLSS-RR-compatible input contract | spans S7 | v6 model exists |
 | **v6 closeout benchmark** | 4.4 — head-to-head vs vk_gaussian_splatting | ~2 weeks | S7 shim, v6 trained |
 
@@ -201,9 +201,9 @@ These are pre-DLSS-RR baselines from `nv-tlabs/3dgrut`. The DLSS-RR-integrated p
 What stayed risky:
 
 - DLSS-RR exact input contract (still undocumented)
-- The streaming temporal extension to stateless GSASR (OSS's actual novel contribution)
+- The streaming temporal extension to stateless GSASR (OSS's contribution)
 - Custom per-vendor kernels for the AA stack (still ~6–9 months engineering)
-- Whether HAT-L teacher distills cleanly to NAFNet-small student (no published reference)
+- Whether OSS HAT-L-derived Heavy distills cleanly to smaller students (no published reference)
 
 ## References
 

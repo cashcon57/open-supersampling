@@ -1,6 +1,6 @@
 # 2026-05-05 — v6 architecture: covariance-resampled online Gaussian-temporal SR
 
-**Status:** Canonical v6 design. **Supersedes** the earlier "two-tier teacher/student distillation" memo (`2026-05-05-v6-design-two-tier-distillation.md`) once Stage 3 of staged validation begins.
+**Status:** Canonical v6 target design. Current implementation status: Today: HAT + empty-canvas identity fusion + pixel head. Pending: canvas write/warp/rasterizer + OSS-FX integration. The full diagram below is the target architecture. **Supersedes** the earlier "two-tier teacher/student distillation" memo (`2026-05-05-v6-design-two-tier-distillation.md`) once Stage 3 of staged validation begins.
 
 **Predecessors:**
 - `docs/research/2026-05-05-gaussian-temporal-research-deep-dive.md` — math + 2024-2026 research the architecture incorporates
@@ -14,7 +14,7 @@
 
 ## 0. The pitch in one sentence
 
-> v6 is **covariance-resampled online Gaussian-temporal super-resolution with score-based active pruning** — temporally stable by mathematical construction in a way pixel-space methods (DLSS, FSR, XeSS) provably cannot match on splat content, with frame extrapolation (OSS-FX) as a free byproduct of fractional-α canvas rendering. Targets DLSS-tier quality at real-time latencies on every major GPU vendor via custom kernels. Ships through DLL-shim drop-in (no game-developer cooperation required for any DLSS/FSR/XeSS-supporting title — hundreds of AAA games on day one).
+> v6 targets **covariance-resampled online Gaussian-temporal super-resolution with score-based active pruning** — temporally stable by mathematical construction in a way pixel-space methods (DLSS, FSR, XeSS) cannot match on splat content, with frame extrapolation (OSS-FX) as a byproduct of fractional-α canvas rendering. It targets DLSS-tier quality at real-time latencies on every major GPU vendor via custom kernels. The planned integration path is a DLL shim for titles already exposing DLSS/FSR/XeSS inputs. No game integration has shipped yet; listed games are candidate validation targets.
 
 ---
 
@@ -30,15 +30,17 @@ The 2024-2026 research consolidates around three techniques none of which a pixe
 
 These three plus standard 3DGS rasterization are the architectural moat. Pixel-grid SR is bound by Nyquist of the grid; Gaussian-temporal SR is bound by the canvas's primitive count and the rasterizer's anti-aliasing. The latter ceiling is provably higher.
 
-Frame extrapolation falls out for free: render the same canvas at α ∈ (0, 1) along the motion field. One architecture, two products.
+Target frame extrapolation reuses canvas rendering: render the same canvas at α ∈ (0, 1) along the motion field. One architecture, two products.
 
 ---
 
 ## 2. Architecture
 
+Current implementation status: Today: HAT + empty-canvas identity fusion + pixel head. Pending: canvas write/warp/rasterizer + OSS-FX integration. The full diagram below is the target architecture.
+
 ```text
                                     ┌─────────────────────────┐
-  current LR + G-buffers ──────────►│ HAT-Base spatial backbone│──► coarse SR features
+  current LR + G-buffers ──────────►│ OSS HAT-L-derived Heavy  │──► coarse SR features
   (RGB, depth, motion, normals)     └─────────────────────────┘                │
                                                                                 ▼
                                                       ┌────────────────────────────┐
@@ -60,7 +62,7 @@ Frame extrapolation falls out for free: render the same canvas at α ∈ (0, 1) 
 
 | Component | Implementation | Source |
 |---|---|---|
-| **HAT-Base spatial backbone** | Window attention + channel attention transformer, ~17M params | Chen et al., 2023 (Hybrid Attention Transformer) |
+| **OSS HAT-L-derived Heavy spatial backbone** | Window attention + channel attention transformer, ~17M target params | Chen et al., 2023 (Hybrid Attention Transformer) |
 | **Persistent Gaussian canvas** | `oss/gaussian/canvas/` — already implemented | OSS Sprint 5 |
 | **Analytical warp w/ covariance resampling** | extends `oss/sr/gaussian_temporal/analytical_warp.py` with `Σ'_output = J_t Σ_t J_t^⊤ + Σ_recon` | GS-STVSR (Zhou et al., 2026) |
 | **Cross-attention pixel↔Gaussian** | new layer; pixel grid features cross-attend to Gaussian token K/V | OSS-original |
@@ -88,9 +90,9 @@ Latency targets below are ship goals, not current measurements. They are conditi
 |---|---|---|---|---|---|
 | **Pico** | HAT-Tiny (~1M params) | ~1-2K Gaussians | Steam Deck, integrated GPUs, mobile dGPU | <2 ms at 720p→1080p (Vulkan compute, no matrix accel) | ~12 MB |
 | **Standard** | HAT-Small (~5M params) | ~5K Gaussians | Mainstream desktop (RTX 30+, RX 6700+, Arc, M2+) | <3 ms at 1080p→1440p | ~30 MB |
-| **Heavy** | HAT-Base (~15M params) | ~15K Gaussians | Enthusiast (RTX 4080+, RX 7900+, M4 Max) | <4 ms at 1440p→4K | ~80 MB |
+| **Heavy** | OSS HAT-L-derived Heavy (~17M target params) | ~15K Gaussians | Enthusiast (RTX 4080+, RX 7900+, M4 Max) | <4 ms at 1440p→4K | ~80 MB |
 
-These targets bracket vendor parity. Pico undercuts FSR 2/3 (~0.7-1 ms compute shader) on Deck-class hardware where ML SR alternatives don't currently exist. Standard sits in DLSS 2/3 SR territory (~1.5-2.5 ms at 1080p→4K typical). Heavy lands at DLSS 4 transformer territory (~3-4 ms at 1080p→4K on RTX 30+ FP16, ~1.5-2 ms with FP8 on RTX 40+/50+). FSR 4 ML on RDNA4 is in similar territory to DLSS 2/3 (~1.5-2 ms at 1080p→4K). XeSS XMX is ~2-3 ms on Arc; XeSS dp4a fallback is ~5-8 ms cross-vendor.
+These targets bracket vendor latency bands. The target Pico latency band falls within handheld budgets; measurement pending. Standard sits in DLSS 2/3 SR territory (~1.5-2.5 ms at 1080p→4K typical). Heavy lands at DLSS 4 transformer territory (~3-4 ms at 1080p→4K on RTX 30+ FP16, ~1.5-2 ms with FP8 on RTX 40+/50+). FSR 4 ML on RDNA4 is in similar territory to DLSS 2/3 (~1.5-2 ms at 1080p→4K). XeSS XMX is ~2-3 ms on Arc; XeSS dp4a fallback is ~5-8 ms cross-vendor.
 
 Distillation cascades **Heavy → Standard → Pico**. Same training data, same loss, same architecture, just sized.
 
@@ -104,7 +106,7 @@ The Pico tier above ("HAT-Tiny + ~1-2K Gaussians") is a sizing target, not a fix
 |---|---|---|
 | Total params | 1.56M | matches Pico ~1M target |
 | GPU memory | 1.10 GB | fits Steam Deck shared-memory budget |
-| Throughput | 69.33 FPS at 4× on Urban100 (985×798) | hits the <3 ms inference budget |
+| Throughput | 69.33 FPS at 4× on Urban100 (985×798) | demonstrates a compact Gaussian predictor in a relevant footprint |
 | Speedup vs GSASR baseline | 315× | demonstrates the compact-Gaussian-predictor pattern is real-time-viable |
 | Architecture | single point-wise layer predicts anisotropic Gaussian params (RGB + rotation + scale + offset), differentiable rasterizer renders HR in one pass | clean target for a Vulkan compute kernel port |
 
@@ -145,7 +147,7 @@ Training is bf16 mixed precision (see §6). Shipping precision is per-vendor, pi
 | Intel Arc A-series (Alchemist) | FP16 | Level Zero + XMX (FP16-only on A-series) | baseline |
 | Apple Silicon (M3+) | FP16 | Metal MPS + ANE (ANE does not expose FP8 as of 2026) | baseline |
 
-The FP8 path is what closes the gap to DLSS 4's 1.5-2 ms numbers. PTQ FP8 calibration typically costs 0.1-0.3 dB PSNR vs FP16 with proper calibration; that delta is acceptable in the v6 ship target band. INT8 PTQ on Ampere we already measured (`docs/superpowers/experiments/2026-05-03-trt-int8-quantization.md`) — quality gate passed (+0.46 dB PSNR, −0.010 LPIPS vs FP32) but speed regressed at most resolutions on the v4 model because INT8 overhead exceeded precision savings at v4's parameter count. v6 at HAT-Base size should benefit from FP8 PTQ where the v4 model didn't from INT8.
+The FP8 path is what closes the gap to DLSS 4's 1.5-2 ms numbers. PTQ FP8 calibration typically costs 0.1-0.3 dB PSNR vs FP16 with proper calibration; that delta is acceptable in the v6 ship target band. INT8 PTQ on Ampere we already measured (`docs/superpowers/experiments/2026-05-03-trt-int8-quantization.md`) — quality gate passed (+0.46 dB PSNR, −0.010 LPIPS vs FP32) but speed regressed at most resolutions on the v4 model because INT8 overhead exceeded precision savings at v4's parameter count. v6 at OSS HAT-L-derived Heavy size should benefit from FP8 PTQ where the v4 model didn't from INT8.
 
 The shipping pipeline is therefore: **bf16 train → FP16 ONNX export → vendor-specific quantization** (TRT FP8 / HIP FP8 / Level Zero FP8) + **vendor-specific compiled engine**. Distillation is orthogonal: Heavy → Standard → Pico is parameter scaling, run before quantization, with each tier then quantized independently per target vendor.
 
@@ -175,8 +177,8 @@ GAN warmup: pixel-only first 20K steps, add discriminator after. Stabilizes trai
 | Optimizer | AdamW, β=(0.9, 0.99), wd=1e-4 |
 | LR | 2e-4 cosine + 3 warm restarts, T_0=50K, T_mult=1 |
 | Precision | bf16 (Ampere+ supports natively, more stable than fp16 for GAN) |
-| Effective batch | 16 (batch=4, accum=4) for HAT-Base teacher |
-| Patch size | 256² (HAT-Base teacher); 192² (Standard); 128² (Pico) |
+| Effective batch | 16 (batch=4, accum=4) for OSS HAT-L-derived Heavy teacher |
+| Patch size | 256² (OSS HAT-L-derived Heavy teacher); 192² (Standard); 128² (Pico) |
 | Patch sampling | 70% importance-sampled (variance-weighted) + 30% uniform |
 | EMA | β=0.999 (teacher only, not students) |
 | Steps (teacher / Heavy) | 300K |
@@ -190,7 +192,7 @@ GAN warmup: pixel-only first 20K steps, add discriminator after. Stabilizes trai
 | Hypersim | 30% of training mix (real depth + normals + photoreal indoor) | random 10% scenes |
 | (eval) | 10% — held-out from both | combined eval set |
 
-**No SRGD.** SRGD's zero G-buffers create distribution-mix mess. v6 commits to "real G-buffers everywhere or nothing."
+**No SRGD.** SRGD's zero G-buffers create distribution-mix mess. v6 commits to engine-provided G-buffers throughout the training mix.
 
 ### Channels
 
@@ -206,9 +208,9 @@ Drops the SRGD-era canvas hint (was wasted 3 channels on TartanAir/Hypersim — 
 
 ---
 
-## 7. Game integration — DLL shim, no dev cooperation
+## 7. Game integration — planned DLL shim, no dev cooperation
 
-The killer integration story: **OSS-SR works on hundreds of AAA games today via DLL drop-in** because games using DLSS / FSR / XeSS already provide depth + motion vectors + jitter via stable APIs. We shim those DLLs.
+The planned integration path is a DLL shim for titles already exposing DLSS/FSR/XeSS inputs. No game integration has shipped yet; the listed games below are candidate validation targets. Games using DLSS / FSR / XeSS already provide depth + motion vectors + jitter through stable APIs; S7 builds the shim that can consume those inputs.
 
 ### Three integration tiers (all without dev cooperation)
 
@@ -220,9 +222,9 @@ The killer integration story: **OSS-SR works on hundreds of AAA games today via 
 | TAA only (older games) | DXGI resource intercept + heuristics | medium (tier 2 in `oss/model/oss_fx_warp.py`) |
 | Custom AA / no temporal SR | DXGI intercept + on-the-fly RAFT-Small flow | lower (tier 3 fallback) |
 
-### Day-1 candidate games (DLSS-supporting, no kernel anti-cheat)
+### Candidate validation games (DLSS-supporting, no kernel anti-cheat)
 
-Cyberpunk 2077, Alan Wake 2, Hogwarts Legacy, Starfield, Baldur's Gate 3, Returnal, Hellblade II, Forza Horizon 5, Ghost of Tsushima Director's Cut, Black Myth: Wukong — and 200+ more. Drop OSS DLL into game directory, restart, upscaling with OSS instead of DLSS.
+Cyberpunk 2077, Alan Wake 2, Hogwarts Legacy, Starfield, Baldur's Gate 3, Returnal, Hellblade II, Forza Horizon 5, Ghost of Tsushima Director's Cut, and Black Myth: Wukong. These are candidate validation targets once the S7 shim exists.
 
 ### What's off-limits
 
@@ -230,11 +232,11 @@ Anything with kernel anti-cheat (Vanguard, BattlEye, EAC, Ricochet) — DLL inje
 
 ### What dev cooperation WOULD buy (optional, post-launch)
 
-Native engine plugin (UE / Unity), modder community reach, DLSS-API-update protection. Useful but **not blocking shipping**.
+Native engine plugin (UE / Unity), modder community reach, DLSS-API-update protection. Useful but not required for the S7 validation path.
 
 ---
 
-## 8. Frame extrapolation (OSS-FX) as free byproduct
+## 8. Frame extrapolation (OSS-FX) as target byproduct
 
 `oss/gaussian/extrapolation/extrapolator.py` already implements α-conditioned canvas rendering. v6 trained model produces:
 
@@ -245,7 +247,7 @@ Native engine plugin (UE / Unity), modder community reach, DLSS-API-update prote
 | α = 0.5 | render canvas at time t + 0.5·motion vec | FX intermediate frame (60→120 fps) |
 | α ∈ (0, 1), variable schedule | scheduled by `alpha_scheduler.py` | arbitrary target FPS (90, 144, 240) |
 
-Cost above-and-beyond a normal canvas render: **one in-place add to the (N, 2) position tensor** — i.e. essentially free.
+Target cost above-and-beyond a normal canvas render: **one in-place add to the (N, 2) position tensor**. End-to-end measurement is pending.
 
 Compare to DLSS Frame Generation, which is a separate ML network with its own training cost, latency, and hallucination artifacts. **Same v6 trained weights serve both products.**
 
@@ -278,7 +280,7 @@ This makes the asset story align with industry direction. The OSS canvas is just
 
 ---
 
-## 11. Risks (honest)
+## 11. Risks
 
 | Risk | Severity | Mitigation |
 |---|---|---|
@@ -287,7 +289,7 @@ This makes the asset story align with industry direction. The OSS canvas is just
 | Cross-attention between pixel features and Gaussian tokens has no production precedent | medium | Custom CUDA kernel work; fall back to ORT-CUDA EP if blocked. Reference impl exists in research papers. |
 | Differentiable Gaussian densification is research-stage | medium | Conservative densification thresholds; existing `oss/sr/gaussian_temporal/densification.py` already validated in tests |
 | GAN training instability | medium | bf16 + hinge + UNetD + GAN warmup at 20K. Monitor D-loss. |
-| 6-month timeline slips to 12 | medium-high | Honestly likely. Real ship target is "first user-visible demo Q4 2026 / Q1 2027" |
+| 6-month timeline slips to 12 | medium-high | Plausible. Ship target is "first user-visible demo Q4 2026 / Q1 2027" |
 | DLSS API changes break shim | low-medium | Version-detect + graceful fallback; dev partnerships harden against this in v6.1+ |
 
 ---
@@ -296,12 +298,12 @@ This makes the asset story align with industry direction. The OSS canvas is just
 
 1. **Stage 0/1/2 validation** of v5-gaussian-temporal architecture (~7 hours, decision-gate before paying for full training)
 2. **Stage 3 full training** of v5-gaussian-temporal as the convergence baseline (~36h)
-3. **v6 architecture implementation:** add HAT-Base backbone, cross-attention layer, covariance resampling, S-T variation score pruning, key-frame active mask
+3. **v6 architecture implementation:** add OSS HAT-L-derived Heavy backbone, cross-attention layer, covariance resampling, S-T variation score pruning, key-frame active mask
 4. **v6 training pipeline:** teacher (Heavy) → student distillation (Standard, Pico)
 5. **Custom kernels per vendor:** CUDA (primary), then HIP, Metal, Level Zero, Vulkan
-6. **DXGI hook + NGX shim runtime** (Sprint 7) — the actual integration path
+6. **DXGI hook + NGX shim runtime** (Sprint 7) — the planned integration path
 7. **glTF KHR_gaussian_splatting output format** for canvas serialization
-8. **Frame extrapolation** as a free byproduct via α-conditioned rendering
+8. **Frame extrapolation** as a target byproduct via α-conditioned rendering
 9. **Three model tiers** (Pico / Standard / Heavy) shipped as one architecture
 
 ---

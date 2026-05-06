@@ -1,6 +1,6 @@
 # OpenSuperSampling (OSS)
 
-Open-source real-time super-resolution and frame extrapolation for games. Cross-vendor (NVIDIA, AMD, Apple, Intel, Steam Deck), no SDK contract, no vendor lock-in. Designed to drop in as a DLL replacement for any game that already uses DLSS, FSR, or XeSS.
+Open-source real-time super-resolution and frame extrapolation for games. Cross-vendor (NVIDIA, AMD, Apple, Intel, Steam Deck), no SDK contract, no vendor lock-in. The planned integration path is a DLL shim for titles already exposing DLSS, FSR, or XeSS inputs.
 
 Pre-alpha. Active research.
 
@@ -14,11 +14,15 @@ The image above is the in-flight viz strip from a partial training run. Six pane
 
 The v4 single-frame upscaler is trained and exported. On the SRGD held-out batch it sits around 30 dB PSNR / 0.30 LPIPS, against bicubic at 27 dB / 0.45. That is the working baseline.
 
-v5 is two parallel temporal training runs that exist to validate the architecture before v6 commits. Pixel-temporal is warm-starting from v4 weights on TartanAir right now. Gaussian-temporal is queued behind it on the same 3080 Ti. Neither is a ship target on its own.
+v5-pixel-temporal completed the validation pass on 2026-05-06. On the TartanAir `oldtown` held-out batch it measures PSNR 25.703 / LPIPS 0.1666 with temporal ratio 0.337 versus v4. See [2026-05-06-v5-pixel-temporal-final-held-out-eval](docs/superpowers/experiments/2026-05-06-v5-pixel-temporal-final-held-out-eval.md). v5-Gaussian-temporal is no longer the main baseline path; Option A was taken on 2026-05-06.
 
-v6 is the architecture intended to actually ship. A persistent 2D Gaussian canvas, warped by exact engine motion vectors with covariance resampling at the rasterizer, fused with a HAT spatial backbone via cross-attention, with score-based active pruning to keep per-frame cost bounded. Three tiers share one architecture: Pico for handhelds, Standard for mainstream desktop, Heavy for enthusiast. Custom kernels per GPU vendor (CUDA, HIP, Metal, Level Zero, Vulkan compute) deliver real-time latency. Frame extrapolation (OSS-FX) is the same canvas rendered at fractional time positions instead of α=1; it does not require a separate ML network the way DLSS Frame Generation does.
+v6 is the architecture intended to ship. Today: HAT + empty-canvas identity fusion + pixel head. Pending: canvas write/warp/rasterizer + OSS-FX integration. The full diagram below is the target architecture.
+
+The target design uses a persistent 2D Gaussian canvas, warped by exact engine motion vectors with covariance resampling at the rasterizer, fused with a HAT spatial backbone via cross-attention, with score-based active pruning to keep per-frame cost bounded. Three tiers share one architecture: Pico for handhelds, Standard for mainstream desktop, Heavy for enthusiast. Custom kernels per GPU vendor (CUDA, HIP, Metal, Level Zero, Vulkan compute) target real-time latency. Frame extrapolation (OSS-FX) is the same canvas rendered at fractional time positions instead of α=1; it does not require a separate ML network the way DLSS Frame Generation does.
 
 The canonical v6 design lives in [experiments/2026-05-05-v6-architecture-canonical.md](docs/superpowers/experiments/2026-05-05-v6-architecture-canonical.md). The implementation roadmap, derived from deep-reads of GSASR, AAA-Gaussians, AA-2DGS, vk_gaussian_splatting, and GaussianVideo, is in [research/2026-05-05-v6-external-baselines-integration-plan.md](docs/research/2026-05-05-v6-external-baselines-integration-plan.md).
+
+Target architecture:
 
 ```text
                                     ┌─────────────────────────┐
@@ -68,7 +72,7 @@ v4's current latency reflects stock TensorRT FP16 with no per-vendor kernel opti
 
 Numbers are approximate published or independently-measured ranges and vary by GPU SKU, scene, and exact resolution. Primary sources: NVIDIA DLSS technical blog, AMD GPUOpen FSR documentation, Intel XeSS whitepaper, Digital Foundry latency-analysis measurements.
 
-v5 quality numbers do not exist yet. Pixel-temporal training has not finished. Gaussian-temporal training has not started.
+v5-pixel-temporal final held-out result: PSNR 25.703 / LPIPS 0.1666 / temporal ratio 0.337 on the TartanAir `oldtown` held-out batch. Source: [2026-05-06-v5-pixel-temporal-final-held-out-eval](docs/superpowers/experiments/2026-05-06-v5-pixel-temporal-final-held-out-eval.md). v5-Gaussian-temporal is implemented but no longer the main baseline after Option A on 2026-05-06.
 
 ---
 
@@ -86,11 +90,11 @@ The supported-games list is editorial. Anti-cheat titles using kernel-level syst
 
 ## Roadmap
 
-S5 is current: v5-pixel and v5-Gaussian temporal validation runs. Each track converges or it does not. Whichever produces results worth carrying forward feeds the v6 implementation.
+S5 is closed for the baseline decision: v5-pixel-temporal produced the carried-forward result on 2026-05-06, and v5-Gaussian-temporal is parked unless staged smoke tests justify reopening it.
 
-S6 is v6: the covariance-resampled Gaussian-temporal architecture summarized above. Three tiers (Pico, Standard, Heavy), custom per-vendor kernels, DLL-shim integration. Roughly two weeks of code per stage and 50 to 60 hours of teacher training on the local 3080 Ti.
+S6 is v6: the covariance-resampled Gaussian-temporal architecture summarized above. Modules, orchestrator, and training loop have landed. Full canvas write/warp/rasterizer wiring and OSS-FX integration are still pending. Three tiers (Pico, Standard, Heavy), custom per-vendor kernels, and DLL-shim integration remain target work.
 
-S7 is the DLL-shim runtime that lets OSS replace DLSS, FSR, or XeSS in already-shipping games without developer cooperation. Game requirements: must already use one of the three (which is how OSS receives depth, motion vectors, and jitter), and must not use kernel-level anti-cheat. Day-one candidates include Cyberpunk 2077, Alan Wake 2, Hogwarts Legacy, Starfield, Baldur's Gate 3, Returnal, Hellblade II, Forza Horizon 5, and Black Myth: Wukong, plus a few hundred more.
+S7 is the planned DLL-shim runtime that lets OSS replace DLSS, FSR, or XeSS in already-shipping games without developer cooperation. No game integration has shipped yet. Game requirements: must already use one of the three (which is how OSS receives depth, motion vectors, and jitter), and must not use kernel-level anti-cheat. Candidate validation targets include Cyberpunk 2077, Alan Wake 2, Hogwarts Legacy, Starfield, Baldur's Gate 3, Returnal, Hellblade II, Forza Horizon 5, and Black Myth: Wukong.
 
 S7-data is the OSS Capture Tool. A small DLL drops into supported games, captures rendered frames and engine G-buffers while you play, then deletes the local copies once the server confirms upload. Four bandwidth tiers: trickle (~100 MB/h), lite (~500 MB/h, the default), regular (~2 GB/h), and INSANE (~20–50 GB/h). The server is FastAPI on Cloudflare R2. Codex is implementing the client side; the server side ships under this repo.
 
@@ -127,9 +131,9 @@ All three tiers share the v6 architecture, scaled. Distillation chain: Heavy →
 |---|---|---|---|---|---|
 | Pico | HAT-Tiny (~1M params) | ~1–2K Gaussians | Steam Deck, integrated GPUs, mobile dGPU | <2 ms at 720p → 1080p | hand-tuned Vulkan compute |
 | Standard | HAT-Small (~5M params) | ~5K Gaussians | RTX 30+, RX 6700+, Arc, M2+ | <3 ms at 1080p → 1440p | CUDA / HIP / Metal / Level Zero |
-| Heavy | HAT-Base (~15M params) | ~15K Gaussians | RTX 4080+, RX 7900+, M4 Max | <4 ms at 1440p → 4K | same per-vendor path |
+| Heavy | OSS HAT-L-derived Heavy (~17M target params) | ~15K Gaussians | RTX 4080+, RX 7900+, M4 Max | <4 ms at 1440p → 4K | same per-vendor path |
 
-The targets bracket vendor parity: Pico undercuts FSR 2/3 in the Deck-class band where ML SR alternatives don't currently exist, Standard sits in DLSS 2/3 SR territory, and Heavy lands at DLSS 4 transformer territory. See the budget comparison table earlier in this README for context.
+The targets bracket vendor latency bands: the target Pico latency band falls within handheld budgets; measurement pending. Standard sits in DLSS 2/3 SR territory, and Heavy lands at DLSS 4 transformer territory. See the budget comparison table earlier in this README for context.
 
 Quality modes (planned, by upscale ratio): Ultra Performance 33%, Performance 50%, Balanced 59%, Quality 67%, Ultra Quality 77%. OSAA is anti-aliasing at native resolution (100%).
 

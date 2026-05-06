@@ -4,7 +4,7 @@
 *OpenSuperSampling Project*
 `cashcon57@gmail.com`
 
-**Status:** pre-alpha. v6 architecture locked 2026-05-05. v5 dual-track validation in flight. Implementation, training, and integration runtime all incomplete. This document describes the design under development; reported numbers are scoped to what has actually been measured.
+**Status:** pre-alpha. v6 architecture locked 2026-05-05. v5-pixel-temporal completed the baseline validation on 2026-05-06. v6 modules, orchestrator, and training loop have landed; full canvas write/warp/rasterizer wiring and integration runtime remain incomplete. This document describes the design under development; reported numbers are scoped to measured results.
 
 ---
 
@@ -16,7 +16,7 @@
 
 ---
 
-OpenSuperSampling (OSS) is an open, vendor-agnostic alternative to proprietary real-time super-resolution stacks (DLSS, FSR, XeSS). The canonical v6 architecture is an online Gaussian-temporal super-resolver: a HAT-Base spatial backbone produces coarse high-resolution features from the current low-resolution frame plus engine G-buffers; these features cross-attend to a persistent canvas of 5K–15K 2D Gaussians, accumulated across frames and warped per-frame by an analytical sub-pixel transform with explicit covariance resampling in the manner of Zhou et al. (GS-STVSR, 2026). A Spatial-Temporal Variation Score (Yuan et al., NeurIPS 2025) drives score-based active pruning. Because the canvas is rendered through the same rasterizer at fractional time positions $\alpha \in (0, 1)$, frame extrapolation falls out as a one-tensor-add byproduct rather than a separate ML network. Three model tiers (Pico, Standard, Heavy) share one architecture, distilled, and target every major GPU vendor through per-vendor custom kernels. Integration is planned through DLL-shim drop-in for any title already supporting DLSS, FSR, or XeSS — no game-developer cooperation required. The project is pre-alpha; v4 single-frame baseline is trained, v5 temporal validation tracks are in training/queued, v6 implementation is not yet started.
+OpenSuperSampling (OSS) is an open, vendor-agnostic alternative to proprietary real-time super-resolution stacks (DLSS, FSR, XeSS). The canonical v6 target architecture is an online Gaussian-temporal super-resolver: an OSS HAT-L-derived Heavy spatial backbone produces coarse high-resolution features from the current low-resolution frame plus engine G-buffers; these features cross-attend to a persistent canvas of 5K–15K 2D Gaussians, accumulated across frames and warped per-frame by an analytical sub-pixel transform with explicit covariance resampling in the manner of Zhou et al. (GS-STVSR, 2026). A Spatial-Temporal Variation Score (Yuan et al., NeurIPS 2025) drives score-based active pruning. Because the target canvas is rendered through the same rasterizer at fractional time positions $\alpha \in (0, 1)$, frame extrapolation falls out as a one-tensor-add byproduct rather than a separate ML network. Three model tiers (Pico, Standard, Heavy) share one architecture, distilled, and target every major GPU vendor through per-vendor custom kernels. The planned integration path is a DLL shim for titles already exposing DLSS/FSR/XeSS inputs. No game integration has shipped yet; listed games are candidate validation targets. Today the v6 code path is HAT + empty-canvas identity fusion + pixel head. Pending: canvas write/warp/rasterizer + OSS-FX integration. The project is pre-alpha; v4 single-frame baseline is trained, v5-pixel-temporal completed baseline validation, and v6 implementation is in progress.
 
 ---
 
@@ -48,15 +48,17 @@ where $J_t$ is the warp Jacobian and $\Sigma_{\text{recon}}$ is an EWA-style low
 
 3. **Frame extrapolation as a direct byproduct of $\alpha$-conditioned canvas rendering.** The same trained canvas, rendered at $\alpha = 1$, produces super-resolved current-frame output; rendered at $\alpha \in (0, 1)$ along the motion field, it produces an extrapolated intermediate frame. The architectural cost above and beyond the SR render is one in-place addition to the $(N, 2)$ Gaussian-position tensor. The trained weights are shared. This contrasts with DLSS Frame Generation, which is a separately trained network with its own latency budget and failure modes.
 
-In support of these three, OSS v6 also commits to: a cross-attention bridge between dense pixel features (HAT-Base backbone) and sparse Gaussian tokens (canvas K/V); three deployment tiers (Pico ~1M params, Standard ~5M, Heavy ~15M) sharing one architecture and trained by Heavy → Standard → Pico distillation; per-vendor custom inference kernels (CUDA/CUTLASS, HIP/rocWMMA, Metal/MPS, Level Zero/XMX, Vulkan compute) following the same engineering pattern used internally by every shipped ML upscaler; and a DLL-shim integration path that requires no game-developer cooperation in any title that already supports DLSS, FSR, or XeSS.
+In support of these three, OSS v6 also commits to: a cross-attention bridge between dense pixel features (OSS HAT-L-derived Heavy backbone) and sparse Gaussian tokens (canvas K/V); three deployment tiers (Pico ~1M params, Standard ~5M, Heavy ~17M target params) sharing one architecture and trained by Heavy → Standard → Pico distillation; per-vendor custom inference kernels (CUDA/CUTLASS, HIP/rocWMMA, Metal/MPS, Level Zero/XMX, Vulkan compute) following the same engineering pattern used internally by every shipped ML upscaler; and a planned DLL-shim integration path for titles that already support DLSS, FSR, or XeSS.
 
 ---
 
 ## 3. Architecture (v6 canonical)
 
+Current implementation status: Today: HAT + empty-canvas identity fusion + pixel head. Pending: canvas write/warp/rasterizer + OSS-FX integration. The full diagram below is the target architecture.
+
 ```text
                                       ┌──────────────────────────┐
-  current LR + G-buffers ────────────►│ HAT-Base spatial backbone│──► coarse SR features
+  current LR + G-buffers ────────────►│ OSS HAT-L-derived Heavy  │──► coarse SR features
   (RGB, depth, motion, normals)       └──────────────────────────┘                │
                                                                                   ▼
                                                        ┌────────────────────────────┐
@@ -73,9 +75,9 @@ In support of these three, OSS v6 also commits to: a cross-attention bridge betw
    Above-and-beyond cost: one in-place add to the (N,2) position tensor.
 ```
 
-### 3.1 HAT-Base spatial backbone
+### 3.1 OSS HAT-L-derived Heavy spatial backbone
 
-A Hybrid Attention Transformer (Chen et al., 2023) at the Base scale (~17M params) provides the dense feature path. Window self-attention plus channel attention, configured to consume the 9-channel input stack (RGB + depth + motion + normals) at low resolution, producing coarse high-resolution features.
+An OSS HAT-L-derived trimmed Heavy transformer (~17M target params) provides the dense feature path. It uses HAT-style window self-attention plus channel attention, configured to consume the 9-channel input stack (RGB + depth + motion + normals) at low resolution, producing coarse high-resolution features. It is not equivalent to upstream HAT-L; upstream HAT-L warm-start would require a separate factory.
 
 ### 3.2 Persistent Gaussian canvas
 
@@ -150,7 +152,7 @@ External comparisons against DLSS, FSR, XeSS are *not* currently apples-to-apple
 
 ---
 
-## 6. Current results (honest)
+## 6. Current results
 
 This section describes only what has been measured. Numbers are scoped to the test set and configuration on which they were measured. We do not claim parity with or superiority over any vendor stack at this time.
 
@@ -167,15 +169,15 @@ These numbers are valid only on the SRGD-distribution held-out set. They are not
 
 ### 6.2 v5-pixel-temporal (control track)
 
-Implementation complete (`oss/sr/temporal/`); training in flight on `<train-host>` warm-started from v4 step-385K; held-out gate scheduled. No final-checkpoint numbers exist yet. Live-training metrics are not appropriate input to a quality claim and are deliberately omitted here.
+Implementation complete (`oss/sr/temporal/`). Final held-out result on the TartanAir `oldtown` batch: PSNR 25.703 / LPIPS 0.1666 / temporal ratio 0.337 versus v4. Source: [`docs/superpowers/experiments/2026-05-06-v5-pixel-temporal-final-held-out-eval.md`](docs/superpowers/experiments/2026-05-06-v5-pixel-temporal-final-held-out-eval.md). Option A was taken on 2026-05-06, making v5-pixel-temporal the carried-forward baseline.
 
 ### 6.3 v5-gaussian-temporal (research track)
 
-Implementation complete (`oss/sr/gaussian_temporal/`, 113 tests passing 1 skipped as of 2026-05-04); staged Stage-0/1/2 validation queued sequentially behind the pixel run on the shared RTX 3080 Ti. No convergence numbers.
+Implementation complete (`oss/sr/gaussian_temporal/`, 113 tests passing 1 skipped as of 2026-05-04). It is no longer the main baseline path after Option A on 2026-05-06 unless staged smoke tests justify reopening it. No convergence numbers.
 
 ### 6.4 v6
 
-Architecture locked 2026-05-05 (`docs/superpowers/experiments/2026-05-05-v6-architecture-canonical.md`). Implementation queued behind v5 staged validation. No training runs. No numbers.
+Architecture locked 2026-05-05 (`docs/superpowers/experiments/2026-05-05-v6-architecture-canonical.md`). Modules, orchestrator, and training loop have landed. Full canvas write/warp/rasterizer wiring and OSS-FX integration are still pending. No trained v6 checkpoints. No quality numbers.
 
 ### 6.5 Charts with vendor reference lines
 
@@ -194,7 +196,7 @@ We list the known weaknesses of the current design, in decreasing order of expec
 - **DLL-shim integration is unbuilt.** The S7 design memo (`docs/superpowers/notes/2026-05-04-s7-game-integration-design.md`) describes the NGX/FSR/XeSS shim path; no shim has been compiled, no game has been intercepted. Comparative evaluation against vendor stacks on real game content depends on this runtime.
 - **Training corpus is currently TartanAir-easy-mode plus Hypersim.** AAA volumetric and transparency content (smoke, foliage, particle systems, hair, glass) is not well-represented. Generalization to that content will require the OSS Capture Tool community pipeline (Sprint 7-data) to accumulate real game captures, and is gated on contributor opt-in volume.
 - **Steam Deck is not yet viable.** RDNA 2 has no matrix accelerator. The v6 Pico tier targets Steam Deck through hand-tuned Vulkan compute, which is the same engineering pattern FSR 2 uses, but Pico is not yet implemented or trained.
-- **Six-month timeline-to-demo is optimistic.** The honest expected-case slip is to twelve months; the design memo acknowledges this explicitly.
+- **Six-month timeline-to-demo is optimistic.** A twelve-month slip is plausible; the design memo acknowledges this explicitly.
 - **HDR support is partial.** As of commit `694a0f3` the gaussian-temporal model uses a softplus output activation, so HDR input/output flows through architecturally without clipping (sigmoid-clamping was removed). However, the entire training corpus (TartanAir, Hypersim, SRGD) is 8-bit sRGB. HDR-specific patterns — sun discs, neon, specular highlights, BT.2020 wide-gamut colors — are not well-represented in what the model has seen. Expected HDR quality is approximately 70–80% of SDR quality on the same content class: noticeably better than bicubic, behind DLSS HDR. v6.1 schedules retraining on HDR-encoded data via INSANE-mode capture of HDR-rendered games plus re-rendered Hypersim in linear scRGB to close this gap.
 
 ---
@@ -211,7 +213,7 @@ We list the known weaknesses of the current design, in decreasing order of expec
 
 **GS-STVSR (Zhou et al., 2026, [6]).** The covariance-resampling formulation for spatio-temporal SR on Gaussian primitives. OSS lifts the resampling formula directly into the streaming-SR canvas.
 
-**HAT (Chen et al., 2023, [7]).** Hybrid Attention Transformer for image SR. OSS uses HAT-Base as the spatial backbone of the dense path and HAT-Tiny/Small at distilled tiers.
+**HAT (Chen et al., 2023, [7]).** Hybrid Attention Transformer for image SR. OSS uses an HAT-L-derived trimmed Heavy backbone for the dense path and HAT-Tiny/Small at distilled tiers.
 
 **DLSS / FSR / XeSS [proprietary].** The targets. DLSS uses a per-vendor fused CUDA kernel with tensor-core MMA over a learned temporal-aware network and a separate Frame Generation network. FSR 2/3 is a hand-tuned shader; FSR 4 (announced) adds a learned model. XeSS uses XMX matrix instructions on Arc with a dp4a fallback. OSS is positioned as cross-vendor by design with one trained architecture and per-vendor specialist kernels — the same engineering pattern, applied openly across all backends rather than within one.
 
