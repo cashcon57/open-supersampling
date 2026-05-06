@@ -274,6 +274,37 @@ def test_v6model_gradient_flows_to_every_parameter():
 # ---------------------------------------------------------------------------
 
 
+def test_v6model_persistent_state_is_detached_between_frames():
+    """Audit finding HIGH-2/3: _canvas_state and _st_state must NOT carry
+    autograd across frames. Without detach, BPTT through every previous
+    frame's spawner OOMs and leaks gradient state across optimizer steps.
+    Pin the contract: after one forward, every persistent tensor
+    requires_grad=False.
+    """
+    m = _tiny_model(tile_size_lr=16)
+    m.train()
+    lr = torch.randn(1, 9, 32, 32, requires_grad=True)
+    out = m(lr, motion_lr=None, frame_index=0)
+    # The current-frame output must be live (loss flows back through it)
+    assert out.requires_grad
+    # Persistent state must be detached for next-frame forward.
+    cs = m._canvas_state
+    assert cs is not None
+    for name in ("positions", "scales", "rotations", "opacities", "colors"):
+        t = getattr(cs, name)
+        assert not t.requires_grad, (
+            f"_canvas_state.{name} should be detached between frames, "
+            f"requires_grad={t.requires_grad}"
+        )
+        assert t.grad_fn is None, (
+            f"_canvas_state.{name} should have no grad_fn; got {t.grad_fn}"
+        )
+    sts = m._st_state
+    assert sts is not None
+    assert not sts.spatial_accumulator.requires_grad
+    assert sts.spatial_accumulator.grad_fn is None
+
+
 def test_v6model_reset_state_clears_canvas_and_score():
     m = _tiny_model()
     # Inject a fake canvas state to verify reset wipes it.

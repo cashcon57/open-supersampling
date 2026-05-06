@@ -259,7 +259,43 @@ class V6Model(nn.Module):
         else:
             rgb_hr = F.softplus(rgb_hr)
 
+        # Persistent per-rank state must NOT carry autograd across frames.
+        # Without this, the canvas + ST tensors keep gradient back through
+        # every previous frame's spawner (BPTT through 100s of frames),
+        # which OOMs and leaks gradient state across optimizer steps.
+        # The current frame's loss already had a live graph above; we only
+        # detach what gets stored back into self for the next forward.
+        self._canvas_state = self._detach_canvas(self._canvas_state)
+        self._st_state = self._detach_st_state(self._st_state)
+
         return rgb_hr
+
+    @staticmethod
+    def _detach_canvas(canvas: Optional[CanvasState]) -> Optional[CanvasState]:
+        if canvas is None:
+            return None
+        return CanvasState(
+            positions=canvas.positions.detach(),
+            scales=canvas.scales.detach(),
+            rotations=canvas.rotations.detach(),
+            opacities=canvas.opacities.detach(),
+            colors=canvas.colors.detach(),
+            count=canvas.count,
+        )
+
+    @staticmethod
+    def _detach_st_state(state):
+        if state is None:
+            return None
+        # STVScoreState is a dataclass with two tensor fields + an int.
+        # int64 lifespan_count carries no autograd; detach the float
+        # spatial_accumulator that the spawner's confidence path leaks into.
+        from oss.sr.v6.st_variation_score import STVScoreState
+        return STVScoreState(
+            spatial_accumulator=state.spatial_accumulator.detach(),
+            lifespan_count=state.lifespan_count.detach(),
+            frames_observed=state.frames_observed,
+        )
 
     # ------------------------------------------------------------------
     # ST-score-driven pruning hook
@@ -471,7 +507,15 @@ class V6Model(nn.Module):
             final_count=n,
             device=canvas.opacities.device,
         )
-        alpha = canvas.opacities[:n].to(dtype=torch.float32).unsqueeze(1)
+        # KNOWN LIMITATION (v6.1 followup): real 4DGS-1K SS_i = sum_pixels
+        # alpha_i * T_i requires the rasterizer to expose per-Gaussian-per-
+        # pixel contribution. Today we approximate with opacity * 1.0 — the
+        # ranking still penalizes low-opacity Gaussians but ignores
+        # rendered-footprint area. Pruning is heuristic-correct, not
+        # 4DGS-1K-faithful; refinement to true alpha*T is tracked for v6.1.
+        # Detached so the spawner's confidence path doesn't leak gradient
+        # through the persistent ST state across frames.
+        alpha = canvas.opacities[:n].detach().to(dtype=torch.float32).unsqueeze(1)
         transmittance = torch.ones_like(alpha)
         self._st_state = update_st_score(state, alpha, transmittance, active[:n])
 
