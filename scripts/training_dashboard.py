@@ -686,28 +686,38 @@ function installChartControls(chart) {
   refreshChartLegend(chart);
 }
 
-// Published-benchmark estimates of competing real-time upscalers at
-// 1080p->4K Quality mode on RTX <train-host>-class hardware. Values are
-// approximate (±1 dB on PSNR, ±0.05 on LPIPS, ±0.5 ms on latency); they
-// vary significantly by scene content and were never directly measured
-// by us. Sources: NVIDIA / AMD whitepapers + independent benchmark
-// roundups (e.g. ComputerBase, TechPowerUp). DLSS 5 omitted: not
-// publicly released as of this dashboard's authoring.
+// Reference lines drawn on every eval-history chart.
+//
+// `kind: 'ours'` rows are MEASURED by OSS (held-out evaluation,
+// n=64, deterministic seed); they're solid lines.
+// All other rows are vendor-published estimates on DIFFERENT content
+// (1080p->4K Quality on AAA games per NVIDIA/AMD whitepapers +
+// independent roundups), included for context only — they're dashed
+// lines and labelled "(est)" on the chart. ±1 dB / ±0.05 LPIPS / ±0.5 ms
+// is the rough error bar for the estimates.
+//
+// IMPORTANT: bicubic and oss_v5_pixel are measured on the SAME content
+// (TartanAir oldtown held-out, 64 frames, 2× SR). v3/v4 are on SRGD
+// CitySample — apples-to-oranges with the v5 row, but kept here as
+// a historical anchor for the project trajectory. Don't compare v3/v4
+// directly to v5 — different test set.
 const UPSCALER_ESTIMATES = {
-  // [psnr_dB, lpips, latency_ms, color]
-  bicubic:  { psnr: 25.8, lpips: 0.51, latency_ms: 0.05, color: '#8b949e' },
-  fsr1:     { psnr: 26.5, lpips: 0.45, latency_ms: 0.4,  color: '#a371f7' },
-  fsr2:     { psnr: 28.5, lpips: 0.28, latency_ms: 0.8,  color: '#bc8cff' },
-  fsr3:     { psnr: 28.5, lpips: 0.28, latency_ms: 0.8,  color: '#d2a8ff' },
-  fsr4:     { psnr: 30.0, lpips: 0.22, latency_ms: 2.0,  color: '#e6c1ff' },
-  dlss1:    { psnr: 26.5, lpips: 0.40, latency_ms: 1.5,  color: '#1f6feb' },
-  dlss2:    { psnr: 30.0, lpips: 0.22, latency_ms: 0.4,  color: '#3fb950' },
-  dlss3:    { psnr: 30.0, lpips: 0.22, latency_ms: 0.4,  color: '#56d364' },
-  dlss4:    { psnr: 31.5, lpips: 0.17, latency_ms: 1.0,  color: '#7ee787' },
-  // OSS measured baselines (NOT estimates — actual held-out numbers from v3-vs-v4 A/B
-  // memo on CitySample, n=64, fixed-batch, shuffle=False, manual_seed=0).
-  oss_v3:   { psnr: 29.6, lpips: 0.40, latency_ms: 37.6, color: '#f0883e', kind: 'ours' },
-  oss_v4:   { psnr: 29.5, lpips: 0.31, latency_ms: 37.6, color: '#ff9b3c', kind: 'ours' },
+  // OSS measured (real held-out numbers we ran ourselves, NOT estimates).
+  bicubic:           { psnr: 23.909, lpips: 0.2945, latency_ms: 0.05, color: '#8b949e', kind: 'ours' },  // TartanAir oldtown, 64-frame held-out
+  oss_v5_pixel:      { psnr: 25.703, lpips: 0.1666, latency_ms: null, color: '#3fb950', kind: 'ours' },  // 2026-05-06-v5-pixel-temporal-final-held-out-eval.md
+  oss_v3:            { psnr: 29.6,   lpips: 0.40,   latency_ms: 37.6, color: '#f0883e', kind: 'ours-srgd' },  // SRGD CitySample, NOT TartanAir
+  oss_v4:            { psnr: 29.5,   lpips: 0.31,   latency_ms: 37.6, color: '#ff9b3c', kind: 'ours-srgd' },  // SRGD CitySample, NOT TartanAir
+  // Vendor-published estimates on AAA-game 1080p->4K — different
+  // content from our TartanAir test set, included for vibes-level
+  // positioning only.
+  fsr1:              { psnr: 26.5,   lpips: 0.45,   latency_ms: 0.4,  color: '#a371f7' },
+  fsr2:              { psnr: 28.5,   lpips: 0.28,   latency_ms: 0.8,  color: '#bc8cff' },
+  fsr3:              { psnr: 28.5,   lpips: 0.28,   latency_ms: 0.8,  color: '#d2a8ff' },
+  fsr4:              { psnr: 30.0,   lpips: 0.22,   latency_ms: 2.0,  color: '#e6c1ff' },
+  dlss1:             { psnr: 26.5,   lpips: 0.40,   latency_ms: 1.5,  color: '#1f6feb' },
+  dlss2:             { psnr: 30.0,   lpips: 0.22,   latency_ms: 0.4,  color: '#3fb950' },
+  dlss3:             { psnr: 30.0,   lpips: 0.22,   latency_ms: 0.4,  color: '#56d364' },
+  dlss4:             { psnr: 31.5,   lpips: 0.17,   latency_ms: 1.0,  color: '#7ee787' },
 };
 
 // Phase markers — vertical lines on every step-axis chart at the
@@ -754,10 +764,12 @@ const upscalerRefPlugin = (metric) => ({
     ctx.lineWidth = 1;
     ctx.font = '10px -apple-system, sans-serif';
     const items = [
-      ['bicubic', 'bicubic'], ['fsr1', 'FSR 1'], ['fsr2', 'FSR 2'],
-      ['fsr3', 'FSR 3'], ['fsr4', 'FSR 4'], ['dlss1', 'DLSS 1'],
-      ['dlss2', 'DLSS 2'], ['dlss3', 'DLSS 3'], ['dlss4', 'DLSS 4'],
-      ['oss_v3', 'OSS v3 (ours, measured)'], ['oss_v4', 'OSS v4 (ours, measured)'],
+      ['bicubic',         'bicubic (TartanAir held-out, ours)'],
+      ['oss_v5_pixel',    'OSS v5-pixel-temporal (TartanAir, ours)'],
+      ['oss_v3',          'OSS v3 (SRGD, ours)'],
+      ['oss_v4',          'OSS v4 (SRGD, ours)'],
+      ['fsr1', 'FSR 1'], ['fsr2', 'FSR 2'], ['fsr3', 'FSR 3'], ['fsr4', 'FSR 4'],
+      ['dlss1', 'DLSS 1'], ['dlss2', 'DLSS 2'], ['dlss3', 'DLSS 3'], ['dlss4', 'DLSS 4'],
     ];
 
     // First pass: draw all reference lines and collect label-placement
@@ -771,8 +783,12 @@ const upscalerRefPlugin = (metric) => ({
       const yp = y.getPixelForValue(v);
       if (yp < y.top || yp > y.bottom) continue;
       ctx.strokeStyle = e.color;
-      if (e.kind === 'ours') {
-        ctx.setLineDash([]);
+      const ours = (e.kind === 'ours' || e.kind === 'ours-srgd');
+      if (ours) {
+        // SRGD-measured rows get a longer dash to flag "ours but
+        // different test set" vs main 'ours' (TartanAir held-out)
+        // which is solid.
+        ctx.setLineDash(e.kind === 'ours-srgd' ? [6, 3] : []);
         ctx.lineWidth = 2;
       } else {
         ctx.setLineDash([3, 4]);
@@ -782,7 +798,7 @@ const upscalerRefPlugin = (metric) => ({
       ctx.moveTo(x.left, yp);
       ctx.lineTo(x.right, yp);
       ctx.stroke();
-      const suffix = e.kind === 'ours' ? '' : ' (est)';
+      const suffix = (e.kind === 'ours' || e.kind === 'ours-srgd') ? '' : ' (est)';
       candidates.push({ y: yp, color: e.color, text: label + suffix, kind: e.kind });
     }
 
@@ -817,7 +833,7 @@ const upscalerRefPlugin = (metric) => ({
           const e = UPSCALER_ESTIMATES[k];
           const lbl = items.find(it => it[0] === k);
           if (!lbl) return false;
-          const suffix = e.kind === 'ours' ? '' : ' (est)';
+          const suffix = (e.kind === 'ours' || e.kind === 'ours-srgd') ? '' : ' (est)';
           return (lbl[1] + suffix) === c.text;
         })][metric]
       );
