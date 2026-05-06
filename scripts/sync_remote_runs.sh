@@ -24,19 +24,40 @@ REMOTE_HOST="${REMOTE_HOST:-<train-host>}"
 REMOTE_ROOT="${REMOTE_ROOT:-<train-host-data>/checkpoints}"
 LOG="${SYNC_LOG:-/tmp/sync-remote-runs.log}"
 
-# Run dirs to mirror. Pattern matches what RUN_DIR_PATTERNS in the
-# dashboard accepts.
-RUNS=(
-  "srcnn-v6-heavy-001"
-  "srcnn-v5-pixel-temporal-validated"
-  "srcnn-prod-v4-lpips"
-)
+# Auto-discover run dirs on the remote host matching the dashboard's
+# RUN_DIR_PATTERNS (srcnn-*, srcnn-prod-*). Refreshed each cycle so
+# new training runs appear in the dashboard within one poll interval.
+# Skip failed / aborted / sanity / smoke run dirs — they're noise that
+# would otherwise saturate the sync loop with old viz PNGs the user
+# doesn't care about. Also limit to v4+ to drop pre-v4 prototype dirs.
+discover_remote_runs() {
+  ssh -o BatchMode=yes "$REMOTE_HOST" \
+    "Get-ChildItem '$REMOTE_ROOT' -Directory -ErrorAction SilentlyContinue | \
+     Where-Object { \$_.Name -like 'srcnn-*' } | \
+     Where-Object { \$_.Name -notmatch '(aborted|bug|sanity|smoke|test|leak|preflight|paramprobe|init-fix|diag)' } | \
+     Where-Object { \$_.Name -notmatch '^srcnn-prod\$|^srcnn-prod-v[123](-|\$)' } | \
+     Select-Object -ExpandProperty Name" \
+    2>/dev/null | tr -d '\r'
+}
 
 mkdir -p "$LOCAL_ROOT"
 
 echo "[$(date '+%H:%M:%S')] sync_remote_runs starting; interval=${INTERVAL}s" >> "$LOG"
 
 while :; do
+  # Refresh remote-run list every cycle so new srcnn-* dirs surface
+  # in the dashboard within ~1 poll interval.
+  RUNS=()
+  while IFS= read -r r; do
+    [[ -z "$r" ]] && continue
+    RUNS+=("$r")
+  done < <(discover_remote_runs)
+  if (( ${#RUNS[@]} == 0 )); then
+    echo "[$(date '+%H:%M:%S')] no remote runs discovered; sleeping" >> "$LOG"
+    sleep "$INTERVAL"
+    continue
+  fi
+
   for run in "${RUNS[@]}"; do
     local_dir="$LOCAL_ROOT/$run"
     mkdir -p "$local_dir/viz"
