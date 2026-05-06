@@ -150,6 +150,7 @@ HTML = """<!DOCTYPE html>
     text-transform: lowercase;
   }
   .codex-log .codex-header { color: #6e7681; opacity: 0.7; }
+  .codex-log .codex-entry-source { color: #6e7681; opacity: 0.65; font-size: 11px; }
   .codex-log .codex-prompt { color: #79c0ff; opacity: 0.85; }
   .codex-log .codex-reason { color: #c9d1d9; }
   /* Action block: <details> wrapping exec command + result body. */
@@ -181,6 +182,10 @@ HTML = """<!DOCTYPE html>
   .codex-log .codex-diff-add-hd { color: #3fb950; font-weight: 700; }
   .codex-log .codex-diff-rm-hd  { color: #f85149; font-weight: 700; }
   .codex-log .codex-diff-hunk   { color: #d2a8ff; font-weight: 700; }
+  .codex-log .codex-fade-in {
+    display: block;
+    animation: codexFadeIn 250ms ease-out both;
+  }
   .codex-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
                    margin-bottom: 8px; font-size: 12px; color: var(--muted); }
   .codex-toolbar select {
@@ -194,9 +199,25 @@ HTML = """<!DOCTYPE html>
     padding: 2px 8px; border-radius: 999px; border: 1px solid #30363d;
     background: #161b22;
   }
-  .codex-active-summary.codex-active-live { color: var(--good); border-color: #1e4f29; }
+  .codex-active-summary.codex-active-live {
+    color: var(--good); border-color: #1e4f29;
+    animation: codexLivePulse 1.8s ease-in-out infinite;
+  }
   .codex-active-summary.codex-active-idle { color: var(--muted); }
   .codex-active-summary.codex-active-none { color: var(--muted); opacity: 0.7; }
+  .codex-thinking {
+    display: inline-flex; align-items: center; gap: 5px;
+    color: var(--muted); opacity: 0.82; font-family: var(--mono);
+    font-size: 11px;
+  }
+  .codex-thinking[hidden] { display: none; }
+  .codex-thinking-spinner {
+    display: inline-block; width: 1.1em; color: #79c0ff;
+  }
+  .codex-thinking-spinner::before {
+    content: "⠋";
+    animation: codexSpinner 800ms steps(8, end) infinite;
+  }
   .codex-history-picker { color: var(--muted); font-size: 12px; }
   .codex-history-picker > summary { cursor: pointer; user-select: none; }
   .codex-history-body {
@@ -217,6 +238,25 @@ HTML = """<!DOCTYPE html>
   .status-dot.idle { background: var(--muted); }
   .status-dot.dead { background: var(--bad); }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+  @keyframes codexFadeIn {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes codexLivePulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(63,185,80,0.0); }
+    50% { box-shadow: 0 0 0 4px rgba(63,185,80,0.12); }
+  }
+  @keyframes codexSpinner {
+    0% { content: "⠋"; }
+    12.5% { content: "⠙"; }
+    25% { content: "⠹"; }
+    37.5% { content: "⠸"; }
+    50% { content: "⠼"; }
+    62.5% { content: "⠴"; }
+    75% { content: "⠦"; }
+    87.5% { content: "⠧"; }
+    100% { content: "⠋"; }
+  }
   table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 12px; }
   th, td { text-align: right; padding: 4px 8px; border-bottom: 1px solid var(--border); }
   th:first-child, td:first-child { text-align: left; }
@@ -425,6 +465,7 @@ HTML = """<!DOCTYPE html>
       <h2>Codex live log</h2>
       <div class="codex-toolbar">
         <span class="codex-active-summary" id="codex-active-summary">no active codex sessions</span>
+        <span class="codex-thinking" id="codex-thinking" hidden><span class="codex-thinking-spinner" aria-hidden="true"></span><span>codex thinking...</span></span>
         <label><input type="checkbox" id="codex-tail-toggle" checked /> auto-scroll</label>
         <label><input type="checkbox" id="codex-pause-toggle" /> pause</label>
         <details class="codex-history-picker">
@@ -1217,9 +1258,13 @@ const CODEX_POLL_MS = 2500;
 const CODEX_FILE_KEY = 'oss-training-dashboard-codex-file';
 const CODEX_MODE_KEY = 'oss-training-dashboard-codex-mode';
 const CODEX_DISABLED_KEY = 'oss-training-dashboard-codex-disabled-files';
+const CODEX_RENDER_TAIL_LINES = 80;
 let codexCurrentFile = localStorage.getItem(CODEX_FILE_KEY) || '';
 let codexStreamMode = localStorage.getItem(CODEX_MODE_KEY) !== 'single';
 let codexFiles = [];
+let codexRenderKey = '';
+let codexRenderedHTML = '';
+let codexRenderedTailLines = [];
 
 function escapeHTML(s) {
   return String(s).replace(/[&<>"']/g, c => ({
@@ -1249,6 +1294,7 @@ function refreshCodexActiveSummary() {
   if (active.length === 0) {
     summary.textContent = 'no active codex sessions';
     summary.className = 'codex-active-summary codex-active-none';
+    refreshCodexThinking();
     return;
   }
   const live = active.filter(f => f.alive).length;
@@ -1260,6 +1306,28 @@ function refreshCodexActiveSummary() {
     summary.textContent = `${total} active session${total === 1 ? '' : 's'} (idle)`;
     summary.className = 'codex-active-summary codex-active-idle';
   }
+  refreshCodexThinking();
+}
+
+function codexHasLiveSession() {
+  return streamCodexFiles().some(f => f.alive);
+}
+
+function codexMostRecentEntryIsThinking(html) {
+  html = String(html || '');
+  const lastCodex = html.lastIndexOf('<span class="codex-mode-label">codex:</span>');
+  if (lastCodex < 0) return false;
+  const afterCodex = html.slice(lastCodex);
+  const lastAction = html.lastIndexOf('<details class="codex-action">');
+  const lastPrompt = html.lastIndexOf('<span class="codex-mode-label">user prompt:</span>');
+  return lastAction < lastCodex && lastPrompt < lastCodex &&
+         afterCodex.indexOf('<span class="codex-reason">') >= 0;
+}
+
+function refreshCodexThinking() {
+  const el = document.getElementById('codex-thinking');
+  if (!el) return;
+  el.hidden = !(codexHasLiveSession() && codexMostRecentEntryIsThinking(codexRenderedHTML));
 }
 
 // Default behavior: stream all currently-active codex sessions (mtime
@@ -1275,6 +1343,69 @@ function activeCodexFiles() {
 
 function selectedCodexStreamFiles() {
   return streamCodexFiles().map(f => f.name);
+}
+
+function codexTailLines(html) {
+  return String(html || '').split('\n').slice(-CODEX_RENDER_TAIL_LINES);
+}
+
+function codexFindAppendHTML(nextHTML) {
+  nextHTML = String(nextHTML || '');
+  if (!codexRenderedHTML) return { appendHTML: nextHTML, matched: false };
+  if (nextHTML === codexRenderedHTML) return { appendHTML: '', matched: true };
+  if (nextHTML.startsWith(codexRenderedHTML)) {
+    return { appendHTML: nextHTML.slice(codexRenderedHTML.length), matched: true };
+  }
+
+  const nextLines = nextHTML.split('\n');
+  const maxOverlap = Math.min(codexRenderedTailLines.length, nextLines.length);
+  for (let n = maxOverlap; n > 0; n--) {
+    const suffixStart = codexRenderedTailLines.length - n;
+    for (let start = nextLines.length - n; start >= 0; start--) {
+      let ok = true;
+      for (let i = 0; i < n; i++) {
+        if (codexRenderedTailLines[suffixStart + i] !== nextLines[start + i]) {
+          ok = false;
+          break;
+        }
+      }
+      if (ok) {
+        return { appendHTML: nextLines.slice(start + n).join('\n'), matched: true };
+      }
+    }
+  }
+  return { appendHTML: nextHTML, matched: false };
+}
+
+function codexScrollToBottom(pre, smooth) {
+  if (smooth && typeof pre.scrollTo === 'function') {
+    pre.scrollTo({ top: pre.scrollHeight, behavior: 'smooth' });
+  } else {
+    pre.scrollTop = pre.scrollHeight;
+  }
+}
+
+function resetCodexLogRender(pre, html, scrollTop) {
+  codexRenderedHTML = String(html || '');
+  codexRenderedTailLines = codexTailLines(codexRenderedHTML);
+  pre.innerHTML = codexRenderedHTML;
+  if (scrollTop !== undefined) pre.scrollTop = scrollTop;
+  refreshCodexThinking();
+}
+
+function appendCodexLogRender(pre, html, appendHTML) {
+  codexRenderedHTML = String(html || '');
+  codexRenderedTailLines = codexTailLines(codexRenderedHTML);
+  if (!appendHTML) {
+    refreshCodexThinking();
+    return false;
+  }
+  const chunk = document.createElement('div');
+  chunk.className = 'codex-fade-in';
+  chunk.innerHTML = appendHTML;
+  pre.appendChild(chunk);
+  refreshCodexThinking();
+  return true;
 }
 
 async function refreshCodexFileList() {
@@ -1321,8 +1452,12 @@ async function refreshCodexLog() {
   if (codexStreamMode && streamFiles.length === 0) {
     const pre = document.getElementById('codex-log');
     const meta = document.getElementById('codex-meta');
+    codexRenderKey = '';
+    codexRenderedHTML = '';
+    codexRenderedTailLines = [];
     if (pre) pre.textContent = '(no active codex logs selected)';
     if (meta) meta.textContent = 'stream · 0 logs';
+    refreshCodexThinking();
     return;
   }
   if (!codexStreamMode && !fname) return;
@@ -1335,8 +1470,12 @@ async function refreshCodexLog() {
     const meta = document.getElementById('codex-meta');
     if (!pre) return;
     if (data && data.error) {
+      codexRenderKey = '';
+      codexRenderedHTML = '';
+      codexRenderedTailLines = [];
       pre.textContent = '(error: ' + data.error + ')';
       if (meta) meta.textContent = (codexStreamMode ? 'stream' : fname) + ' — error';
+      refreshCodexThinking();
       return;
     }
     // Auto-scroll behavior fix: previously checking the auto-scroll
@@ -1351,11 +1490,26 @@ async function refreshCodexLog() {
     const wasAtBottom =
       pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 8;
     const prevTop = pre.scrollTop;
-    pre.innerHTML = data.html || '';
-    if (wantTail && wasAtBottom) {
-      pre.scrollTop = pre.scrollHeight;
+    const nextHTML = data.html || '';
+    const nextKey = codexStreamMode
+      ? 'stream:' + streamFiles.join(',')
+      : 'file:' + fname;
+    const shouldReset = nextKey !== codexRenderKey;
+    if (shouldReset) {
+      codexRenderKey = nextKey;
+      resetCodexLogRender(pre, nextHTML);
     } else {
-      // innerHTML rewrite resets scrollTop to 0; restore user's position.
+      const diff = codexFindAppendHTML(nextHTML);
+      if (diff.matched) {
+        appendCodexLogRender(pre, nextHTML, diff.appendHTML);
+      } else {
+        resetCodexLogRender(pre, nextHTML, prevTop);
+      }
+    }
+    if (wantTail && wasAtBottom) {
+      codexScrollToBottom(pre, !shouldReset);
+    } else {
+      // Preserve history navigation when the user has scrolled up.
       pre.scrollTop = prevTop;
     }
     if (meta) {
