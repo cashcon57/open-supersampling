@@ -38,28 +38,33 @@ def warp_with_motion(
     motion_lr: torch.Tensor,
     scale_factor: float = 2.0,
 ) -> torch.Tensor:
-    """Warp ``image_prev`` (HR) toward the current frame using LR motion.
+    """Warp ``image_prev`` (HR) into current frame's coordinates using
+    *forward* engine motion vectors.
+
+    Convention (audit-fixed 2026-05-06): ``motion_lr`` is FORWARD flow
+    from frame t-1 to frame t — for each pixel x in frame t-1, motion[x]
+    tells where that pixel ENDS UP in frame t. This matches what every
+    OSS dataset writer produces (TartanAir flow files, Hypersim
+    `_compute_motion`, capture-tool engine MVs).
+
+    To warp image_{t-1} into frame-t coordinates we sample at ``base - motion``:
+    output[x_in_t] ≈ image_{t-1}[x - F(x)] (small-motion approximation).
+    The previous version of this kernel used ``base + motion`` which would
+    have been correct for BACKWARD flow t→t-1, but every caller in OSS
+    feeds forward flow — so the old form pulled samples in the wrong
+    direction, biasing the temporal-consistency loss toward oversmoothing
+    moving regions.
 
     Args:
         image_prev:   (B, C, H_hr, W_hr) tensor to warp from frame t-1
                       coordinates into frame t coordinates.
         motion_lr:    (B, 2, H_lr, W_lr) — LR motion vectors (channel 0=x,
-                      1=y), pointing from current frame to previous frame
-                      in pixel displacements at LR scale.
+                      1=y), forward flow from t-1 to t in pixel
+                      displacements at LR scale.
         scale_factor: HR / LR ratio (default 2.0).
 
     Returns:
         (B, C, H_hr, W_hr) warped tensor.
-
-    Implementation notes:
-        - Motion vectors are bilinearly upsampled to HR and scaled by
-          ``scale_factor`` to convert LR-pixel displacements to HR-pixel
-          displacements.
-        - The HR displacements are then normalized into ``grid_sample``'s
-          [-1, 1] coordinate system by ``2 / extent``.
-        - We clamp the sample grid to a broad [-2, 2] range to avoid NaN
-          from extreme motion; ``padding_mode='border'`` handles
-          out-of-bounds.
     """
     B, _, H_hr, W_hr = image_prev.shape
 
@@ -83,7 +88,9 @@ def warp_with_motion(
     )
     motion_grid_norm = motion_grid * 2.0 / extent
 
-    sample_grid = (base_grid + motion_grid_norm).clamp(-2, 2)
+    # Forward-flow convention: sample at (base - motion). See module
+    # docstring for the convention rationale.
+    sample_grid = (base_grid - motion_grid_norm).clamp(-2, 2)
 
     return F.grid_sample(
         image_prev,

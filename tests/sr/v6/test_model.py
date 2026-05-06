@@ -305,6 +305,43 @@ def test_v6model_persistent_state_is_detached_between_frames():
     assert sts.spatial_accumulator.grad_fn is None
 
 
+def test_v6model_st_score_uses_footprint_times_opacity():
+    """Audit finding HIGH-1 fix: spatial score must combine per-Gaussian
+    footprint area (~ 2π·s_x·s_y) with opacity, not opacity alone. Two
+    Gaussians with identical opacity but different scales must produce
+    different SS values, with the larger-footprint Gaussian higher.
+    """
+    import math as _m
+    from oss.sr.v6.model import CanvasState
+
+    m = _tiny_model(tile_size_lr=16)
+    # Two Gaussians, same opacity, scales differ by 4x in product.
+    canvas = CanvasState(
+        positions=torch.tensor([[16.0, 16.0], [48.0, 48.0]]),
+        scales=torch.tensor([[1.0, 1.0], [2.0, 2.0]]),  # det ratio = 16
+        rotations=torch.zeros(2),
+        opacities=torch.full((2,), 0.5),
+        colors=torch.zeros(2, m.cfg.token_dim),
+        count=2,
+    )
+    m._canvas_state = canvas
+    active = torch.ones(2, dtype=torch.bool)
+    m._update_st_state(canvas, active, previous_state=None, old_count=0, new_count=2)
+
+    spatial = m._st_state.spatial_accumulator
+    assert spatial.shape == (2,)
+    # SS_i = 2π · s_x · s_y · opacity
+    expected_0 = 2 * _m.pi * 1.0 * 1.0 * 0.5
+    expected_1 = 2 * _m.pi * 2.0 * 2.0 * 0.5
+    assert torch.allclose(
+        spatial,
+        torch.tensor([expected_0, expected_1]),
+        atol=1e-4,
+    ), f"expected {[expected_0, expected_1]}, got {spatial.tolist()}"
+    # Larger-footprint Gaussian must outscore the smaller, even at same opacity.
+    assert spatial[1].item() > spatial[0].item() * 3.5  # 4× theoretical
+
+
 def test_v6model_reset_state_clears_canvas_and_score():
     m = _tiny_model()
     # Inject a fake canvas state to verify reset wipes it.

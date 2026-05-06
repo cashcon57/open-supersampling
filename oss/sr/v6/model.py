@@ -41,6 +41,7 @@ trajectory boundary).
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Optional
 
@@ -507,17 +508,35 @@ class V6Model(nn.Module):
             final_count=n,
             device=canvas.opacities.device,
         )
-        # KNOWN LIMITATION (v6.1 followup): real 4DGS-1K SS_i = sum_pixels
-        # alpha_i * T_i requires the rasterizer to expose per-Gaussian-per-
-        # pixel contribution. Today we approximate with opacity * 1.0 — the
-        # ranking still penalizes low-opacity Gaussians but ignores
-        # rendered-footprint area. Pruning is heuristic-correct, not
-        # 4DGS-1K-faithful; refinement to true alpha*T is tracked for v6.1.
-        # Detached so the spawner's confidence path doesn't leak gradient
-        # through the persistent ST state across frames.
-        alpha = canvas.opacities[:n].detach().to(dtype=torch.float32).unsqueeze(1)
-        transmittance = torch.ones_like(alpha)
-        self._st_state = update_st_score(state, alpha, transmittance, active[:n])
+        # 4DGS-1K spatial score adapted for v6's 2D additive splatting:
+        #
+        #   SS_i = footprint_area_i * opacity_i
+        #        = (2π * sqrt(det(Σ_i))) * α_i
+        #
+        # det(Σ) is rotation-invariant for a Gaussian — for our scale-
+        # rotation parameterization Σ = R diag(s_x², s_y²) R^T, so
+        # det(Σ) = (s_x · s_y)² and sqrt(det(Σ)) = s_x · s_y. This captures
+        # the per-Gaussian spatial extent that the prior opacity-only
+        # heuristic ignored.
+        #
+        # 2D additive blending (v6's render path) has no per-pixel
+        # transmittance term in the canonical 4DGS-1K sense; we use 1.0
+        # and let the footprint × opacity product carry the signal. If
+        # we later switch to sorted-back-to-front blending, T_i can be
+        # computed as a product over earlier Gaussians; that's a v6.x
+        # plumbing change, not an architectural one.
+        #
+        # All inputs are detached so the spawner's confidence path doesn't
+        # leak gradient through the persistent ST state across frames.
+        scales = canvas.scales[:n].detach().to(dtype=torch.float32)  # (N, 2)
+        opac = canvas.opacities[:n].detach().to(dtype=torch.float32)  # (N,)
+        sqrt_det_sigma = (scales[:, 0] * scales[:, 1]).abs()           # (N,)
+        footprint = (2.0 * math.pi) * sqrt_det_sigma                   # (N,)
+        spatial_contribution = (footprint * opac).unsqueeze(1)         # (N, 1)
+        transmittance = torch.ones_like(spatial_contribution)
+        self._st_state = update_st_score(
+            state, spatial_contribution, transmittance, active[:n],
+        )
 
     def _st_state_after_write(
         self,
