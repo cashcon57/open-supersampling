@@ -1,6 +1,6 @@
 # 2026-05-05 — v6 architecture: covariance-resampled online Gaussian-temporal SR
 
-**Status:** Canonical v6 target design. Current implementation status: Today: HAT + empty-canvas identity fusion + pixel head. Pending: canvas write/warp/rasterizer + OSS-FX integration. The full diagram below is the target architecture. **Supersedes** the earlier "two-tier teacher/student distillation" memo (`2026-05-05-v6-design-two-tier-distillation.md`) once Stage 3 of staged validation begins.
+**Status:** Canonical v6 target design. Current implementation status: Today: HAT + empty-canvas identity fusion + pixel head. Stage 2 building blocks (Gaussian spawner, motion-vector + GS-STVSR covariance canvas warp, active-mask-aware rasterizer wrapper) committed in `8c84727` with 31 unit tests passing — not wired into `V6Model.forward()` yet. Pending wire-up: canvas in the HR critical path (replaces pixel head), trajectory training loop with canvas continuity + temporal-consistency loss, OSS-FX integration. The full diagram below is the target architecture. **Supersedes** the earlier "two-tier teacher/student distillation" memo (`2026-05-05-v6-design-two-tier-distillation.md`) once Stage 3 of staged validation begins.
 
 **Predecessors:**
 - `docs/research/2026-05-05-gaussian-temporal-research-deep-dive.md` — math + 2024-2026 research the architecture incorporates
@@ -36,7 +36,7 @@ Target frame extrapolation reuses canvas rendering: render the same canvas at α
 
 ## 2. Architecture
 
-Current implementation status: Today: HAT + empty-canvas identity fusion + pixel head. Pending: canvas write/warp/rasterizer + OSS-FX integration. The full diagram below is the target architecture.
+Current implementation status: Today: HAT + empty-canvas identity fusion + pixel head. Stage 2 building blocks (Gaussian spawner, motion-vector + GS-STVSR covariance canvas warp, active-mask-aware rasterizer wrapper) committed in `8c84727` with 31 unit tests passing — not wired into `V6Model.forward()` yet. Pending wire-up: canvas in the HR critical path (replaces pixel head), trajectory training loop with canvas continuity + temporal-consistency loss, OSS-FX integration. The full diagram below is the target architecture.
 
 ```text
                                     ┌─────────────────────────┐
