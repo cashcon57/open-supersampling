@@ -189,19 +189,25 @@ HTML = """<!DOCTYPE html>
     max-width: min(60vw, 480px);
   }
   .codex-toolbar label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
-  .codex-toolbar .codex-file-filters { display: inline-flex; flex-wrap: wrap; gap: 6px; }
-  .codex-toolbar .codex-file-chip {
-    padding: 2px 6px; border: 1px solid #30363d; border-radius: 999px;
-    background: #161b22; color: var(--fg); max-width: 280px;
+  .codex-active-summary {
+    font-family: var(--mono); font-size: 12px;
+    padding: 2px 8px; border-radius: 999px; border: 1px solid #30363d;
+    background: #161b22;
   }
-  .codex-toolbar .codex-file-chip input { margin: 0; }
-  .codex-toolbar .codex-file-chip span {
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  .codex-active-summary.codex-active-live { color: var(--good); border-color: #1e4f29; }
+  .codex-active-summary.codex-active-idle { color: var(--muted); }
+  .codex-active-summary.codex-active-none { color: var(--muted); opacity: 0.7; }
+  .codex-history-picker { color: var(--muted); font-size: 12px; }
+  .codex-history-picker > summary { cursor: pointer; user-select: none; }
+  .codex-history-body {
+    display: flex; gap: 6px; align-items: center; padding-top: 6px;
   }
-  .codex-toolbar .single-only[hidden], .codex-toolbar .stream-only[hidden] { display: none; }
+  .codex-history-body select {
+    background: #21262d; color: var(--fg); border: 1px solid var(--border);
+    border-radius: 4px; padding: 4px 8px; font-family: var(--mono); font-size: 12px;
+    max-width: min(48vw, 420px);
+  }
   .codex-toolbar .meta { margin-left: auto; font-family: var(--mono); font-size: 11px; }
-  .codex-toolbar .pid-alive { color: var(--good); }
-  .codex-toolbar .pid-dead  { color: var(--muted); }
   .full { grid-column: 1 / -1; }
   canvas { max-height: 280px; }
   .err { color: var(--bad); font-family: var(--mono); }
@@ -418,13 +424,16 @@ HTML = """<!DOCTYPE html>
     <div class="panel-head">
       <h2>Codex live log</h2>
       <div class="codex-toolbar">
-        <label><input type="checkbox" id="codex-stream-toggle" checked /> stream</label>
-        <label class="stream-only"><input type="checkbox" id="codex-show-all-toggle" /> all logs (incl. >1h old)</label>
-        <span class="stream-only codex-file-filters" id="codex-file-filters"></span>
-        <label class="single-only" for="codex-file-select">file</label>
-        <select class="single-only" id="codex-file-select"><option value="">(no codex logs found)</option></select>
+        <span class="codex-active-summary" id="codex-active-summary">no active codex sessions</span>
         <label><input type="checkbox" id="codex-tail-toggle" checked /> auto-scroll</label>
         <label><input type="checkbox" id="codex-pause-toggle" /> pause</label>
+        <details class="codex-history-picker">
+          <summary>history</summary>
+          <div class="codex-history-body">
+            <label for="codex-file-select">show specific log:</label>
+            <select id="codex-file-select"><option value="">(auto)</option></select>
+          </div>
+        </details>
         <span class="meta" id="codex-meta">–</span>
       </div>
     </div>
@@ -1228,33 +1237,44 @@ function saveCodexDisabledFiles(disabled) {
 }
 
 function setCodexModeUI() {
-  const toggle = document.getElementById('codex-stream-toggle');
-  if (toggle) toggle.checked = codexStreamMode;
-  const showAll = document.getElementById('codex-show-all-toggle');
-  if (showAll) showAll.checked = codexShowAll;
-  document.querySelectorAll('.single-only').forEach(el => { el.hidden = codexStreamMode; });
-  document.querySelectorAll('.stream-only').forEach(el => { el.hidden = !codexStreamMode; });
+  // Stream-mode is now the default; the history picker switches to
+  // single-file mode automatically when the user picks a specific log.
+  // Nothing to do here other than the active-summary refresh below.
 }
 
-// Stream mode default: show ALL logs, with the active subset prioritized
-// in the UI. The previous "active-only" filter hid every log older than
-// 60 minutes, which broke the use case of scrolling through historical
-// codex activity. The 'codex-show-all-toggle' switches between
-// active-only and full history; default = full history.
-let codexShowAll = localStorage.getItem('oss-training-dashboard-codex-show-all') !== 'false';
+function refreshCodexActiveSummary() {
+  const summary = document.getElementById('codex-active-summary');
+  if (!summary) return;
+  const active = streamCodexFiles();
+  if (active.length === 0) {
+    summary.textContent = 'no active codex sessions';
+    summary.className = 'codex-active-summary codex-active-none';
+    return;
+  }
+  const live = active.filter(f => f.alive).length;
+  const total = active.length;
+  if (live > 0) {
+    summary.textContent = `${live} live · ${total} active session${total === 1 ? '' : 's'}`;
+    summary.className = 'codex-active-summary codex-active-live';
+  } else {
+    summary.textContent = `${total} active session${total === 1 ? '' : 's'} (idle)`;
+    summary.className = 'codex-active-summary codex-active-idle';
+  }
+}
 
+// Default behavior: stream all currently-active codex sessions (mtime
+// within last 60 min) merged by timestamp. Users override via the
+// "history" picker to view a single specific log.
 function streamCodexFiles() {
-  return codexShowAll ? codexFiles : codexFiles.filter(f => f.active);
+  return codexFiles.filter(f => f.active);
 }
 
 function activeCodexFiles() {
-  // Backward-compat alias used elsewhere in the panel.
   return streamCodexFiles();
 }
 
 function selectedCodexStreamFiles() {
-  const disabled = codexDisabledFiles();
-  return streamCodexFiles().filter(f => !disabled.has(f.name)).map(f => f.name);
+  return streamCodexFiles().map(f => f.name);
 }
 
 async function refreshCodexFileList() {
@@ -1289,30 +1309,7 @@ async function refreshCodexFileList() {
         }
       }
     }
-    const filters = document.getElementById('codex-file-filters');
-    if (filters) {
-      const disabled = codexDisabledFiles();
-      const active = activeCodexFiles();
-      filters.innerHTML = active.length === 0
-        ? '<span class="codex-file-chip">no active logs</span>'
-        : active.map(f => {
-          const checked = disabled.has(f.name) ? '' : ' checked';
-          const kb = (f.size / 1024).toFixed(0);
-          return `<label class="codex-file-chip" title="${escapeHTML(f.name)}"><input type="checkbox" data-codex-file="${escapeHTML(f.name)}"${checked} /><span>${escapeHTML(f.name)} · ${kb}KB</span></label>`;
-        }).join('');
-      filters.querySelectorAll('input[data-codex-file]').forEach(input => {
-        input.addEventListener('change', () => {
-          const nextDisabled = codexDisabledFiles();
-          const name = input.getAttribute('data-codex-file');
-          if (!name) return;
-          if (input.checked) nextDisabled.delete(name);
-          else nextDisabled.add(name);
-          saveCodexDisabledFiles(nextDisabled);
-          refreshCodexLog();
-        });
-      });
-    }
-    setCodexModeUI();
+    refreshCodexActiveSummary();
   } catch (e) { /* leave as-is */ }
 }
 
@@ -1378,26 +1375,18 @@ const codexFileSelect = document.getElementById('codex-file-select');
 if (codexFileSelect) {
   codexFileSelect.addEventListener('change', (e) => {
     codexCurrentFile = e.target.value;
-    if (codexCurrentFile) localStorage.setItem(CODEX_FILE_KEY, codexCurrentFile);
+    if (codexCurrentFile) {
+      // User picked a specific log -> single-file mode.
+      codexStreamMode = false;
+      localStorage.setItem(CODEX_MODE_KEY, 'single');
+      localStorage.setItem(CODEX_FILE_KEY, codexCurrentFile);
+    } else {
+      // (auto) -> back to stream mode.
+      codexStreamMode = true;
+      localStorage.setItem(CODEX_MODE_KEY, 'stream');
+      localStorage.removeItem(CODEX_FILE_KEY);
+    }
     refreshCodexLog();
-  });
-}
-const codexStreamToggle = document.getElementById('codex-stream-toggle');
-if (codexStreamToggle) {
-  codexStreamToggle.addEventListener('change', (e) => {
-    codexStreamMode = e.target.checked;
-    localStorage.setItem(CODEX_MODE_KEY, codexStreamMode ? 'stream' : 'single');
-    setCodexModeUI();
-    refreshCodexLog();
-  });
-}
-
-const codexShowAllToggle = document.getElementById('codex-show-all-toggle');
-if (codexShowAllToggle) {
-  codexShowAllToggle.addEventListener('change', (e) => {
-    codexShowAll = e.target.checked;
-    localStorage.setItem('oss-training-dashboard-codex-show-all', String(codexShowAll));
-    refreshCodexFileList().then(refreshCodexLog);
   });
 }
 
