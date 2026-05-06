@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """Stream a codex-exec log file with ANSI colors + section dividers.
 
 Usage:
