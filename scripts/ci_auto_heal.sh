@@ -30,7 +30,8 @@ BRANCH="main"
 MODE="once"
 INTERVAL=60
 TIMEOUT=0
-STATE_FILE="/tmp/.ci_auto_heal_last_dispatched_sha"
+STATE_DIR="/tmp/.ci_auto_heal_dispatched"
+mkdir -p "$STATE_DIR"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -49,7 +50,7 @@ dispatch_fix() {
   local head_sha="$2"
   local short_sha="${head_sha:0:7}"
 
-  if [[ -f "$STATE_FILE" ]] && [[ "$(cat "$STATE_FILE")" == "$head_sha" ]]; then
+  if [[ -f "${STATE_DIR}/${head_sha}" ]]; then
     log "already dispatched fix for $short_sha; skipping"
     return 0
   fi
@@ -103,49 +104,66 @@ PROMPT
   nohup bash scripts/dispatch_codex.sh "$slug" "$prompt_file" \
     > "/tmp/${slug}.dispatch.log" 2>&1 &
   disown
-  echo "$head_sha" > "$STATE_FILE"
+  : > "${STATE_DIR}/${head_sha}"
   log "codex dispatched (PID watchable via /tmp/${slug}.dispatch.log)"
   return 0
 }
 
 check_once() {
-  local waited=0
-  while :; do
-    local row
-    row="$(gh -R "$REPO" run list --branch "$BRANCH" --workflow CI \
+  # Inspect the last 10 runs (not just the latest) so failures that
+  # were overtaken by newer in_progress runs still get healed.
+  local rows
+  rows="$(gh -R "$REPO" run list --branch "$BRANCH" --workflow CI \
             --json databaseId,status,conclusion,headSha,displayTitle \
-            --limit 1 -q '.[0]')"
-    if [[ -z "$row" ]] || [[ "$row" == "null" ]]; then
-      log "no recent CI runs; nothing to do"
-      return 0
+            --limit 10 2>/dev/null)"
+  if [[ -z "$rows" ]] || [[ "$rows" == "[]" ]]; then
+    log "no recent CI runs; nothing to do"
+    return 0
+  fi
+
+  # Extract latest in_progress (if any) so --timeout knows what to watch.
+  local latest_in_progress_sha=""
+  latest_in_progress_sha="$(echo "$rows" | jq -r '[.[] | select(.status != "completed")] | first | .headSha // empty')"
+
+  # Iterate completed failures from oldest→newest, dispatch unhandled ones.
+  local total_failures
+  total_failures="$(echo "$rows" | jq -r '[.[] | select(.status == "completed" and .conclusion == "failure")] | length')"
+  if (( total_failures == 0 )); then
+    if [[ -n "$latest_in_progress_sha" ]]; then
+      log "in_progress (${latest_in_progress_sha:0:7}); no failures pending"
+    else
+      log "all recent runs GREEN"
     fi
-
-    local status conclusion head_sha db_id
-    status="$(echo "$row" | jq -r .status)"
-    conclusion="$(echo "$row" | jq -r .conclusion)"
-    head_sha="$(echo "$row" | jq -r .headSha)"
-    db_id="$(echo "$row" | jq -r .databaseId)"
-
-    if [[ "$status" != "completed" ]]; then
-      if (( TIMEOUT > 0 )) && (( waited < TIMEOUT )); then
-        log "in_progress (${head_sha:0:7}); waiting ${INTERVAL}s (waited=${waited}s of ${TIMEOUT}s)"
-        sleep "$INTERVAL"
-        waited=$((waited + INTERVAL))
+  else
+    while IFS=$'\t' read -r db_id head_sha; do
+      [[ -z "$db_id" ]] && continue
+      if [[ -f "${STATE_DIR}/${head_sha}" ]]; then
         continue
       fi
-      log "in_progress (${head_sha:0:7}); not waiting"
-      return 0
-    fi
+      log "RED unhandled — sha=${head_sha:0:7} run=$db_id"
+      dispatch_fix "$db_id" "$head_sha"
+    done < <(echo "$rows" | jq -r 'reverse[] | select(.status == "completed" and .conclusion == "failure") | "\(.databaseId)\t\(.headSha)"')
+  fi
 
-    if [[ "$conclusion" == "success" ]]; then
-      log "GREEN (${head_sha:0:7})"
+  # If --timeout was set and a run is still in_progress, optionally wait.
+  if (( TIMEOUT > 0 )) && [[ -n "$latest_in_progress_sha" ]]; then
+    local waited=0
+    while (( waited < TIMEOUT )); do
+      sleep "$INTERVAL"
+      waited=$((waited + INTERVAL))
+      log "still in_progress (${latest_in_progress_sha:0:7}); waited ${waited}s of ${TIMEOUT}s"
+      local cur_status
+      cur_status="$(gh -R "$REPO" run list --branch "$BRANCH" --workflow CI \
+                      --json status,conclusion,headSha --limit 10 \
+                      -q "[.[] | select(.headSha == \"$latest_in_progress_sha\")] | first")"
+      [[ "$(echo "$cur_status" | jq -r .status)" == "completed" ]] || continue
+      if [[ "$(echo "$cur_status" | jq -r .conclusion)" != "success" ]]; then
+        check_once  # recurse: it just failed; dispatch.
+      fi
       return 0
-    fi
-
-    log "RED — conclusion=$conclusion sha=${head_sha:0:7} run=$db_id"
-    dispatch_fix "$db_id" "$head_sha"
-    return 0
-  done
+    done
+  fi
+  return 0
 }
 
 case "$MODE" in

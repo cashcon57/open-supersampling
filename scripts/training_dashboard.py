@@ -54,6 +54,7 @@ CODEX_TIMESTAMP_RE = re.compile(
 RUN_DIR_PATTERNS = (
     "srcnn-v*-temporal*",
     "srcnn-v6-*",
+    "srcnn-v6.*-*",   # v6.1, v6.2, ... revisions (dot in version segment)
     "srcnn-v5-*",
     "srcnn-v4-*",
     "srcnn-v3-*",
