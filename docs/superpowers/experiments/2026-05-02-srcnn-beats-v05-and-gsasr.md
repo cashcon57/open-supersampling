@@ -32,7 +32,7 @@ The day's investigation closes with a single, simple architectural picture. We h
 4. **Splat-contribution probe:** `zero+residual` produced bit-identical output to `splat+residual`. Splats explicitly ignored by the trained CNN.
 5. **Triple-checked splat-SR uselessness** across 5 paths (incl. direct 50K-Gaussian Image-GS optim losing −3.59 dB).
 6. **Literature delta:** GSASR / GS-STVSR / GaussianSR all use Gaussians as HR FEATURES, not RGB — different thesis from ours. Architectural ranking favoured running the released GSASR before reimplementing.
-7. **Built `oss/sr/`** as a clean CNN super-resolver. SRCNNSimple = head_conv + N res blocks + PixelShuffle 2× + bicubic skip. SRRRDB stretch backbone. Trainer gains `--model {gaussian, sr_cnn, sr_rrdb}` dispatch with full backward-compat for the Gaussian (RR) track.
+7. **Built `oss/sr/`** as a clean CNN super-resolver. SRCNNSimple = head_conv + N res blocks + PixelShuffle 2× + bicubic skip. SRRRDB stretch backbone. Trainer gains `--model {gaussian, sr_cnn, sr_rrdb}` dispatch with full backward-compat for the Gaussian Ray-Retracing track.
 8. **First SR-CNN run failed at 12 dB**, same plateau as splats. Diagnosed as Kaiming-normal init on `upsample_conv` producing residual std ~0.5, which when combined with `clamp(0, 1)` zeroed half the output and killed clamp gradients. Fixed with `N(0, 0.01)` weight init — residual stays in `[-0.01, 0.01]` at step 0, output ≈ bicubic, gradient flows.
 9. **SR-CNN re-run after fix:** ActionRPG +2.71 dB at step 1000. CitySample +2.40, StylizedRendering +1.87, ArchVizInterior +4.05 — **64/64 samples beat bicubic**.
 10. **GSASR run on our LR (parallel agent):** −0.04 dB on engine-aliased LR (0/24 beats), −3.70 dB on bicubic-clean (expected bicubic-LR-trap). Architecture not the bottleneck. Training distribution is.
@@ -57,7 +57,7 @@ The day's investigation closes with a single, simple architectural picture. We h
 
 ## What survives from the Gaussian work
 
-The `oss/gaussian/` modules (renderer, network, output_head, prior_bank) are not deleted. They remain available for the OSS Ray Retracing (denoising) track per `docs/superpowers/oss-ray-retracing-track.md`, where the splat representation is known to fit (D1 result on synthetic noise beat OIDN PSNR).
+The `oss/gaussian/` modules (renderer, network, output_head, prior_bank) are not deleted. They remain available for the OSS Ray-Retracing (denoising) track per `docs/superpowers/oss-ray-retracing-track.md`, where the splat representation is known to fit (D1 result on synthetic noise beat OIDN PSNR).
 
 The Sprint 4 trainer infrastructure — DataLoader path, engine-aliased LR synth, bicubic comparison, held-out probe, lab notebook discipline — was built once and serves both tracks unchanged.
 

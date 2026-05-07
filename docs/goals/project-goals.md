@@ -4,7 +4,7 @@
 
 ## Mission
 
-Ship a vendor-agnostic, open-source, real-time ray-tracing reconstruction stack that beats DLSS 4 Ray Reconstruction in quality and is the only option for ~60% of the GPU market (everything not modern NVIDIA).
+Ship a vendor-agnostic, open-source, real-time Ray-Retracing stack that beats DLSS 4 Ray Reconstruction in quality and is the only option for ~60% of the GPU market (everything not modern NVIDIA).
 
 ## Non-negotiable goals
 
@@ -30,7 +30,7 @@ Ship a vendor-agnostic, open-source, real-time ray-tracing reconstruction stack 
 
 5. **No DRM / NGX / TRT init overhead.** Direct shader dispatch. ~300-800µs/frame saved.
 
-6. **Apple Silicon support.** DLSS doesn't run on Mac. MetalFX underuses simdgroup_matrix. ORS would be the only RR-class denoiser on Apple Silicon.
+6. **Apple Silicon support.** DLSS doesn't run on Mac. MetalFX underuses simdgroup_matrix. ORS would be the only Ray-Retracing-class denoiser on Apple Silicon.
 
 7. **Modded games.** DLSS hallucinates on Skyrim modded content because its training data lacks those material distributions. Per-game LoRA solves this; closed vendors structurally cannot.
 
@@ -42,7 +42,7 @@ Pure-PyTorch reference implementation on macOS arm64. ORD denoiser (kernel-predi
 
 ### v0.2 — UPSCALER drop-in DLL (target ~2-3 months, ~$1500 cloud GPU)
 
-**Strategy: ship upscaler before denoiser.** Bigger install base (every DLSS/FSR/XeSS game ~1000+ titles), simpler API surface, validates drop-in DLL infrastructure before tackling the harder RR API. The denoiser ships in v0.3 leveraging validated v0.2 infra.
+**Strategy: ship upscaler before denoiser.** Bigger install base (every DLSS/FSR/XeSS game ~1000+ titles), simpler API surface, validates drop-in DLL infrastructure before tackling the harder DLSS-RR API. The denoiser ships in v0.3 leveraging validated v0.2 infra.
 
 **Denoising is NOT needed for the upscaler ship.** Pure upscalers (DLSS-SR, FSR, XeSS) consume clean input from the game's existing pipeline (rasterized or pre-denoised RT). The game's own denoiser handles noise BEFORE the upscaler runs. ORS-upscaler is a drop-in for the same contract.
 
@@ -94,7 +94,7 @@ Marketing claim:
 5. v1.0 release candidate.
 
 ### v1.0 — Public stable release
-First open-source vendor-agnostic real-time ray-tracing reconstruction stack with published cross-vendor benchmarks beating DLSS 4 RR on quality and matching/exceeding it on perf for everything that's not Blackwell.
+First open-source vendor-agnostic real-time Ray-Retracing stack with published cross-vendor benchmarks beating DLSS 4 RR on quality and matching/exceeding it on perf for everything that's not Blackwell.
 
 ## What we deliberately are NOT
 
@@ -105,7 +105,7 @@ First open-source vendor-agnostic real-time ray-tracing reconstruction stack wit
 
 ## Honest risk register
 
-1. **DLSS 4.5 (Jan 2026) hints** at folding RR back into the upscaler. NV may move past separate RR pass entirely. Mitigation: ORS positioning is "the open + cross-vendor option" regardless of what NV ships.
+1. **DLSS 4.5 (Jan 2026) hints** at folding Ray Reconstruction back into the upscaler. NV may move past a separate Ray Reconstruction pass entirely. Mitigation: ORS positioning is "the open + cross-vendor option" regardless of what NV ships.
 2. **AMD FSR Ray Regen** may go cross-vendor someday. Mitigation: FSR-RR is joint-but-FSR-coupled; ORS pairs with itself or anything else.
 3. **Sampler distillation is an open problem** (RAKD only validated denoisers). Mitigation: v0.2 ships fixed-budget Bálint-derived denoiser; adaptive sampling research deferred to v0.3+.
 4. **Per-game LoRA poisoning** (adversarial weights). Mitigation: signed-contributor + automated quality-regression test suite + tiered curation (community / curated / official).

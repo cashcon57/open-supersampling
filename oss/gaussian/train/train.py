@@ -257,7 +257,7 @@ class TrainArgs:
             dest="model_kind",
             help=(
                 "Training target model. 'gaussian' (default) trains the Gaussian-splat "
-                "param network (OSS-RR track). 'sr_cnn' trains SRCNNSimple (OSS-SR "
+                "param network (OSS Ray-Retracing track). 'sr_cnn' trains SRCNNSimple (OSS-SR "
                 "CNN track). 'sr_rrdb' trains SRRRDB (OSS-SR RRDB variant). "
                 "The gaussian path is bit-identical to the pre-2026-05-02 behavior."
             ),

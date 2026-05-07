@@ -40,11 +40,11 @@ GSASR loses to bicubic by 4.5 dB because the evaluation used bicubic-downsampled
 
 Image-GS at n=1000 Gaussians beats OIDN on PSNR (26.90 vs 26.56 dB) and beats Gaussian blur on PSNR + LPIPS for 5/6 frames. The under-parameterization-as-prior effect is strong and monotonic: n=1000 > n=5000 > n=30000 on every metric. OIDN still dominates SSIM and LPIPS (0.86 vs 0.76, 0.12 vs 0.26) because the Gaussian prior over-smooths texture.
 
-**Implications for OSS Ray Retracing:**
-- The Gaussian representation IS sound for denoising at the right Gaussian count. This is the structural prior needed for OSS Ray Retracing (DLSS Ray Reconstruction replacement).
+**Implications for OSS Ray-Retracing:**
+- The Gaussian representation IS sound for denoising at the right Gaussian count. This is the structural prior needed for OSS Ray-Retracing (DLSS Ray Reconstruction replacement).
 - Naive drop-in for OIDN is falsified. A trained network is required to close the LPIPS gap.
 - Hybrid architecture is the path: Gaussian prior (low-frequency + firefly suppression) + anisotropic covariance (G-buffer-conditioned, Sprint 4 enhancement) + lightweight CNN refinement for texture preservation.
-- **Prerequisite before OSS Ray Retracing training**: re-run D1 on real NoiseBase HDR frames (current NoiseBase install on 3080 Ti has only `.zip.part` partial downloads; complete the download before committing to RR training data budget).
+- **Prerequisite before OSS Ray-Retracing training**: re-run D1 on real NoiseBase HDR frames (current NoiseBase install on 3080 Ti has only `.zip.part` partial downloads; complete the download before committing to RR training data budget).
 
 ---
 
@@ -80,9 +80,9 @@ Specific LR synthesis pipeline to add before Sprint 4 training data generation:
 3. Add TAA-blur simulation (exponential moving average, α=0.1)
 4. Optional: JPEG artifacts at quality 85 for content-delivery scenarios
 
-### Decision 4: OSS Ray Retracing track — HOLD at v1 stretch goal
+### Decision 4: OSS Ray-Retracing track — HOLD at v1 stretch goal
 
-D1 is positive on the representation, but real NoiseBase validation is incomplete. Keep OSS Ray Retracing as v1 stretch / v2 milestone as planned. Do not change scope. Complete NoiseBase download on 3080 Ti and re-run D1 before any RR training commitment.
+D1 is positive on the representation, but real NoiseBase validation is incomplete. Keep OSS Ray-Retracing as v1 stretch / v2 milestone as planned. Do not change scope. Complete NoiseBase download on 3080 Ti and re-run D1 before any Ray-Retracing training commitment.
 
 ### Decision 5: Sprint 5 canvas — PROCEED as planned
 
@@ -97,7 +97,7 @@ Add to `docs/superpowers/gaussian-network-architecture.md` § Prerequisites:
 1. **Engine-aliased LR synthesis pipeline** — implemented and validated on ≥2 Sintel sequences before training data generation begins.
 2. **Low-capacity smoke-test gate** — 3080 Ti, single sequence, ≤3 hours. Must beat bicubic on at least 1 scene. No Lambda H100 spend until this passes.
 3. **Anisotropic G-buffer covariance** in OutputHead — merged to main before full training run.
-4. **NoiseBase real-data D1 re-run** — prerequisite for RR track only, not SR training.
+4. **NoiseBase real-data D1 re-run** — prerequisite for Ray-Retracing track only, not SR training.
 
 ---
 
@@ -106,7 +106,7 @@ Add to `docs/superpowers/gaussian-network-architecture.md` § Prerequisites:
 - The Gaussian temporal canvas architecture as the right output format for game SR.
 - Sprint 4 network training as the path to beating FSR/DLSS.
 - Sprint 5's temporal value (conditional, not eliminated).
-- OSS Ray Retracing as a future track (denoising prior is sound, texture gap is learnable).
+- OSS Ray-Retracing as a future track (denoising prior is sound, texture gap is learnable).
 - The 7-sprint roadmap — no scope changes, preconditions added.
 
 ---
@@ -118,5 +118,5 @@ Add to `docs/superpowers/gaussian-network-architecture.md` § Prerequisites:
 | Engine-aliased LR synthesis pipeline | Sprint 4 | Before training data gen |
 | Anisotropic G-buffer covariance in OutputHead | Sprint 4 | Before full training run |
 | Low-capacity smoke-test (3080 Ti, single scene, ≤3h) | Sprint 4 | Before Lambda H100 |
-| Complete NoiseBase download on 3080 Ti | Background | Before RR training commitment |
+| Complete NoiseBase download on 3080 Ti | Background | Before Ray-Retracing training commitment |
 | Sprint 2 T2.4–T2.13 (NGX pass-through, G-buffer, EXR, A/B toggle) | Sprint 2 | Parallel track |

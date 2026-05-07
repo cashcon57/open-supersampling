@@ -5,6 +5,13 @@ Versioning: SemVer pre-1.0 (PATCH = bug fixes / docs; MINOR = new features; MAJO
 
 ## [Unreleased] — `v0.2-dev` branch
 
+### Rename — Ray-Retracing component branding (2026-05-07)
+
+> **Ray-Retracing** — OSS's temporal denoising + spatial reconstruction component. We don't cast new rays; we reuse existing samples by reprojecting them via motion vectors — tracing the original camera ray's screen-space path backward through time. Same surface area as DLSS Ray Reconstruction; different algorithm (we use the persistent Gaussian canvas as the temporal accumulator rather than a learned denoiser network).
+
+- Renamed OSS's own Gaussian denoising / ray-reconstruction-alike track to **Ray-Retracing** / **OSS Ray-Retracing**.
+- Preserved NVIDIA product names such as DLSS Ray Reconstruction, DLSS-RR, DLSS RR, and `nvngx_dlssd.dll` where the repo is discussing NVIDIA's commercial product or API surface.
+
 ### Sprint 1 — CLOSED ✓ (2026-05-01)
 
 CUDA Gaussian renderer integration. T1.1 through T1.8 complete. Heuristic dry-run review verdict: APPROVE. Bench numbers on RTX 3080 Ti: 1080p 3.3ms / 1440p 5.0ms / 4K 10.3ms across 1K–15K Gaussian counts (raster-bound, not Gaussian-count-bound). 129 pass / 2 CUDA backward fail / 3 skip on 3080 Ti; 121 pass / 4 CUDA skip on M3 Max.
@@ -67,7 +74,7 @@ A vector-based real-time game upscaler. Where DLSS and FSR work in pixels, OSS-G
 
 > **Result of Sprint 4:** the 2D Gaussian splat representation cannot do single-image super-resolution competitively against bicubic at our resource budget. This was triple-checked across five independent paths (see `docs/superpowers/experiments/2026-05-02-splats-cannot-SR-definitive.md`). The implementation is correct; the representation is the limit.
 >
-> **Pivot:** OSS-SR forks off the Gaussian track as a CNN-based super-resolver (V0.5 architecture, drop the splat dead-code). The Gaussian track redirects to OSS Ray Retracing (denoising / DLSS-RR replacement) where Image-GS at n=1000 already beat OIDN on PSNR per the D1 memo (`docs/superpowers/experiments/2026-05-01-gaussian-denoising-naive-test.md`). Sprint 5 (persistent canvas) is suspended until the RR track produces a usable per-frame splat signal.
+> **Pivot:** OSS-SR forks off the Gaussian track as a CNN-based super-resolver (V0.5 architecture, drop the splat dead-code). The Gaussian track redirects to OSS Ray-Retracing (denoising / DLSS-RR replacement) where Image-GS at n=1000 already beat OIDN on PSNR per the D1 memo (`docs/superpowers/experiments/2026-05-01-gaussian-denoising-naive-test.md`). Sprint 5 (persistent canvas) is suspended until the Ray-Retracing track produces a usable per-frame splat signal.
 >
 > **What survives:** every piece of Sprint 4 infrastructure that isn't splat-specific — `oss/gaussian/data/` (lr_synthesis, dataset adapters), `oss/gaussian/train/train.py` (DataLoader path, bicubic comparison, checkpointing, diagnostic instrumentation), `scripts/held_out_scene_probe.py`, and the lab notebook discipline. The trainer just gets a different model wired into it.
 

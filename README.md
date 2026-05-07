@@ -340,7 +340,8 @@ The repository is Apache 2.0. See [LICENSE](LICENSE) for the canonical text and 
 Active development branch: `main`. Track docs:
 
 - [oss-sr-cnn-track](docs/superpowers/oss-sr-cnn-track.md): single-frame pixel upscaler, current production candidate
-- [oss-ray-retracing-track](docs/superpowers/oss-ray-retracing-track.md): **Ray Retracing** — Gaussian-based temporal denoiser; reuses prior samples by reprojecting via motion vectors instead of casting new rays. Same surface area as DLSS Ray Reconstruction, different algorithm.
+- **Ray-Retracing** — OSS's temporal denoising + spatial reconstruction component. We don't cast new rays; we reuse existing samples by reprojecting them via motion vectors — tracing the original camera ray's screen-space path backward through time. Same surface area as DLSS Ray Reconstruction; different algorithm (we use the persistent Gaussian canvas as the temporal accumulator rather than a learned denoiser network).
+- [oss-ray-retracing-track](docs/superpowers/oss-ray-retracing-track.md): OSS Ray-Retracing track
 - [oss-gaussian-temporal-track](docs/superpowers/oss-gaussian-temporal-track.md): Gaussian temporal canvas, parent track for v5-gaussian-temporal
 
 Recent decision memos: [docs/superpowers/experiments/](docs/superpowers/experiments/).

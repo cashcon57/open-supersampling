@@ -1,7 +1,7 @@
 # OSS-Gaussian — Network Architecture
 
-**Sprint:** 4 (pivoted 2026-05-02). **Status:** **NOT a path to single-image SR.** The 2D Gaussian splat representation cannot beat bicubic on single-image SR at our resource budget — verified across five independent paths in `docs/superpowers/experiments/2026-05-02-splats-cannot-SR-definitive.md`. OSS-SR has forked to a CNN-based pipeline (see `docs/superpowers/oss-sr-cnn-track.md` once it lands). This document remains the reference for the Gaussian track, which is being repurposed for **OSS Ray Retracing (denoising / DLSS-RR replacement)** where Image-GS already beat OIDN on PSNR (D1 memo).
-**Spec:** `docs/superpowers/specs/2026-05-01-gaussian-temporal-canvas-design.md` (SR claims now stale — RR repurposing pending).
+**Sprint:** 4 (pivoted 2026-05-02). **Status:** **NOT a path to single-image SR.** The 2D Gaussian splat representation cannot beat bicubic on single-image SR at our resource budget — verified across five independent paths in `docs/superpowers/experiments/2026-05-02-splats-cannot-SR-definitive.md`. OSS-SR has forked to a CNN-based pipeline (see `docs/superpowers/oss-sr-cnn-track.md` once it lands). This document remains the reference for the Gaussian track, which is being repurposed for **OSS Ray-Retracing (denoising / DLSS-RR replacement)** where Image-GS already beat OIDN on PSNR (D1 memo).
+**Spec:** `docs/superpowers/specs/2026-05-01-gaussian-temporal-canvas-design.md` (SR claims now stale — Ray-Retracing repurposing pending).
 **Plan:** `docs/superpowers/plans/2026-05-01-gaussian-sprint-4-plan.md`.
 **Live findings:** `docs/superpowers/experiments/2026-05-02-splats-cannot-SR-definitive.md`.
 
@@ -218,7 +218,7 @@ The original spec wanted single-frame Gaussian SR + persistent canvas + frame ex
 | **V0.5** *(fallback if V0 stalls)* | Add a small **pixel-residual head** that predicts a residual on the Gaussian-rendered HR. The bulk of the structure comes from the splats; the CNN cleans up high-frequency texture. Used by GSASR ([arXiv:2501.06838](https://arxiv.org/abs/2501.06838)) and GS-STVSR ([arXiv:2604.18047](https://arxiv.org/abs/2604.18047)) and is the most-likely cure for the "pure-splats blur edges" failure mode. | Same gate as V0 with the residual head enabled. |
 | **V1** | Persistent canvas (Sprint 5 wiring) on top of V0 / V0.5. Flow-guided position and color evolution per [GS-STVSR](https://arxiv.org/abs/2604.18047), covariance resampling, adaptive motion windows. | Temporal stability ≥ baseline FSR2 Quality on a 10-second clip (no twinkling, no ghosting). |
 | **V1.5** | Frame extrapolation via fractional-time canvas warp + a **learned disocclusion-repair head** for newly-revealed pixels, particles, transparencies, UI, and speculars. The earlier "free byproduct" framing was wrong — disocclusion is a real learning problem. | Quality ≥ DLSS-FG on a side-by-side perceptual review on Cyberpunk 2077. |
-| **V2** | Denoising / RR track using Gaussians as geometry-aware accumulation. Treat as a separate gate from SR. | Beats OIDN on PSNR + LPIPS on real path-traced NoiseBase frames. |
+| **V2** | Ray-Retracing track using Gaussians as geometry-aware denoising and spatial reconstruction. Treat as a separate gate from SR. | Beats OIDN on PSNR + LPIPS on real path-traced NoiseBase frames. |
 
 **Each stage has its own gate.** No work on V1+ until V0 (or V0.5) clears its bicubic gate. No community Cyberpunk capture until V0/V1 trains successfully on synthetic + game-engine datasets we already have.
 

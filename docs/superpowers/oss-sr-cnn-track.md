@@ -35,7 +35,7 @@ LR upsampled bicubic ──┘
 
 The current V0.5 implementation is essentially this with extra steps. Cleanup steps:
 
-1. **Drop the `GaussianParamNetwork` + `OutputHead` + `Rasterizer` from the SR forward path.** Keep the modules in `oss/gaussian/network/` for the OSS-RR track, but `oss/sr/` becomes the canonical home for the SR forward function.
+1. **Drop the `GaussianParamNetwork` + `OutputHead` + `Rasterizer` from the SR forward path.** Keep the modules in `oss/gaussian/network/` for the OSS Ray-Retracing track, but `oss/sr/` becomes the canonical home for the SR forward function.
 2. **Replace `(rendered, lr_up) → residual` with `(lr, depth, motion, normals, lr_up) → HR`.** The residual-vs-direct framing was an artefact of the splat fight; OSS-SR predicts HR directly.
 3. **Tier scaling on the CNN, not the splat net.** Pico (Steam Deck) → small CNN; Standard → bigger CNN with deeper convs. Same trainer wires it.
 4. **Drop the bank, the K-per-tile, the gbuffer-bias module from the SR config space.** They don't exist in OSS-SR.
@@ -50,7 +50,7 @@ The current V0.5 implementation is essentially this with extra steps. Cleanup st
 
 ## What gets retired
 
-- Sprint 5 (persistent canvas) **in the SR context.** Sprint 5 only makes sense if the splat path encodes useful image content per frame, which it does not for SR. If OSS Ray Retracing succeeds, Sprint 5 may revive there.
+- Sprint 5 (persistent canvas) **in the SR context.** Sprint 5 only makes sense if the splat path encodes useful image content per frame, which it does not for SR. If OSS Ray-Retracing succeeds, Sprint 5 may revive there.
 - Sprint 6 (frame extrapolation) **in the SR context.** Same reasoning.
 - The "single trained model fans out via prune/retrain" plan was already dropped to "lite/standard from scratch + distil to pico" — that decision now applies to the CNN, not the splat net.
 
@@ -72,9 +72,9 @@ The current V0.5 implementation is essentially this with extra steps. Cleanup st
 - **Cyberpunk capture** via OSSContribute once we have a deployed v0 model to
   feed it.
 
-## OSS Ray Retracing (parallel track)
+## OSS Ray-Retracing (parallel track)
 
-Splats DO work for denoising — D1 memo showed Image-GS at n=1000 beats OIDN on PSNR. The Gaussian-track infrastructure (renderer, bank, output head, network) is preserved and pivoted to **Ray Retracing** (temporal denoising via motion-vector reprojection — same surface area as DLSS Ray Reconstruction, different algorithm) where the representation is known to fit. See `docs/superpowers/oss-ray-retracing-track.md` for the plan once it lands.
+Splats DO work for denoising — D1 memo showed Image-GS at n=1000 beats OIDN on PSNR. The Gaussian-track infrastructure (renderer, bank, output head, network) is preserved and pivoted to **Ray-Retracing** (temporal denoising via motion-vector reprojection — same surface area as DLSS Ray Reconstruction, different algorithm) where the representation is known to fit. See `docs/superpowers/oss-ray-retracing-track.md` for the plan once it lands.
 
 ## Open questions
 

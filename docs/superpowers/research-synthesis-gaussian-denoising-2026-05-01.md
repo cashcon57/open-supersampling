@@ -1,4 +1,4 @@
-# Research synthesis — Gaussian denoising / Ray Reconstruction replacement
+# Research synthesis — Gaussian denoising / Ray-Retracing replacement
 
 **Date:** 2026-05-01
 **Source:** External research batch on Gaussian-based denoising + path-tracing reconstruction.
@@ -70,7 +70,7 @@ GS-STVSR, GSASR). World-space is the moonshot for v2.
 
 **Action:** Document as v2 research direction; do not pull into v1 scope.
 
-### 2.3 Neural Lifting for Monte Carlo Noise (the slot-in for RR)
+### 2.3 Neural Lifting for Monte Carlo Noise (the slot-in for Ray-Retracing)
 
 **Idea:** lightweight network maps noisy 1spp → Gaussian parameter map
 (Δμ, Σ, α, color) → splat → clean HR. Replaces the CNN denoiser slot
@@ -86,7 +86,7 @@ only the dataset and conditioning change:
 **Action:** Treat as a v1 stretch goal / v2 milestone. Train a separate
 checkpoint of the Sprint 4 network on Monte Carlo noise data
 (NoiseBase already has this — see existing OSSRG training pipeline)
-and ship as `OSS Ray Retracing`. Same network class, different weights.
+and ship as `OSS Ray-Retracing`. Same network class, different weights.
 
 ### 2.4 Multi-Scale Splat Pyramids
 
@@ -123,11 +123,11 @@ papers-2407.18046-2501.06838-2503.14171-synthesis.md):
 > tile's surface orientation. ~1 day implementation, expected quality
 > win on geometric edges.
 
-### Action 2: OSS Ray Retracing as v1 stretch / v2 milestone
+### Action 2: OSS Ray-Retracing as v1 stretch / v2 milestone
 
 Add to design spec § 12 "Open questions" (or a new § 13 "Future"):
 
-> OSS Ray Retracing — apply the same Sprint 4 network architecture +
+> OSS Ray-Retracing — apply the same Sprint 4 network architecture +
 > Sprint 1 renderer to Monte Carlo path-traced denoising. Drop-in slot
 > for DLSS 3.5 Ray Reconstruction. Training data: NoiseBase (existing
 > dataset, used by OSSRG pixel track).
@@ -143,11 +143,11 @@ Update README compatibility section:
 > conditioning. Roadmap goal: one model family covers both DLSS
 > products.
 
-### Action 4: OSSRG vs OSS Ray Retracing positioning
+### Action 4: OSSRG vs OSS Ray-Retracing positioning
 
 Document decision: **keep OSSRG (pixel-based denoiser) as a parallel
-track** until OSS Ray Retracing is trained and benchmarked. If
-OSS Ray Retracing beats OSSRG on quality + iso-latency, archive OSSRG
+track** until OSS Ray-Retracing is trained and benchmarked. If
+OSS Ray-Retracing beats OSSRG on quality + iso-latency, archive OSSRG
 to `oss/legacy/`. If not, both ship.
 
 ---
