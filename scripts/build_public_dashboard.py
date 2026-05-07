@@ -12,6 +12,7 @@ import argparse
 import datetime as _dt
 import html
 import json
+import math
 import re
 from pathlib import Path
 from typing import Any
@@ -204,6 +205,17 @@ def slim_row(row: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def row_with_derived_metrics(row: dict[str, Any]) -> dict[str, Any]:
+    out = dict(row)
+    if out.get("psnr_db") is None and "loss_charbonnier" in out:
+        try:
+            lc = float(out["loss_charbonnier"]) or 1e-6
+        except (TypeError, ValueError):
+            lc = 1e-6
+        out["psnr_proxy"] = -10.0 * math.log10(max(lc * lc, 1e-12))
+    return out
+
+
 def step_value(row: dict[str, Any]) -> int:
     raw = row.get("step", 0)
     try:
@@ -345,7 +357,7 @@ def build_run(name: str, previous: dict[str, Any] | None) -> dict[str, Any] | No
             "cross_version_points": cross_version_points_for_run(name),
         }
 
-    metrics = sorted(metrics, key=step_value)
+    metrics = [row_with_derived_metrics(row) for row in sorted(metrics, key=step_value)]
     latest = slim_row(metrics[-1]) if metrics else {}
     latest_step = step_value(metrics[-1]) if metrics else 0
     viz_columns = viz_columns_for_run(name)
