@@ -23,6 +23,10 @@ RUNS_DIR = PUBLIC_DIR / "runs"
 README = ROOT / "README.md"
 DATA_JSON = PUBLIC_DIR / "data.json"
 INDEX_HTML = PUBLIC_DIR / "index.html"
+DASHBOARD_PITCH = (
+    "OpenSuperSampling is training a unified game reconstruction pipeline for "
+    "super-resolution and frame extrapolation from one temporal model."
+)
 
 RUN_CONFIG = {
     "srcnn-v6.1-pico-001": {
@@ -298,23 +302,7 @@ def history_for_run(name: str, config: dict[str, Any]) -> dict[str, Any]:
 
 
 def extract_pitch() -> str:
-    if not README.is_file():
-        return (
-            "OSS uses one persistent Gaussian canvas for game super-resolution and "
-            "frame extrapolation. The same canvas can render the current frame or a "
-            "fractional future frame without a second frame-generation network."
-        )
-
-    text = README.read_text(encoding="utf-8", errors="replace")
-    marker = "## Why this architecture"
-    start = text.find(marker)
-    if start < 0:
-        return ""
-    rest = text[start + len(marker) :]
-    paragraphs = [part.strip() for part in rest.split("\n\n") if part.strip()]
-    if not paragraphs:
-        return ""
-    return paragraphs[0].replace("\n", " ")
+    return DASHBOARD_PITCH
 
 
 def build_data() -> dict[str, Any]:
