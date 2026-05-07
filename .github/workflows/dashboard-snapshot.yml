@@ -138,32 +138,7 @@ jobs:
                 rm -f "$tmp_gpu"
               else
                 captured_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-                python3 - "$tmp_gpu" "$dest/gpu_status.json" "$captured_at" <<'PY'
-import csv
-import json
-import sys
-from pathlib import Path
-
-csv_path = Path(sys.argv[1])
-out_path = Path(sys.argv[2])
-captured_at = sys.argv[3]
-rows = list(csv.reader(csv_path.read_text(encoding="utf-8", errors="replace").splitlines()))
-if not rows or len(rows[0]) < 4:
-    raise SystemExit("nvidia-smi returned no GPU rows")
-name = rows[0][0].strip()
-used = int(float(rows[0][1].strip()))
-total = int(float(rows[0][2].strip()))
-util = int(float(rows[0][3].strip()))
-payload = {
-    "captured_at": captured_at,
-    "gpu_name": name,
-    "memory_used_mib": used,
-    "memory_total_mib": total,
-    "memory_used_pct": round((used / total) * 100, 1) if total else 0.0,
-    "utilization_pct": util,
-}
-out_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-PY
+                python3 scripts/parse_nvidia_smi_to_json.py "$tmp_gpu" "$dest/gpu_status.json" "$captured_at"
                 status=$?
                 rm -f "$tmp_gpu"
                 if [[ $status -ne 0 ]]; then
