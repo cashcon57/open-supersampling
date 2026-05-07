@@ -47,6 +47,7 @@
             <span id="updated-line">updated just now</span>
             <span id="data-state" class="rounded border border-zinc-700 px-2 py-0.5 text-xs text-zinc-300">loading</span>
           </div>
+          <div id="connection-line" class="mt-2 hidden text-sm text-amber-200">Connection lost — retrying</div>
         </div>
         <button id="theme-toggle" class="inline-flex h-9 w-fit items-center justify-center rounded-md border border-zinc-700 px-3 text-sm text-zinc-200 hover:border-cyan-500 hover:text-white" type="button">Light mode</button>
       </div>
@@ -100,6 +101,14 @@ const colors = {
   psnr: "#34d399",
   bicubic: "#94a3b8",
 };
+
+const POLL_MS = 30000;
+const STAMP_MS = 5000;
+let latestGeneratedAt = null;
+let lastKnownData = null;
+let activeCharts = [];
+let pollTimer = null;
+let stampTimer = null;
 
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (char) => ({
@@ -283,10 +292,11 @@ function renderHero(data) {
   document.getElementById("hero-gpu").innerHTML = gpuPanelHtml(active).replace("rounded-md border ", "");
 }
 
-function renderRun(run, index) {
+function renderRun(run, index, openByRun = new Map()) {
   const history = run.history || {};
   const activeClass = run.active ? "border-cyan-800 bg-cyan-950/20" : "border-zinc-800 bg-zinc-900/60";
-  const open = history.default_open ? "open" : "";
+  const preservedOpen = openByRun.get(run.name);
+  const open = (preservedOpen ?? history.default_open) ? "open" : "";
   const headline = (history.headline || []).map((item) => `
     <div class="rounded border border-zinc-800 bg-zinc-950/35 px-3 py-3" data-muted-surface>
       <div class="text-xs uppercase text-zinc-500" data-dim>${escapeHtml(item.label)}</div>
@@ -302,7 +312,7 @@ function renderRun(run, index) {
   const chartBody = rows.length
     ? `<div class="chart-wrap mt-3"><canvas id="${chartId}"></canvas></div>`
     : `<p class="mt-3 rounded border border-zinc-800 bg-zinc-950/40 px-4 py-5 text-sm text-zinc-400" data-muted-surface data-subtext>No loss metrics published yet.</p>`;
-  return `<details ${open} class="rounded-md border ${activeClass}" data-surface>
+  return `<details ${open} class="rounded-md border ${activeClass}" data-run-name="${escapeHtml(run.name)}" data-surface>
     <summary class="flex cursor-pointer items-start gap-3 p-4">
       <span class="summary-chevron mt-1 text-zinc-500 transition-transform">›</span>
       <span class="min-w-0 flex-1">
@@ -350,7 +360,10 @@ function renderRun(run, index) {
 function renderRuns(data) {
   const host = document.getElementById("run-history");
   const runs = data.runs || [];
-  host.innerHTML = runs.map(renderRun).join("");
+  const openByRun = new Map(Array.from(host.querySelectorAll("details[data-run-name]")).map((details) => [details.dataset.runName, details.open]));
+  activeCharts.forEach((chart) => chart.destroy());
+  activeCharts = [];
+  host.innerHTML = runs.map((run, index) => renderRun(run, index, openByRun)).join("");
   const charts = [];
   runs.forEach((run, index) => {
     const canvas = document.getElementById(`loss-chart-${index}`);
@@ -361,6 +374,7 @@ function renderRuns(data) {
     renderScoreTable(document.getElementById(`score-table-${index}`), run);
     renderVizStrip(document.getElementById(`viz-strip-${index}`), run, 4);
   });
+  activeCharts = charts;
   host.querySelectorAll("details").forEach((details) => {
     details.addEventListener("toggle", () => {
       if (details.open) window.requestAnimationFrame(() => charts.forEach((chart) => chart.resize()));
@@ -368,27 +382,66 @@ function renderRuns(data) {
   });
 }
 
-async function loadDashboard() {
+function updateStamp() {
+  if (latestGeneratedAt) {
+    document.getElementById("updated-line").textContent = agoText(latestGeneratedAt);
+  }
+}
+
+function setLoadedState() {
   const state = document.getElementById("data-state");
-  try {
-    const response = await fetch("data.json", { cache: "no-store" });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const data = await response.json();
-    state.textContent = "loaded";
-    state.classList.remove("border-zinc-700");
-    state.classList.add("border-emerald-700", "text-emerald-300");
-    document.getElementById("updated-line").textContent = agoText(data.generated_at);
-    renderHero(data);
-    renderRuns(data);
-    window.setInterval(() => {
-      document.getElementById("updated-line").textContent = agoText(data.generated_at);
-    }, 30000);
-  } catch (error) {
-    state.textContent = "data load failed";
-    state.classList.add("border-red-700", "text-red-300");
+  const connectionLine = document.getElementById("connection-line");
+  const errorBox = document.getElementById("load-error");
+  state.textContent = "live";
+  state.classList.remove("border-zinc-700", "border-red-700", "text-red-300", "border-amber-700", "text-amber-200");
+  state.classList.add("border-emerald-700", "text-emerald-300");
+  connectionLine.classList.add("hidden");
+  errorBox.classList.add("hidden");
+}
+
+function setRetryingState(error, hasLastKnownData) {
+  const state = document.getElementById("data-state");
+  const connectionLine = document.getElementById("connection-line");
+  state.classList.remove("border-zinc-700", "border-emerald-700", "text-emerald-300");
+  state.classList.add("border-amber-700", "text-amber-200");
+  state.textContent = hasLastKnownData ? "retrying" : "data load failed";
+  connectionLine.classList.remove("hidden");
+  if (!hasLastKnownData) {
     const errorBox = document.getElementById("load-error");
     errorBox.classList.remove("hidden");
     errorBox.textContent = `Could not load data.json: ${error.message}`;
+  }
+}
+
+function renderDashboard(data) {
+  latestGeneratedAt = data.generated_at;
+  lastKnownData = data;
+  updateStamp();
+  renderHero(data);
+  renderRuns(data);
+  setLoadedState();
+}
+
+async function fetchDashboardData() {
+  const response = await fetch(`/data.json?t=${Date.now()}`, { cache: "no-store" });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return response.json();
+}
+
+async function pollDashboard() {
+  try {
+    renderDashboard(await fetchDashboardData());
+  } catch (error) {
+    setRetryingState(error, Boolean(lastKnownData));
+  }
+}
+
+function startLiveUpdates() {
+  if (!stampTimer) {
+    stampTimer = window.setInterval(updateStamp, STAMP_MS);
+  }
+  if (!pollTimer) {
+    pollTimer = window.setInterval(pollDashboard, POLL_MS);
   }
 }
 
@@ -397,7 +450,8 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("theme-toggle").addEventListener("click", () => {
     setTheme(document.documentElement.classList.contains("dark"));
   });
-  loadDashboard();
+  pollDashboard();
+  startLiveUpdates();
 });
 </script>
 </body>
