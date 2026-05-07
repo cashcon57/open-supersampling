@@ -13,14 +13,14 @@
   <style>
     @import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&display=swap");
     :root {
-      --bg: #040504;
-      --panel: #050806;
-      --panel-2: #07110d;
-      --line: rgba(110, 231, 183, 0.28);
-      --line-strong: rgba(110, 231, 183, 0.7);
-      --accent: #6ee7b7;
+      --bg: #06110f;
+      --panel: #071611;
+      --panel-2: #081a14;
+      --line: rgba(140, 255, 193, 0.26);
+      --line-strong: rgba(140, 255, 193, 0.68);
+      --accent: #8cffc1;
       --fg: #a8d4a0;
-      --fg-strong: #d6f4cc;
+      --fg-strong: #e9fff7;
       --dim: #63846f;
       --gold: #c8a960;
       --neutral: #f4f4f5;
@@ -39,7 +39,7 @@
       background: var(--oss-bg);
       color: var(--oss-text);
       font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      box-shadow: inset 0 0 80px rgba(0, 255, 150, 0.05);
+      box-shadow: inset 0 0 80px rgba(140, 255, 193, 0.04);
       min-height: 100vh;
       position: relative;
     }
@@ -48,14 +48,14 @@
       position: fixed;
       inset: 0;
       pointer-events: none;
-      background: repeating-linear-gradient(0deg, rgba(255,255,255,0.02) 0 1px, transparent 1px 3px);
+      background: repeating-linear-gradient(0deg, rgba(255,255,255,0.018) 0 1px, transparent 1px 3px);
       mix-blend-mode: screen;
       z-index: 9999;
     }
     .font-mono, code, pre, .live-indicator, .lightbox-caption, .metric-direction { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important; }
     .tracking-wide { letter-spacing: 0 !important; }
-    [data-surface] { background-color: rgba(8, 24, 21, 0.88) !important; border-color: var(--oss-line) !important; border-radius: 0 !important; }
-    [data-muted-surface] { background-color: rgba(4, 8, 5, 0.72) !important; border-color: rgba(110, 231, 183, 0.18) !important; border-radius: 0 !important; }
+    [data-surface] { background-color: rgba(8, 24, 21, 0.88) !important; border-color: var(--oss-line) !important; border-radius: 0 !important; box-shadow: inset 0 0 80px rgba(140, 255, 193, 0.04); }
+    [data-muted-surface] { background-color: rgba(4, 8, 5, 0.72) !important; border-color: rgba(140, 255, 193, 0.18) !important; border-radius: 0 !important; box-shadow: inset 0 0 80px rgba(140, 255, 193, 0.03); }
     [data-text] { color: var(--oss-text) !important; }
     [data-subtext] { color: var(--oss-subtext) !important; }
     [data-dim] { color: var(--oss-dim) !important; }
