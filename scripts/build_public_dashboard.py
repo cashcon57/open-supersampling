@@ -207,12 +207,20 @@ def slim_row(row: dict[str, Any]) -> dict[str, Any]:
 
 def row_with_derived_metrics(row: dict[str, Any]) -> dict[str, Any]:
     out = dict(row)
-    if out.get("psnr_db") is None and "loss_charbonnier" in out:
-        try:
-            lc = float(out["loss_charbonnier"]) or 1e-6
-        except (TypeError, ValueError):
-            lc = 1e-6
-        out["psnr_proxy"] = -10.0 * math.log10(max(lc * lc, 1e-12))
+    # PSNR proxy from any L1ish reconstruction loss key the trainer wrote.
+    # v6/v6.1 trainer uses `loss_charbonnier`; v5 trainer wrote `t_l1`;
+    # earlier runs sometimes used bare `l1`. All are L1-magnitude on
+    # roughly normalized images, so -10*log10(x²) gives a usable trend
+    # (biased ~3-5 dB high vs MSE-true PSNR).
+    if out.get("psnr_db") is None:
+        for key in ("loss_charbonnier", "t_l1", "l1", "tp1_l1"):
+            if key in out:
+                try:
+                    lc = float(out[key]) or 1e-6
+                except (TypeError, ValueError):
+                    lc = 1e-6
+                out["psnr_proxy"] = -10.0 * math.log10(max(lc * lc, 1e-12))
+                break
     return out
 
 
