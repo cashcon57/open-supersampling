@@ -696,7 +696,9 @@ function setGestureStart() {
 function handleImagePointerDown(event) {
   if (event.pointerType !== "touch") return;
   event.preventDefault();
-  event.currentTarget.setPointerCapture(event.pointerId);
+  if (event.currentTarget.setPointerCapture) {
+    try { event.currentTarget.setPointerCapture(event.pointerId); } catch (_error) {}
+  }
   gesturePointers.set(event.pointerId, {
     clientX: event.clientX,
     clientY: event.clientY,
