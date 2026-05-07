@@ -11,36 +11,62 @@
   </script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0"></script>
   <style>
-    @import url("https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap");
+    @import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&display=swap");
     :root {
-      --oss-bg: #06110f;
-      --oss-panel: #081815;
-      --oss-panel-2: #0b211d;
-      --oss-line: rgba(140, 255, 193, 0.23);
-      --oss-line-strong: rgba(140, 255, 193, 0.52);
-      --oss-accent: #8cffc1;
-      --oss-text: #e9fff7;
-      --oss-subtext: #a5c6bc;
-      --oss-dim: #6f8d85;
+      --bg: #040504;
+      --panel: #050806;
+      --panel-2: #07110d;
+      --line: rgba(110, 231, 183, 0.28);
+      --line-strong: rgba(110, 231, 183, 0.7);
+      --accent: #6ee7b7;
+      --fg: #a8d4a0;
+      --fg-strong: #d6f4cc;
+      --dim: #63846f;
+      --gold: #c8a960;
+      --neutral: #f4f4f5;
+      --oss-bg: var(--bg);
+      --oss-panel: var(--panel);
+      --oss-panel-2: var(--panel-2);
+      --oss-line: var(--line);
+      --oss-line-strong: var(--line-strong);
+      --oss-accent: var(--accent);
+      --oss-text: var(--fg-strong);
+      --oss-subtext: var(--fg);
+      --oss-dim: var(--dim);
     }
     html { color-scheme: dark; }
     body {
       background: var(--oss-bg);
       color: var(--oss-text);
-      font-family: "Atkinson Hyperlegible", system-ui, sans-serif;
+      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      box-shadow: inset 0 0 80px rgba(0, 255, 150, 0.05);
+      min-height: 100vh;
+      position: relative;
     }
-    .font-mono, code, pre, .live-indicator, .lightbox-caption { font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important; }
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background: repeating-linear-gradient(0deg, rgba(255,255,255,0.02) 0 1px, transparent 1px 3px);
+      mix-blend-mode: screen;
+      z-index: 9999;
+    }
+    .font-mono, code, pre, .live-indicator, .lightbox-caption, .metric-direction { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important; }
     .tracking-wide { letter-spacing: 0 !important; }
     [data-surface] { background-color: rgba(8, 24, 21, 0.88) !important; border-color: var(--oss-line) !important; border-radius: 0 !important; }
-    [data-muted-surface] { background-color: rgba(6, 17, 15, 0.62) !important; border-color: rgba(140, 255, 193, 0.18) !important; border-radius: 4px !important; }
+    [data-muted-surface] { background-color: rgba(4, 8, 5, 0.72) !important; border-color: rgba(110, 231, 183, 0.18) !important; border-radius: 0 !important; }
     [data-text] { color: var(--oss-text) !important; }
     [data-subtext] { color: var(--oss-subtext) !important; }
     [data-dim] { color: var(--oss-dim) !important; }
     a, .text-cyan-300, .text-emerald-300 { color: var(--oss-accent) !important; }
     .border-cyan-500, .border-emerald-700, .hover\:border-cyan-500:hover { border-color: var(--oss-line-strong) !important; }
     .bg-emerald-400, .bg-cyan-500 { background-color: var(--oss-accent) !important; }
-    .metric-card { border-radius: 0 !important; }
+    .metric-card, .rounded, .rounded-md, .rounded-lg, .rounded-full { border-radius: 0 !important; }
+    .lightbox-shell { border-radius: 8px !important; }
     .viz-frame img, .viz-button { border-radius: 4px !important; }
+    .terminal-divider { color: var(--oss-dim); font-size: 0.78rem; overflow: hidden; white-space: nowrap; }
+    .oss-logo { display: block; width: min(100%, 600px); height: auto; filter: drop-shadow(0 0 16px rgba(110, 231, 183, 0.16)); }
     .oss-mark {
       width: max-content;
       border-left: 2px solid var(--oss-accent);
@@ -48,7 +74,73 @@
       color: var(--oss-accent);
       font-size: 0.78rem;
       line-height: 1.05;
-      text-shadow: 0 0 18px rgba(140,255,193,0.38);
+      text-shadow: 0 0 18px rgba(110,231,183,0.38);
+    }
+    .loader {
+      animation: loader-rotate 1s infinite;
+      display: inline-block;
+      height: 50px;
+      width: 50px;
+    }
+    .loader::before,
+    .loader::after {
+      border-radius: 50%;
+      content: "";
+      display: block;
+      height: 20px;
+      width: 20px;
+    }
+    .loader::before {
+      animation: loader-ball1 1s infinite;
+      background-color: var(--neutral);
+      box-shadow: 30px 0 0 var(--accent);
+      margin-bottom: 10px;
+    }
+    .loader::after {
+      animation: loader-ball2 1s infinite;
+      background-color: var(--accent);
+      box-shadow: 30px 0 0 var(--neutral);
+    }
+    .loader.inline-loader {
+      height: 18px;
+      width: 18px;
+      flex: 0 0 auto;
+    }
+    .loader.inline-loader::before,
+    .loader.inline-loader::after {
+      height: 7px;
+      width: 7px;
+    }
+    .loader.inline-loader::before {
+      box-shadow: 11px 0 0 var(--accent);
+      margin-bottom: 4px;
+    }
+    .loader.inline-loader::after {
+      box-shadow: 11px 0 0 var(--neutral);
+    }
+    .initial-loader {
+      display: flex;
+      min-height: 12rem;
+      align-items: center;
+      justify-content: center;
+      gap: 1rem;
+      color: var(--oss-subtext);
+    }
+    .initial-loader.hidden { display: none; }
+    @keyframes loader-rotate {
+      0% { transform: rotate(0deg) scale(0.8); }
+      50% { transform: rotate(360deg) scale(1.2); }
+      100% { transform: rotate(720deg) scale(0.8); }
+    }
+    @keyframes loader-ball1 {
+      0% { box-shadow: 30px 0 0 var(--accent); }
+      50% { box-shadow: 0 0 0 var(--accent); margin-bottom: 0; transform: translate(15px, 15px); }
+      100% { box-shadow: 30px 0 0 var(--accent); margin-bottom: 10px; }
+    }
+    @keyframes loader-ball2 {
+      0% { box-shadow: 30px 0 0 var(--neutral); }
+      50% { box-shadow: 0 0 0 var(--neutral); margin-top: -20px; transform: translate(15px, 15px); }
+      100% { box-shadow: 30px 0 0 var(--neutral); margin-top: 0; }
     }
     details > summary { list-style: none; }
     details > summary::-webkit-details-marker { display: none; }
@@ -73,6 +165,12 @@
     .metric-card.expanded { border-color: rgba(34,211,238,0.8); box-shadow: 0 0 0 1px rgba(34,211,238,0.2), 0 16px 44px rgba(8,145,178,0.12); transform: scale(1.015); }
     .metric-sparkline { display: none; }
     .metric-card.expanded .metric-sparkline { display: block; }
+    .metric-direction {
+      margin-top: 0.18rem;
+      color: var(--oss-dim);
+      font-size: 11px;
+      line-height: 1.25;
+    }
     .chart-wrap { height: 18rem; min-height: 16rem; max-width: 100%; overflow: hidden; }
     .chart-wrap canvas { max-width: 100% !important; }
     .lightbox {
@@ -102,15 +200,24 @@
       justify-content: flex-end;
       gap: 0.5rem;
       min-height: 3rem;
+      flex-wrap: wrap;
     }
+    .compare-controls {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      color: var(--oss-subtext);
+      font-size: 0.78rem;
+    }
+    .lightbox-select,
     .lightbox-tool {
       min-height: 2.75rem;
-      border-radius: 9999px;
-      border: 1px solid rgba(212, 212, 216, 0.45);
-      background: rgba(24, 24, 27, 0.85);
-      padding: 0 0.875rem;
-      color: #f4f4f5;
-      font-size: 0.875rem;
+      border-radius: 0;
+      border: 1px solid var(--oss-line-strong);
+      background: rgba(4, 8, 5, 0.9);
+      padding: 0 0.7rem;
+      color: var(--neutral);
+      font-size: 0.78rem;
     }
     .lightbox-tool[aria-pressed="false"],
     .lightbox-tool:disabled {
@@ -147,20 +254,43 @@
       transform-origin: center center;
     }
     .lightbox-image.magnifier-active { cursor: crosshair; }
-    .lightbox-magnifier {
+    .multi-magnifier {
       position: absolute;
-      width: 200px;
-      height: 200px;
       display: none;
-      border: 2px solid rgba(244, 244, 245, 0.95);
-      border-radius: 9999px;
-      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
-      image-rendering: pixelated;
+      gap: 8px;
       pointer-events: none;
-      transform: translate(-50%, -50%);
+      transform: translate(-50%, calc(-100% - 18px));
       z-index: 2;
     }
-    .lightbox-magnifier.visible { display: block; }
+    .multi-magnifier.visible { display: flex; }
+    .multi-lens {
+      position: relative;
+      width: 140px;
+      height: 140px;
+      overflow: hidden;
+      border: 2px solid var(--neutral);
+      border-radius: 9999px !important;
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6), 0 0 18px rgba(110, 231, 183, 0.18);
+      background-repeat: no-repeat;
+      image-rendering: pixelated;
+    }
+    .multi-lens-label {
+      position: absolute;
+      left: 50%;
+      bottom: 8px;
+      max-width: 112px;
+      transform: translateX(-50%);
+      border: 1px solid rgba(110, 231, 183, 0.45);
+      background: rgba(0, 0, 0, 0.72);
+      color: var(--neutral);
+      padding: 1px 4px;
+      font-family: "JetBrains Mono", ui-monospace, monospace;
+      font-size: 10px;
+      line-height: 1.2;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
     .lightbox-caption {
       min-height: 2rem;
       padding-top: 0.5rem;
@@ -173,7 +303,9 @@
     .live-indicator { display: inline-flex; align-items: center; gap: 0.35rem; border: 1px solid rgba(113,113,122,0.55); padding: 0.08rem 0.42rem; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; font-size: 0.72rem; font-weight: 600; line-height: 1.2; vertical-align: middle; }
     .live-indicator.live { border-color: rgba(52,211,153,0.7); color: #6ee7b7; }
     .live-indicator.idle { color: #a1a1aa; }
-    .live-indicator.live .indicator-dot { animation: live-pulse 1.6s ease-in-out infinite; }
+    .terminal-cursor { animation: step-blink 1s steps(1, end) infinite; color: var(--oss-accent); }
+    .training-progress-track { height: 0.55rem; border: 1px solid var(--oss-line); background: rgba(0,0,0,0.55); }
+    .training-progress-fill { height: 100%; background: linear-gradient(90deg, var(--oss-accent), var(--gold)); box-shadow: 0 0 16px rgba(110,231,183,0.35); }
     .step-ticker-row.is-new { animation: ticker-slide 620ms cubic-bezier(0.2, 0.8, 0.2, 1); }
     @keyframes live-pulse {
       0%, 100% { opacity: 0.55; transform: scale(0.92); }
@@ -182,6 +314,10 @@
     @keyframes ticker-slide {
       0% { opacity: 0; transform: translateY(0.55rem); }
       100% { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes step-blink {
+      0%, 49% { opacity: 1; }
+      50%, 100% { opacity: 0; }
     }
     @media (prefers-reduced-motion: reduce) {
       .live-indicator.live .indicator-dot,
@@ -210,9 +346,7 @@
     <header class="border-b border-zinc-800 pb-5">
       <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div class="max-w-4xl">
-          <pre class="oss-mark" aria-label="OpenSuperSampling mark">OSS
-SR + FX
-train/live</pre>
+          <img class="oss-logo" src="oss-logo.svg" alt="Open Super Sampling">
           <p class="mt-4 text-xs font-semibold uppercase tracking-wide text-cyan-300">OpenSuperSampling</p>
           <h1 class="mt-2 text-3xl font-semibold tracking-normal text-zinc-50 sm:text-4xl" data-text>v6.1 Pico is training right now</h1>
           <p class="mt-3 max-w-3xl text-sm leading-6 text-zinc-300" data-subtext>OpenSuperSampling is training a unified game reconstruction pipeline for super-resolution and frame extrapolation from one temporal model.</p>
@@ -228,6 +362,7 @@ train/live</pre>
       </div>
     </header>
 
+    <div class="terminal-divider" aria-hidden="true">┌─ signal ─────────────────────────────────────────────────────────────────────────────┐</div>
     <section class="grid items-start gap-4 lg:grid-cols-[1.4fr_1fr_1fr]" aria-label="At a glance">
       <article class="rounded-md border border-cyan-900/70 bg-cyan-950/20 p-4" data-surface>
         <div class="flex items-center gap-2 text-sm font-medium text-cyan-200">
@@ -240,7 +375,9 @@ train/live</pre>
       <article class="rounded-md border border-zinc-800 bg-zinc-900/60 p-4" data-surface>
         <div class="text-sm uppercase text-zinc-500" data-dim>v5-pixel-temporal: measured</div>
         <div class="mt-2 font-mono text-2xl font-semibold text-emerald-300">25.703 dB</div>
+        <div class="metric-direction" data-direction="higher">↑ higher is better</div>
         <p class="mt-1 text-sm text-zinc-400" data-subtext>v5-pixel-temporal, LPIPS 0.1666, temporal ratio 0.337x</p>
+        <div class="metric-direction" data-direction="lower">LPIPS ↓ lower is better / temporal ratio ↓ lower is better (smaller frame-to-frame delta)</div>
       </article>
       <article id="hero-gpu" class="rounded-md border border-zinc-800 bg-zinc-900/60 p-4" data-surface>
         <div class="text-sm uppercase text-zinc-500" data-dim>GPU usage</div>
@@ -248,12 +385,17 @@ train/live</pre>
       </article>
     </section>
 
+    <div class="terminal-divider" aria-hidden="true">├─ lineage ────────────────────────────────────────────────────────────────────────────┤</div>
     <section class="flex flex-col gap-3" aria-labelledby="run-history-title">
       <div class="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h2 id="run-history-title" class="text-xl font-semibold text-zinc-50" data-text>Inspect training lineage</h2>
           <p class="text-sm text-zinc-400" data-subtext>Open a run to compare training, measurement, and superseded references.</p>
         </div>
+      </div>
+      <div id="initial-loader" class="initial-loader">
+        <span class="loader" aria-hidden="true"></span>
+        <span class="font-mono text-sm">loading dashboard data...</span>
       </div>
       <div id="run-history" class="flex flex-col gap-3"></div>
       <div id="load-error" class="hidden rounded-md border border-red-900 bg-red-950/30 p-4 text-sm text-red-200"></div>
@@ -269,12 +411,27 @@ train/live</pre>
   <dialog id="viz-lightbox" class="lightbox" aria-label="Visualization image viewer">
     <div class="lightbox-shell">
       <div class="lightbox-toolbar">
-        <button id="lightbox-magnifier-toggle" class="lightbox-tool" type="button" aria-pressed="true">&#128269; Magnifier</button>
+        <div id="multi-compare-controls" class="compare-controls">
+          <span>Compare:</span>
+          <select id="compare-column-a" class="lightbox-select" aria-label="Multi-Magnify first column"></select>
+          <span>vs</span>
+          <select id="compare-column-b" class="lightbox-select" aria-label="Multi-Magnify second column"></select>
+        </div>
+        <button id="lightbox-magnifier-toggle" class="lightbox-tool" type="button" aria-pressed="true">&#128269; Multi-Magnify</button>
+        <select id="magnifier-zoom" class="lightbox-select" aria-label="Multi-Magnify zoom">
+          <option value="1">1x</option>
+          <option value="2" selected>2x</option>
+          <option value="4">4x</option>
+          <option value="8">8x</option>
+        </select>
         <button id="lightbox-close" class="lightbox-close" type="button" aria-label="Close visualization viewer">&times;</button>
       </div>
       <div id="lightbox-stage" class="lightbox-stage">
         <img id="lightbox-image" class="lightbox-image" alt="">
-        <div id="lightbox-magnifier" class="lightbox-magnifier" aria-hidden="true"></div>
+        <div id="multi-magnifier" class="multi-magnifier" aria-hidden="true">
+          <div id="multi-lens-a" class="multi-lens"><span id="multi-label-a" class="multi-lens-label"></span></div>
+          <div id="multi-lens-b" class="multi-lens"><span id="multi-label-b" class="multi-lens-label"></span></div>
+        </div>
       </div>
       <div id="lightbox-caption" class="lightbox-caption"></div>
     </div>
@@ -284,12 +441,30 @@ train/live</pre>
 "use strict";
 
 const colors = {
-  total: "#8cffc1",
-  charbonnier: "#a5c6bc",
-  lpips: "#6f8d85",
-  psnr: "#8cffc1",
+  total: "#6ee7b7",
+  charbonnier: "#a8d4a0",
+  lpips: "#c8a960",
+  msvgg: "#d6f4cc",
+  sobel: "#7dd3fc",
+  tc: "#86efac",
+  wavelet: "#fde68a",
+  ganG: "#f0b56f",
+  v5kd: "#d8b4fe",
+  psnr: "#d6f4cc",
   bicubic: "#4f6a64",
+  gold: "#c8a960",
 };
+
+const lossComponentDefs = [
+  { key: "loss_charbonnier", label: "loss_charbonnier", color: colors.charbonnier, aliases: ["l1", "t_l1"] },
+  { key: "loss_lpips", label: "loss_lpips", color: colors.lpips, aliases: ["lpips", "t_lpips"] },
+  { key: "loss_msvgg", label: "loss_msvgg", color: colors.msvgg, aliases: [] },
+  { key: "loss_sobel", label: "loss_sobel", color: colors.sobel, aliases: [] },
+  { key: "loss_tc", label: "loss_tc", color: colors.tc, aliases: [] },
+  { key: "loss_wavelet", label: "loss_wavelet", color: colors.wavelet, aliases: [] },
+  { key: "loss_gan_g", label: "loss_gan_g", color: colors.ganG, aliases: [] },
+  { key: "loss_v5_kd", label: "loss_v5_kd", color: colors.v5kd, aliases: [] },
+];
 
 const POLL_MS = 30000;
 const STAMP_MS = 5000;
@@ -301,7 +476,11 @@ let stampTimer = null;
 let lightboxItems = [];
 let lightboxIndex = 0;
 let magnifierEnabled = true;
+let magnifierZoom = 2;
 let magnifierPointerFine = window.matchMedia("(pointer: fine)").matches;
+let currentVizColumns = [];
+let selectedCompareA = "";
+let selectedCompareB = "";
 const gesturePointers = new Map();
 let imageTransform = { scale: 1, x: 0, y: 0 };
 let gestureStart = null;
@@ -314,7 +493,9 @@ let trainingPulseState = {
   live: false,
   newStep: null,
   pointFlashRunName: null,
+  stagnantPolls: 0,
 };
+let stagnantActivePolls = 0;
 
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (char) => ({
@@ -362,6 +543,47 @@ function xy(rows, key, ...aliases) {
   }).filter(Boolean);
 }
 
+function valueFromRow(row, key, aliases = []) {
+  let value = row?.[key];
+  for (const alias of aliases) {
+    if (value !== undefined && value !== null) break;
+    value = row?.[alias];
+  }
+  return value;
+}
+
+function xyPositive(rows, key, aliases = []) {
+  return (rows || []).map((row) => {
+    const value = Number(valueFromRow(row, key, aliases));
+    return {
+      x: Number(row.step || 0),
+      y: Number.isFinite(value) && value > 0 ? value : null,
+    };
+  });
+}
+
+function hasMetricKey(rows, key, aliases = []) {
+  return (rows || []).some((row) => valueFromRow(row, key, aliases) !== undefined && valueFromRow(row, key, aliases) !== null);
+}
+
+function directionForKey(key) {
+  if (!key) return "";
+  if (key === "step") return "↑ training progress";
+  if (/psnr|beats_bicubic|percent_beats|pct_beats|% beats/.test(key)) return "↑ higher is better";
+  if (/lpips|loss/.test(key)) return "↓ lower is better";
+  if (/temporal|stability|ratio/.test(key)) return "↓ lower is better (smaller frame-to-frame delta)";
+  if (/variance|std|stddev|spread/.test(key)) return "↓ smaller spread is better";
+  if (/latency|_ms\b|ms$/.test(key)) return "↓ lower is better";
+  return "";
+}
+
+function directionHtml(textOrKey) {
+  const text = directionForKey(String(textOrKey || "").toLowerCase());
+  if (!text) return "";
+  const direction = text.startsWith("↑") ? "higher" : text.startsWith("↓") ? "lower" : "neutral";
+  return `<div class="metric-direction" data-direction="${direction}">${escapeHtml(text)}</div>`;
+}
+
 function latestMetricRows(run, limit = 3) {
   return (run.loss_curve || []).slice(-limit).reverse();
 }
@@ -377,8 +599,13 @@ function updateTrainingPulseState(data, preserve = false) {
   const ageSeconds = Number.isFinite(generatedTs) ? (Date.now() - generatedTs) / 1000 : Infinity;
   const step = Number(active?.latest_step || 0);
   const advanced = lastActiveStep !== null && step > lastActiveStep;
-  const fresh = ageSeconds < 60;
-  const live = Boolean(active && fresh && advanced);
+  if (lastActiveStep !== null && step <= lastActiveStep) {
+    stagnantActivePolls += 1;
+  } else {
+    stagnantActivePolls = 0;
+  }
+  const fresh = ageSeconds <= 120;
+  const live = Boolean(active && fresh && (advanced || (lastActiveStep !== null && stagnantActivePolls < 2)));
   trainingPulseState = {
     activeRunName: active?.name || null,
     advanced,
@@ -386,6 +613,7 @@ function updateTrainingPulseState(data, preserve = false) {
     live,
     newStep: advanced ? step : null,
     pointFlashRunName: live ? active.name : null,
+    stagnantPolls: stagnantActivePolls,
   };
   lastActiveStep = step;
   if (live) {
@@ -402,8 +630,7 @@ function trainingIndicatorHtml(run) {
   if (!run?.active) return "";
   const live = trainingPulseState.activeRunName === run.name && trainingPulseState.live;
   return `<span class="live-indicator ${live ? "live" : "idle"}" aria-label="${live ? "live training" : "idle training"}">
-    <span class="indicator-dot">${live ? "●" : "○"}</span>
-    <span>${live ? "live" : "idle"}</span>
+    ${live ? `<span class="loader inline-loader" aria-hidden="true"></span><span>live</span><span class="terminal-cursor" aria-hidden="true">▋</span>` : `<span class="indicator-dot">○</span><span>idle</span>`}
   </span>`;
 }
 
@@ -443,13 +670,19 @@ function headlineValue(run, item) {
 
 function metricKeyForHeadline(item) {
   const from = String(item.value_from || "").toLowerCase();
-  const label = String(item.label || "").toLowerCase();
-  if (from === "latest_step" || /step/.test(label)) return "step";
-  if (from === "loss_total" || /loss/.test(label)) return "loss_total";
-  if (/lpips/.test(label)) return "lpips";
-  if (/psnr/.test(label)) return "psnr";
-  if (/temporal/.test(label)) return "temporal_ratio";
+  const text = `${item.label || ""} ${item.value || ""} ${item.caption || ""}`.toLowerCase();
+  if (from === "latest_step" || /step/.test(text)) return "step";
+  if (from === "loss_total" || /loss/.test(text)) return "loss_total";
+  if (/lpips/.test(text)) return "lpips";
+  if (/psnr|db/.test(text)) return "psnr";
+  if (/temporal/.test(text)) return "temporal_ratio";
+  if (/beats.*bicubic|%/.test(text)) return "beats_bicubic";
+  if (/latency|ms|trt/.test(text)) return "latency_ms";
   return null;
+}
+
+function directionForHeadline(item) {
+  return directionHtml(metricKeyForHeadline(item));
 }
 
 function valueForMetricRow(row, key) {
@@ -457,7 +690,7 @@ function valueForMetricRow(row, key) {
   if (key === "step") return row.step;
   if (key === "loss_total") return row.loss_total ?? row.loss;
   if (key === "lpips") return row.loss_lpips ?? row.lpips ?? row.t_lpips;
-  if (key === "psnr") return row.psnr ?? row.t_psnr;
+  if (key === "psnr") return row.psnr_db ?? row.psnr ?? row.t_psnr;
   if (key === "temporal_ratio") return row.temporal_ratio ?? row.ratio;
   return row[key];
 }
@@ -499,7 +732,7 @@ function setTheme(light) {
   document.getElementById("theme-toggle").textContent = light ? "Dark mode" : "Light mode";
 }
 
-function chartOptions({ yTitle = "loss", componentAxis = false } = {}) {
+function chartOptions({ yTitle = "loss", componentAxis = false, logY = false, indexTooltip = false } = {}) {
   const scales = {
     x: {
       type: "linear",
@@ -508,6 +741,7 @@ function chartOptions({ yTitle = "loss", componentAxis = false } = {}) {
       ticks: { color: "#a1a1aa", maxTicksLimit: 6 },
     },
     y: {
+      type: logY ? "logarithmic" : "linear",
       title: { display: true, text: yTitle, color: "#a1a1aa" },
       grid: { color: "rgba(113,113,122,0.22)" },
       ticks: { color: "#a1a1aa", maxTicksLimit: 6 },
@@ -527,7 +761,7 @@ function chartOptions({ yTitle = "loss", componentAxis = false } = {}) {
     maintainAspectRatio: false,
     animation: false,
     parsing: false,
-    interaction: { mode: "nearest", intersect: false },
+    interaction: { mode: indexTooltip ? "index" : "nearest", intersect: false },
     scales,
     plugins: { legend: { labels: { color: "#d4d4d8", boxWidth: 12 } } },
   };
@@ -536,8 +770,7 @@ function chartOptions({ yTitle = "loss", componentAxis = false } = {}) {
 function chartTooltipLines(row, run) {
   const lines = [
     `loss_total: ${fmtNumber(row.loss_total ?? row.loss, 5)}`,
-    `loss_charbonnier: ${fmtNumber(row.loss_charbonnier ?? row.l1 ?? row.t_l1, 5)}`,
-    `loss_lpips: ${fmtNumber(row.loss_lpips ?? row.lpips ?? row.t_lpips, 5)}`,
+    ...lossComponentDefs.map((def) => `${def.label}: ${fmtNumber(valueFromRow(row, def.key, def.aliases), 5)}`),
   ];
   if (row.gpu_status) {
     lines.push(`gpu_status: ${row.gpu_status}`);
@@ -584,6 +817,99 @@ function renderLossChart(canvas, run) {
       },
     },
   };
+  return new Chart(canvas, { type: "line", data: { datasets }, options });
+}
+
+function renderLossDecompositionChart(canvas, run) {
+  const rows = run.loss_curve || [];
+  const datasets = lossComponentDefs.filter((def) => hasMetricKey(rows, def.key, def.aliases)).map((def) => ({
+    label: def.label,
+    data: xyPositive(rows, def.key, def.aliases),
+    borderColor: def.color,
+    backgroundColor: def.color,
+    pointRadius: 0,
+    pointHoverRadius: 4,
+    borderWidth: 1.8,
+    spanGaps: true,
+    tension: 0,
+  }));
+  if (!datasets.length) return null;
+  const options = chartOptions({ yTitle: "loss component value (log scale)", logY: true, indexTooltip: true });
+  options.plugins.tooltip = {
+    callbacks: {
+      title(items) {
+        const row = rows[items[0]?.dataIndex] || {};
+        return `step ${Number(row.step || items[0]?.parsed?.x || 0).toLocaleString()}`;
+      },
+      label() {
+        return "";
+      },
+      afterBody(items) {
+        const row = rows[items[0]?.dataIndex] || {};
+        return lossComponentDefs.map((def) => `${def.label}: ${fmtNumber(valueFromRow(row, def.key, def.aliases), 5)}`);
+      },
+    },
+  };
+  return new Chart(canvas, { type: "line", data: { datasets }, options });
+}
+
+function referenceLine(rows, value) {
+  const steps = (rows || []).map((row) => Number(row.step)).filter(Number.isFinite);
+  if (!steps.length || !Number.isFinite(Number(value))) return [];
+  return [
+    { x: Math.min(...steps), y: Number(value) },
+    { x: Math.max(...steps), y: Number(value) },
+  ];
+}
+
+function renderTrainingPsnrChart(canvas, run) {
+  const rows = run.loss_curve || [];
+  const series = xy(rows, "psnr_db", "psnr", "t_psnr");
+  if (!series.length) return null;
+  const ref = referenceLine(rows, 25.703);
+  const datasets = [
+    { label: `${run.history?.title || run.label || "run"} psnr_db`, data: series, borderColor: colors.psnr, backgroundColor: colors.psnr, pointRadius: 0, pointHoverRadius: 4, borderWidth: 2, tension: 0 },
+    { label: "v5 held-out PSNR ref 25.703 dB", data: ref, borderColor: colors.gold, backgroundColor: colors.gold, pointRadius: 0, borderWidth: 1.5, borderDash: [5, 4], tension: 0 },
+  ].filter((dataset) => dataset.data.length);
+  return new Chart(canvas, { type: "line", data: { datasets }, options: chartOptions({ yTitle: "training-crop PSNR dB" }) });
+}
+
+function renderTrainingLpipsChart(canvas, run) {
+  const rows = run.loss_curve || [];
+  const series = xy(rows, "loss_lpips", "lpips", "t_lpips");
+  if (!series.length) return null;
+  const ref = referenceLine(rows, 0.1666);
+  const options = chartOptions({ yTitle: "training-crop LPIPS" });
+  options.scales.y.min = 0;
+  options.scales.y.max = 1;
+  const datasets = [
+    { label: `${run.history?.title || run.label || "run"} LPIPS`, data: series, borderColor: colors.lpips, backgroundColor: colors.lpips, pointRadius: 0, pointHoverRadius: 4, borderWidth: 2, tension: 0 },
+    { label: "v5 held-out LPIPS ref 0.1666", data: ref, borderColor: colors.gold, backgroundColor: colors.gold, pointRadius: 0, borderWidth: 1.5, borderDash: [5, 4], tension: 0 },
+  ].filter((dataset) => dataset.data.length);
+  return new Chart(canvas, { type: "line", data: { datasets }, options });
+}
+
+function renderHeldoutChart(canvas, run) {
+  const rows = run.score_log || [];
+  const modelPsnr = xy(rows, "model_psnr_mean");
+  const bicubicPsnr = xy(rows, "bicubic_psnr_mean");
+  const modelLpips = xy(rows, "model_lpips_mean");
+  if (!modelPsnr.length && !bicubicPsnr.length && !modelLpips.length) return null;
+  const options = chartOptions({ yTitle: "held-out PSNR dB", indexTooltip: true });
+  options.scales.y1 = {
+    type: "linear",
+    position: "right",
+    min: 0,
+    max: 1,
+    grid: { drawOnChartArea: false },
+    ticks: { color: "#a1a1aa", maxTicksLimit: 6 },
+    title: { display: true, text: "held-out LPIPS", color: "#a1a1aa" },
+  };
+  const datasets = [
+    { label: "model PSNR", yAxisID: "y", data: modelPsnr, borderColor: colors.psnr, backgroundColor: colors.psnr, pointRadius: 3, borderWidth: 2, tension: 0 },
+    { label: "bicubic PSNR", yAxisID: "y", data: bicubicPsnr, borderColor: colors.bicubic, backgroundColor: colors.bicubic, pointRadius: 3, borderWidth: 1.7, borderDash: [5, 4], tension: 0 },
+    { label: "model LPIPS", yAxisID: "y1", data: modelLpips, borderColor: colors.lpips, backgroundColor: colors.lpips, pointRadius: 3, borderWidth: 2, tension: 0 },
+  ].filter((dataset) => dataset.data.length);
   return new Chart(canvas, { type: "line", data: { datasets }, options });
 }
 
@@ -656,6 +982,13 @@ function showLightboxItem(index) {
   const item = lightboxItems[lightboxIndex];
   const image = document.getElementById("lightbox-image");
   resetImageTransform();
+  currentVizColumns = item.vizColumns || [];
+  selectedCompareA = bestDefaultColumn(currentVizColumns, ["v6.1", "v6", "v5-pixel-temporal", "bicubic"]);
+  selectedCompareB = bestDefaultColumn(currentVizColumns, ["v5-pixel-temporal", "v4-baseline", "bicubic", "GT"]);
+  if (selectedCompareA === selectedCompareB) {
+    selectedCompareB = currentVizColumns.find((column) => column !== selectedCompareA) || selectedCompareB;
+  }
+  populateCompareSelectors();
   image.src = item.src;
   image.alt = `${item.runLabel} ${item.file}`;
   document.getElementById("lightbox-caption").textContent = lightboxCaption(item);
@@ -668,6 +1001,7 @@ function openLightbox(run, files, selectedFile) {
     file,
     src: runUrl(run, file),
     runLabel: run.label || run.name,
+    vizColumns: run.viz_columns || [],
   }));
   showLightboxItem(Math.max(0, files.indexOf(selectedFile)));
   if (!dialog.open) {
@@ -683,16 +1017,45 @@ function closeLightbox() {
 
 function updateMagnifierToggle() {
   const button = document.getElementById("lightbox-magnifier-toggle");
+  const controls = document.getElementById("multi-compare-controls");
+  const zoom = document.getElementById("magnifier-zoom");
   magnifierPointerFine = window.matchMedia("(pointer: fine)").matches;
   button.disabled = !magnifierPointerFine;
   button.setAttribute("aria-pressed", magnifierEnabled && magnifierPointerFine ? "true" : "false");
+  button.textContent = magnifierEnabled && magnifierPointerFine ? "🔍 Multi-Magnify on" : "🔍 Multi-Magnify off";
+  if (controls) controls.hidden = !magnifierPointerFine;
+  if (zoom) zoom.hidden = !magnifierPointerFine;
 }
 
 function hideMagnifier() {
-  const magnifier = document.getElementById("lightbox-magnifier");
+  const magnifier = document.getElementById("multi-magnifier");
   const image = document.getElementById("lightbox-image");
   if (magnifier) magnifier.classList.remove("visible");
   if (image) image.classList.remove("magnifier-active");
+}
+
+function bestDefaultColumn(columns, preferred) {
+  return preferred.map((needle) => columns.find((column) => column.toLowerCase() === needle.toLowerCase())).find(Boolean)
+    || preferred.map((needle) => columns.find((column) => column.toLowerCase().includes(needle.toLowerCase()))).find(Boolean)
+    || columns[0]
+    || "";
+}
+
+function populateCompareSelectors() {
+  const selectA = document.getElementById("compare-column-a");
+  const selectB = document.getElementById("compare-column-b");
+  for (const select of [selectA, selectB]) {
+    if (!select) continue;
+    select.replaceChildren();
+    currentVizColumns.forEach((column) => {
+      const option = document.createElement("option");
+      option.value = column;
+      option.textContent = column;
+      select.appendChild(option);
+    });
+  }
+  if (selectA) selectA.value = selectedCompareA;
+  if (selectB) selectB.value = selectedCompareB;
 }
 
 function clamp(value, min, max) {
@@ -811,8 +1174,8 @@ function handleImagePointerUp(event) {
 function showMagnifier(event) {
   if (!magnifierEnabled || !magnifierPointerFine || event.pointerType !== "mouse") return;
   const image = document.getElementById("lightbox-image");
-  const magnifier = document.getElementById("lightbox-magnifier");
-  if (!image.complete || !image.naturalWidth || !image.naturalHeight) return;
+  const magnifier = document.getElementById("multi-magnifier");
+  if (!image.complete || !image.naturalWidth || !image.naturalHeight || currentVizColumns.length < 2) return;
   const imageRect = image.getBoundingClientRect();
   const stageRect = document.getElementById("lightbox-stage").getBoundingClientRect();
   const x = event.clientX - imageRect.left;
@@ -823,11 +1186,25 @@ function showMagnifier(event) {
   }
   const sourceX = (x / imageRect.width) * image.naturalWidth;
   const sourceY = (y / imageRect.height) * image.naturalHeight;
+  const colWidth = image.naturalWidth / currentVizColumns.length;
+  const sourceColumnIndex = clamp(Math.floor(sourceX / colWidth), 0, currentVizColumns.length - 1);
+  const withinColumnX = clamp(sourceX - sourceColumnIndex * colWidth, 0, colWidth);
+  const columnAIndex = Math.max(0, currentVizColumns.indexOf(selectedCompareA));
+  const columnBIndex = Math.max(0, currentVizColumns.indexOf(selectedCompareB));
   magnifier.style.left = `${event.clientX - stageRect.left}px`;
   magnifier.style.top = `${event.clientY - stageRect.top}px`;
-  magnifier.style.backgroundImage = `url("${image.currentSrc || image.src}")`;
-  magnifier.style.backgroundSize = `${image.naturalWidth * 4}px ${image.naturalHeight * 4}px`;
-  magnifier.style.backgroundPosition = `${100 - sourceX * 4}px ${100 - sourceY * 4}px`;
+  const imageUrl = `url("${image.currentSrc || image.src}")`;
+  [
+    { lens: document.getElementById("multi-lens-a"), label: document.getElementById("multi-label-a"), index: columnAIndex, name: selectedCompareA },
+    { lens: document.getElementById("multi-lens-b"), label: document.getElementById("multi-label-b"), index: columnBIndex, name: selectedCompareB },
+  ].forEach(({ lens, label, index, name }) => {
+    const lensSize = 140;
+    const compareSourceX = index * colWidth + withinColumnX;
+    lens.style.backgroundImage = imageUrl;
+    lens.style.backgroundSize = `${image.naturalWidth * magnifierZoom}px ${image.naturalHeight * magnifierZoom}px`;
+    lens.style.backgroundPosition = `${(lensSize / 2) - compareSourceX * magnifierZoom}px ${(lensSize / 2) - sourceY * magnifierZoom}px`;
+    label.textContent = name;
+  });
   magnifier.classList.add("visible");
   image.classList.add("magnifier-active");
 }
@@ -837,10 +1214,25 @@ function initLightbox() {
   const stage = document.getElementById("lightbox-stage");
   const image = document.getElementById("lightbox-image");
   const magnifierToggle = document.getElementById("lightbox-magnifier-toggle");
+  const selectA = document.getElementById("compare-column-a");
+  const selectB = document.getElementById("compare-column-b");
+  const zoomSelect = document.getElementById("magnifier-zoom");
   document.getElementById("lightbox-close").addEventListener("click", closeLightbox);
   magnifierToggle.addEventListener("click", () => {
     magnifierEnabled = !magnifierEnabled;
     updateMagnifierToggle();
+    hideMagnifier();
+  });
+  selectA.addEventListener("change", () => {
+    selectedCompareA = selectA.value;
+    hideMagnifier();
+  });
+  selectB.addEventListener("change", () => {
+    selectedCompareB = selectB.value;
+    hideMagnifier();
+  });
+  zoomSelect.addEventListener("change", () => {
+    magnifierZoom = Number(zoomSelect.value || 2);
     hideMagnifier();
   });
   image.addEventListener("pointerenter", showMagnifier);
@@ -902,13 +1294,31 @@ function gpuPanelHtml(run) {
   </div>`;
 }
 
+function trainingProgressHtml(run) {
+  if (!run?.active) return "";
+  const current = Number(run.latest_step || 0);
+  const target = Number(run.max_target_steps || 100000);
+  const pct = target > 0 ? Math.max(0, Math.min(100, (current / target) * 100)) : 0;
+  return `<div class="rounded-md border border-zinc-800 bg-zinc-950/35 p-4" data-muted-surface>
+    <div class="flex items-center justify-between gap-3 text-xs uppercase text-zinc-500" data-dim>
+      <span>training progress</span>
+      <span class="font-mono">${fmtNumber(pct, 1)}%</span>
+    </div>
+    <div class="training-progress-track mt-3">
+      <div class="training-progress-fill" style="width: ${pct}%"></div>
+    </div>
+    <div class="mt-2 font-mono text-sm text-zinc-300" data-subtext>step ${current.toLocaleString()} / ${target.toLocaleString()}</div>
+    <div class="metric-direction" data-direction="neutral">step is within-run; cross-run step comparisons are not apples-to-apples.</div>
+  </div>`;
+}
+
 function renderHero(data) {
   const active = activeRunFrom(data);
   if (!active) return;
   document.getElementById("hero-active-status").textContent = active.active ? `${active.history?.title || active.label || active.name} is training right now` : (active.history?.status || "active run");
   document.getElementById("hero-active-title").innerHTML = `${escapeHtml(active.label || active.name)} ${trainingIndicatorHtml(active)}`;
   const latest = active.latest_metrics || {};
-  document.getElementById("hero-active-meta").textContent = `step ${Number(active.latest_step || 0).toLocaleString()} / loss ${fmtNumber(latest.loss_total ?? latest.loss, 5)}`;
+  document.getElementById("hero-active-meta").innerHTML = `step ${Number(active.latest_step || 0).toLocaleString()} / loss ${fmtNumber(latest.loss_total ?? latest.loss, 5)} ${directionHtml("loss_total")}`;
   document.getElementById("hero-gpu").innerHTML = gpuPanelHtml(active).replace("rounded-md border ", "");
 }
 
@@ -921,19 +1331,37 @@ function renderRun(run, index, openByRun = new Map()) {
     <button class="metric-card rounded border border-zinc-800 bg-zinc-950/35 px-3 py-3 text-left" type="button" data-metric-card data-muted-surface>
       <div class="text-xs uppercase text-zinc-500" data-dim>${escapeHtml(item.label)}</div>
       <div class="mt-1 font-mono text-lg font-semibold text-zinc-100" data-text>${escapeHtml(headlineValue(run, item))}</div>
+      ${directionForHeadline(item)}
       <div class="mt-1 text-xs text-zinc-500" data-dim>${escapeHtml(item.caption || "")}</div>
       ${sparklineSvg(run, item)}
     </button>`).join("");
   const note = history.note ? `<p class="rounded border border-amber-900/60 bg-amber-950/20 px-4 py-3 text-sm text-amber-100">${escapeHtml(history.note)}</p>` : "";
   const gpu = run.active ? gpuPanelHtml(run) : "";
+  const progress = trainingProgressHtml(run);
   const ticker = trainingTickerHtml(run);
   const chartId = `loss-chart-${index}`;
+  const decompChartId = `loss-decomp-chart-${index}`;
+  const psnrChartId = `psnr-chart-${index}`;
+  const lpipsChartId = `lpips-chart-${index}`;
+  const heldoutChartId = `heldout-chart-${index}`;
   const scoreId = `score-table-${index}`;
   const vizId = `viz-strip-${index}`;
   const rows = run.loss_curve || [];
   const chartBody = rows.length
     ? `<div class="chart-wrap mt-3"><canvas id="${chartId}"></canvas></div>`
     : `<p class="mt-3 rounded border border-zinc-800 bg-zinc-950/40 px-4 py-5 text-sm text-zinc-400" data-muted-surface data-subtext>No loss metrics published yet.</p>`;
+  const decompChartBody = rows.length
+    ? `<div class="chart-wrap mt-3"><canvas id="${decompChartId}"></canvas></div>`
+    : `<p class="mt-3 rounded border border-zinc-800 bg-zinc-950/40 px-4 py-5 text-sm text-zinc-400" data-muted-surface data-subtext>No loss component metrics published yet.</p>`;
+  const psnrChartBody = hasMetricKey(rows, "psnr_db", ["psnr", "t_psnr"])
+    ? `<div class="chart-wrap mt-3"><canvas id="${psnrChartId}"></canvas></div>`
+    : `<p class="mt-3 rounded border border-zinc-800 bg-zinc-950/40 px-4 py-5 text-sm text-zinc-400" data-muted-surface data-subtext>No training-crop PSNR rows published for this run.</p>`;
+  const lpipsChartBody = hasMetricKey(rows, "loss_lpips", ["lpips", "t_lpips"])
+    ? `<div class="chart-wrap mt-3"><canvas id="${lpipsChartId}"></canvas></div>`
+    : `<p class="mt-3 rounded border border-zinc-800 bg-zinc-950/40 px-4 py-5 text-sm text-zinc-400" data-muted-surface data-subtext>No training-crop LPIPS rows published for this run.</p>`;
+  const heldoutChartBody = (run.score_log || []).length
+    ? `<div class="chart-wrap mt-3"><canvas id="${heldoutChartId}"></canvas></div>`
+    : `<p class="mt-3 rounded border border-zinc-800 bg-zinc-950/40 px-4 py-5 text-sm text-zinc-400" data-muted-surface data-subtext>No held-out score_log.json rows published for this run.</p>`;
   return `<details ${open} class="rounded-md border ${activeClass}" data-run-name="${escapeHtml(run.name)}" data-surface>
     <summary class="flex cursor-pointer items-start gap-3 p-4">
       <span class="summary-chevron mt-1 text-zinc-500 transition-transform">›</span>
@@ -955,6 +1383,7 @@ function renderRun(run, index, openByRun = new Map()) {
       <div class="flex min-w-0 flex-col gap-4">
         <div class="grid min-w-0 gap-3 sm:grid-cols-3">${headline}</div>
         ${ticker}
+        ${progress}
         ${gpu}
         ${note}
         <article class="min-w-0 rounded-md border border-zinc-800 bg-zinc-950/25 p-4" data-muted-surface>
@@ -962,12 +1391,39 @@ function renderRun(run, index, openByRun = new Map()) {
             <h3 class="text-base font-semibold text-zinc-50" data-text>Loss curve</h3>
             <span class="text-sm text-zinc-500" data-dim>${rows.length} points</span>
           </div>
+          ${directionHtml("loss_total")}
           ${chartBody}
+        </article>
+        <article class="min-w-0 rounded-md border border-zinc-800 bg-zinc-950/25 p-4" data-muted-surface>
+          <div class="flex items-center justify-between gap-3">
+            <h3 class="text-base font-semibold text-zinc-50" data-text>Live PSNR</h3>
+            <span class="text-sm text-zinc-500" data-dim>training crops</span>
+          </div>
+          <div class="metric-direction" data-direction="higher">↑ higher is better. Training-crop PSNR is biased ~3-5 dB high vs held-out; x-axis is step within run.</div>
+          ${psnrChartBody}
+        </article>
+        <article class="min-w-0 rounded-md border border-zinc-800 bg-zinc-950/25 p-4" data-muted-surface>
+          <div class="flex items-center justify-between gap-3">
+            <h3 class="text-base font-semibold text-zinc-50" data-text>Live LPIPS</h3>
+            <span class="text-sm text-zinc-500" data-dim>training crops</span>
+          </div>
+          <div class="metric-direction" data-direction="lower">↓ lower is better. Training-crop LPIPS is biased versus held-out; x-axis is step within run.</div>
+          ${lpipsChartBody}
+        </article>
+        <article class="min-w-0 rounded-md border border-zinc-800 bg-zinc-950/25 p-4" data-muted-surface>
+          <div class="flex items-center justify-between gap-3">
+            <h3 class="text-base font-semibold text-zinc-50" data-text>Loss decomposition</h3>
+            <span class="text-sm text-zinc-500" data-dim>${rows.length} points</span>
+          </div>
+          <div class="metric-direction" data-direction="lower">↓ lower is better for every series.</div>
+          ${decompChartBody}
         </article>
       </div>
       <div class="flex min-w-0 flex-col gap-4">
         <article class="min-w-0 rounded-md border border-zinc-800 bg-zinc-950/25 p-4" data-muted-surface>
           <h3 class="text-base font-semibold text-zinc-50" data-text>Held-out scores</h3>
+          <div class="metric-direction" data-direction="mixed">PSNR ↑ higher is better / LPIPS ↓ lower is better / temporal ratio ↓ lower is better</div>
+          ${heldoutChartBody}
           <div id="${scoreId}" class="mt-3"></div>
         </article>
         <article class="min-w-0 rounded-md border border-zinc-800 bg-zinc-950/25 p-4" data-muted-surface>
@@ -995,6 +1451,26 @@ function renderRuns(data) {
     const canvas = document.getElementById(`loss-chart-${index}`);
     if (canvas) {
       const chart = renderLossChart(canvas, run);
+      if (chart) charts.push(chart);
+    }
+    const decompCanvas = document.getElementById(`loss-decomp-chart-${index}`);
+    if (decompCanvas) {
+      const chart = renderLossDecompositionChart(decompCanvas, run);
+      if (chart) charts.push(chart);
+    }
+    const psnrCanvas = document.getElementById(`psnr-chart-${index}`);
+    if (psnrCanvas) {
+      const chart = renderTrainingPsnrChart(psnrCanvas, run);
+      if (chart) charts.push(chart);
+    }
+    const lpipsCanvas = document.getElementById(`lpips-chart-${index}`);
+    if (lpipsCanvas) {
+      const chart = renderTrainingLpipsChart(lpipsCanvas, run);
+      if (chart) charts.push(chart);
+    }
+    const heldoutCanvas = document.getElementById(`heldout-chart-${index}`);
+    if (heldoutCanvas) {
+      const chart = renderHeldoutChart(heldoutCanvas, run);
       if (chart) charts.push(chart);
     }
     renderScoreTable(document.getElementById(`score-table-${index}`), run);
@@ -1061,11 +1537,13 @@ function setLoadedState() {
   const state = document.getElementById("data-state");
   const connectionLine = document.getElementById("connection-line");
   const errorBox = document.getElementById("load-error");
+  const initialLoader = document.getElementById("initial-loader");
   state.textContent = "live";
   state.classList.remove("border-zinc-700", "border-red-700", "text-red-300", "border-amber-700", "text-amber-200");
   state.classList.add("border-emerald-700", "text-emerald-300");
   connectionLine.classList.add("hidden");
   errorBox.classList.add("hidden");
+  initialLoader?.classList.add("hidden");
 }
 
 function setRetryingState(error, hasLastKnownData) {
@@ -1076,6 +1554,7 @@ function setRetryingState(error, hasLastKnownData) {
   state.textContent = hasLastKnownData ? "retrying" : "data load failed";
   connectionLine.classList.remove("hidden");
   if (!hasLastKnownData) {
+    document.getElementById("initial-loader")?.classList.add("hidden");
     const errorBox = document.getElementById("load-error");
     errorBox.classList.remove("hidden");
     errorBox.textContent = `Could not load data.json: ${error.message}`;

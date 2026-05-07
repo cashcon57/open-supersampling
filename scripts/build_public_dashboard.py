@@ -90,6 +90,12 @@ DENY_RE = re.compile(
 )
 VIZ_RE = re.compile(r"step-(\d+)\.png$")
 V6_RUN_RE = re.compile(r"srcnn-v(6(?:\.\d+)?)-", re.IGNORECASE)
+RUN_MAX_STEPS = {
+    "srcnn-v6.1-pico-001": 300_000,
+    "srcnn-v6-pico-001": 300_000,
+    "srcnn-v5-pixel-temporal-validated": 80_000,
+    "srcnn-prod-v4-lpips": 420_000,
+}
 
 
 def utc_now_iso() -> str:
@@ -196,6 +202,45 @@ def list_viz_pngs(run_dir: Path) -> list[str]:
     return sorted((path.name for path in viz_dir.glob("step-*.png")), key=viz_step)
 
 
+def viz_columns_for_run(name: str) -> list[str]:
+    """Return the comparison-strip column order used by sr_temporal_inflight_viz."""
+
+    revision = v6_revision_from_run_name(name)
+    if revision:
+        return [
+            "LR-bilinear",
+            "bicubic",
+            "v5-pixel-temporal",
+            revision,
+            "GT",
+            "|err v5|",
+            f"|err {revision}|",
+        ]
+    if name == "srcnn-v5-pixel-temporal-validated":
+        return ["LR-bilinear", "bicubic", "v4-baseline", "v5-pixel-temporal", "GT", "|err|"]
+    if name.startswith("srcnn-prod-v4") or name.startswith("srcnn-v4"):
+        return ["LR-bilinear", "bicubic", "v4", "GT", "|err|"]
+    return []
+
+
+def max_steps_for_run(name: str, metrics: list[dict[str, Any]], previous: dict[str, Any] | None) -> int:
+    for row in reversed(metrics):
+        for key in ("max_steps", "max_step", "target_steps"):
+            try:
+                value = int(row.get(key, 0))
+            except (TypeError, ValueError):
+                value = 0
+            if value > 0:
+                return value
+    previous_target = previous.get("max_target_steps") if previous else None
+    try:
+        if int(previous_target) > 0:
+            return int(previous_target)
+    except (TypeError, ValueError):
+        pass
+    return RUN_MAX_STEPS.get(name, 100_000)
+
+
 def read_gpu_status(run_dir: Path) -> dict[str, Any] | None:
     path = run_dir / "gpu_status.json"
     if not path.is_file():
@@ -256,6 +301,8 @@ def build_run(name: str, previous: dict[str, Any] | None) -> dict[str, Any] | No
         cached["active"] = config["active"]
         cached["history"] = history_for_run(name, config)
         cached["gpu_status"] = read_gpu_status(run_dir) or cached.get("gpu_status")
+        cached["viz_columns"] = viz_columns_for_run(name) or cached.get("viz_columns", [])
+        cached["max_target_steps"] = max_steps_for_run(name, [], cached)
         return cached
 
     if not metrics and not scores and not viz_pngs:
@@ -269,12 +316,15 @@ def build_run(name: str, previous: dict[str, Any] | None) -> dict[str, Any] | No
             "loss_curve": [],
             "score_log": [],
             "viz_pngs": [],
+            "viz_columns": viz_columns_for_run(name),
+            "max_target_steps": max_steps_for_run(name, [], previous),
             "gpu_status": read_gpu_status(run_dir),
         }
 
     metrics = sorted(metrics, key=step_value)
     latest = slim_row(metrics[-1]) if metrics else {}
     latest_step = step_value(metrics[-1]) if metrics else 0
+    viz_columns = viz_columns_for_run(name)
 
     return {
         "name": name,
@@ -286,6 +336,8 @@ def build_run(name: str, previous: dict[str, Any] | None) -> dict[str, Any] | No
         "loss_curve": [slim_row(row) for row in metrics[-1000:]],
         "score_log": [slim_row(row) for row in scores],
         "viz_pngs": viz_pngs,
+        "viz_columns": viz_columns,
+        "max_target_steps": max_steps_for_run(name, metrics, previous),
         "gpu_status": read_gpu_status(run_dir),
     }
 
@@ -330,6 +382,8 @@ def write_data(data: dict[str, Any]) -> None:
 
 
 def write_index(pitch: str) -> None:
+    if INDEX_HTML.exists() and "__PITCH_HTML__" not in INDEX_HTML.read_text(encoding="utf-8", errors="replace"):
+        return
     pitch_html = html.escape(pitch)
     index = HTML_TEMPLATE.replace("__PITCH_HTML__", pitch_html)
     INDEX_HTML.write_text(index, encoding="utf-8")
