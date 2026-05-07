@@ -31,7 +31,9 @@
       border: 0;
       background: transparent;
       color: inherit;
+      overscroll-behavior: contain;
     }
+    body.lightbox-open { overflow: hidden; }
     .lightbox::backdrop { background: rgba(0, 0, 0, 0.85); }
     .lightbox-shell {
       display: grid;
@@ -478,7 +480,10 @@ function openLightbox(run, files, selectedFile) {
     runLabel: run.label || run.name,
   }));
   showLightboxItem(Math.max(0, files.indexOf(selectedFile)));
-  if (!dialog.open) dialog.showModal();
+  if (!dialog.open) {
+    dialog.showModal();
+    document.body.classList.add("lightbox-open");
+  }
 }
 
 function closeLightbox() {
@@ -490,6 +495,12 @@ function initLightbox() {
   const dialog = document.getElementById("viz-lightbox");
   const stage = document.getElementById("lightbox-stage");
   document.getElementById("lightbox-close").addEventListener("click", closeLightbox);
+  dialog.addEventListener("close", () => {
+    document.body.classList.remove("lightbox-open");
+  });
+  dialog.addEventListener("cancel", () => {
+    document.body.classList.remove("lightbox-open");
+  });
   dialog.addEventListener("click", (event) => {
     if (event.target === dialog || event.target === stage) closeLightbox();
   });
