@@ -39,6 +39,7 @@ results/
 
 # Logs and runs
 runs/
+dashboard-public/runs/
 wandb/
 lightning_logs/
 *.log

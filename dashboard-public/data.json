@@ -1,0 +1,35 @@
+{
+  "generated_at": "2026-05-07T17:38:30Z",
+  "runs": [
+    {
+      "active": true,
+      "label": "v6.1 Pico (active)",
+      "latest_metrics": {},
+      "latest_step": 0,
+      "loss_curve": [],
+      "name": "srcnn-v6.1-pico-001",
+      "score_log": [],
+      "viz_pngs": []
+    },
+    {
+      "active": false,
+      "label": "v5 Pixel Temporal (validated)",
+      "latest_metrics": {},
+      "latest_step": 0,
+      "loss_curve": [],
+      "name": "srcnn-v5-pixel-temporal-validated",
+      "score_log": [],
+      "viz_pngs": []
+    },
+    {
+      "active": false,
+      "label": "v6 Pico (historical)",
+      "latest_metrics": {},
+      "latest_step": 0,
+      "loss_curve": [],
+      "name": "srcnn-v6-pico-001",
+      "score_log": [],
+      "viz_pngs": []
+    }
+  ]
+}

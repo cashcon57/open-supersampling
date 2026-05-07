@@ -1,0 +1,148 @@
+name: Dashboard snapshot
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dashboard-snapshot
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+
+      - name: Restore cached dashboard from gh-pages
+        uses: actions/checkout@v4
+        continue-on-error: true
+        with:
+          ref: gh-pages
+          path: .dashboard-cache
+
+      - name: Copy cached dashboard data
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dashboard-public
+          if [[ -d .dashboard-cache/dashboard-public ]]; then
+            rsync -a .dashboard-cache/dashboard-public/ dashboard-public/
+          fi
+
+      - name: Check Tailscale secrets
+        id: ts_secrets
+        shell: bash
+        env:
+          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${TS_OAUTH_CLIENT_ID}" && -n "${TS_OAUTH_SECRET}" ]]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "Tailscale secrets are not configured; publishing cached dashboard data only."
+          fi
+
+      # Operator setup required:
+      # Repo Settings -> Secrets and variables -> Actions must define
+      # TS_OAUTH_CLIENT_ID and TS_OAUTH_SECRET before this step can join the tailnet.
+      - name: Install Tailscale
+        if: steps.ts_secrets.outputs.configured == 'true'
+        uses: tailscale/github-action@v3
+        continue-on-error: true
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+
+      - name: Fetch training snapshots
+        if: steps.ts_secrets.outputs.configured == 'true'
+        shell: bash
+        env:
+          DASHBOARD_REMOTE_HOST: 3080ti-windows
+          DASHBOARD_REMOTE_USER: ${{ vars.DASHBOARD_REMOTE_USER || 'runner' }}
+          DASHBOARD_REMOTE_PATH: ${{ vars.DASHBOARD_REMOTE_PATH || 'E:/checkpoints' }}
+          DASHBOARD_REMOTE_SHELL: ${{ vars.DASHBOARD_REMOTE_SHELL || 'ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null' }}
+          DASHBOARD_REMOTE_SSH: ${{ vars.DASHBOARD_REMOTE_SSH || 'ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null' }}
+        run: |
+          set +e
+          mkdir -p dashboard-public/runs
+
+          allow=(
+            "srcnn-v6.1-pico-001"
+            "srcnn-v5-pixel-temporal-validated"
+            "srcnn-v6-pico-001"
+          )
+          deny='aborted|smoke|sanity|test|leak|preflight|paramprobe|init-fix|diag'
+
+          for run in "${allow[@]}"; do
+            if [[ "$run" =~ $deny ]]; then
+              echo "skip denied run name: $run"
+              continue
+            fi
+
+            dest="dashboard-public/runs/$run"
+            mkdir -p "$dest"
+            remote="${DASHBOARD_REMOTE_USER}@${DASHBOARD_REMOTE_HOST}:${DASHBOARD_REMOTE_PATH}/${run}/"
+            echo "syncing $run from ${DASHBOARD_REMOTE_HOST}"
+
+            timeout 120s rsync -az --timeout=45 --prune-empty-dirs \
+              --include='metrics.json' \
+              --include='score_log.json' \
+              --include='viz/' \
+              --include='viz/step-*.png' \
+              --exclude='*' \
+              -e "${DASHBOARD_REMOTE_SHELL}" \
+              "$remote" "$dest/"
+            status=$?
+            if [[ $status -ne 0 ]]; then
+              echo "warning: rsync failed for $run with status $status; keeping cached files"
+            fi
+
+            if [[ "${DASHBOARD_REMOTE_PATH}" =~ ^[A-Za-z]: ]]; then
+              log_path="${DASHBOARD_REMOTE_PATH}/${run}/train.log"
+              tail_cmd="powershell -NoProfile -Command \"if (Test-Path -LiteralPath '$log_path') { Get-Content -Tail 100 -LiteralPath '$log_path' }\""
+            else
+              log_path="${DASHBOARD_REMOTE_PATH}/${run}/train.log"
+              tail_cmd="tail -n 100 '$log_path' 2>/dev/null || true"
+            fi
+
+            tmp_log="$dest/train.log.tmp"
+            timeout 45s ${DASHBOARD_REMOTE_SSH} "${DASHBOARD_REMOTE_USER}@${DASHBOARD_REMOTE_HOST}" "$tail_cmd" > "$tmp_log"
+            status=$?
+            if [[ $status -ne 0 ]]; then
+              echo "warning: train.log tail failed for $run with status $status"
+              rm -f "$tmp_log"
+            else
+              mv "$tmp_log" "$dest/train.log"
+            fi
+          done
+
+          exit 0
+
+      - name: Build static dashboard
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/build_public_dashboard.py
+
+      - name: Publish to gh-pages
+        if: always()
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: gh-pages
+          publish_dir: ./dashboard-public
+          destination_dir: dashboard-public
+          keep_files: true
+          commit_message: "dashboard snapshot: ${{ github.sha }}"
