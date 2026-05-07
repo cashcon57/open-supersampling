@@ -521,6 +521,7 @@
         <div class="flex flex-wrap gap-2">
           <label class="chart-toggle"><input id="comparison-show-all" type="checkbox"> Show all generations</label>
           <label class="chart-toggle"><input id="comparison-full-range" type="checkbox"> Full range</label>
+          <label class="chart-toggle"><input id="comparison-log-x" type="checkbox"> Log x-axis</label>
         </div>
       </div>
       <div id="comparison-density-note" class="mt-3 hidden text-xs text-amber-200">(many overlapping lines — use checkbox above to hide older gens)</div>
@@ -534,7 +535,7 @@
           <div class="chart-wrap comparison-chart-wrap"><canvas id="cross-version-lpips-chart"></canvas></div>
         </div>
       </div>
-      <p class="mt-3 text-xs leading-5 text-zinc-500" data-dim>Reference lines are from competitor-published or third-party-benchmarked values on heterogeneous content (Cyberpunk 2077, Death Stranding, Hitman 3, etc.) — not direct head-to-head on the TartanAir oldtown batch OSS uses. They establish ROM order-of-magnitude context, not apples-to-apples comparison. OSS aims to publish head-to-head numbers on game-engine footage as the v6 cross-game-engine eval matures. <strong class="text-zinc-300">v4 has TWO data points</strong> <button class="info-btn" data-info-key="v4-two-points" type="button" aria-label="Why does v4 have two data points?">(i)</button> because it was evaluated on different content than v5/v6.1. The 33.67 dB number is v4 on SRGD (its training distribution), where it looks fine. The 11.718 dB number is the SAME v4 model evaluated on the TartanAir oldtown batch v5+v6.1 use — the "rainbow mess" failure mode that motivated the v5+v6 architectural redesign. v6 is built to NOT distribution-shift like this; v6.1 cross-game-engine eval (UE5 / Unity / Source 2) is the ongoing test of whether that architectural design actually generalizes.</p>
+      <p class="mt-3 text-xs leading-5 text-zinc-500" data-dim>Reference lines are from competitor-published or third-party-benchmarked values on heterogeneous content (Cyberpunk 2077, Death Stranding, Hitman 3, etc.) — not direct head-to-head on the TartanAir oldtown batch OSS uses. They establish ROM order-of-magnitude context, not apples-to-apples comparison. OSS aims to publish head-to-head numbers on game-engine footage as the v6 cross-game-engine eval matures. <strong class="text-zinc-300">v4 has a trajectory plus a distribution-shift cliff</strong> <button class="info-btn" data-info-key="v4-two-points" type="button" aria-label="Why does v4 have two data points?">(i)</button>: the solid v4 line is the SRGD held-out trajectory across training, while the hollow marker at 300K is the same model family on the TartanAir oldtown batch v5+v6.1 use — the "rainbow mess" failure mode that motivated the v5+v6 architectural redesign. v6 is built to NOT distribution-shift like this; v6.1 cross-game-engine eval (UE5 / Unity / Source 2) is the ongoing test of whether that architectural design actually generalizes.</p>
       <p class="mt-2 text-xs leading-5 text-zinc-500" data-dim>Sources: bicubic is measured on the OSS TartanAir oldtown batch; FSR references use AMD GPUOpen/FidelityFX documentation plus Digital Foundry/Insider Gaming comparisons; XeSS references use Intel XeSS paper and game-benchmark coverage; DLSS references use NVIDIA DLSS publications plus Digital Foundry/TechPowerUp comparisons. Values are favorable competitor-side reference anchors, not OSS-measured head-to-head scores.</p>
     </section>
 
@@ -656,9 +657,15 @@ unseen test data — the model has already seen these specific image
 patches. Treat them as "is training healthy?", not "how good is the
 model?". For the real comparison-grade scores, see "Held-out PSNR /
 LPIPS by version" below.`,
-  "held-out-psnr": `Image quality scores on a fixed test set the models never see during
-training (TartanAir oldtown — 64 frames of photoreal flight-sim
-content). This is the apples-to-apples version comparison.
+  "held-out-psnr": `Image quality scores on held-out test sets plotted by training step.
+Each OSS run is a trajectory line with markers, so v4's 35 evaluations
+show the actual training path instead of collapsing into one version
+bucket.
+
+The x-axis is a shared training-step scale, not an apples-to-apples
+compute scale: v4 trained for about 415K steps, v5 is plotted at 80K,
+and v6.1 starts at step 500 and extends as training publishes more
+held-out score_log.json rows.
 
 The dashed lines for Deep Learning Super Sampling (DLSS), FidelityFX
 Super Resolution (FSR), and Xe Super Sampling (XeSS) are NOT measured
@@ -673,9 +680,16 @@ the simplest possible upscaler, the floor any model should clear.
 We aim to publish actual head-to-head numbers on real game-engine
 footage (Unreal Engine 5, Unity, Source 2) once the v6
 cross-game-engine training matures.`,
-  "held-out-lpips": `Image quality scores on a fixed test set the models never see during
-training (TartanAir oldtown — 64 frames of photoreal flight-sim
-content). This is the apples-to-apples version comparison.
+  "held-out-lpips": `Image quality scores on held-out test sets plotted by training step.
+Each OSS run is a trajectory line with markers, so v4's 35 evaluations
+show the actual training path instead of collapsing into one version
+bucket.
+
+LPIPS is reversed on the y-axis so better scores still move upward on
+the chart. The x-axis is a shared training-step scale, not an
+apples-to-apples compute scale: v4 trained for about 415K steps, v5 is
+plotted at 80K, and v6.1 starts at step 500 and extends as training
+publishes more held-out score_log.json rows.
 
 The dashed lines for Deep Learning Super Sampling (DLSS), FidelityFX
 Super Resolution (FSR), and Xe Super Sampling (XeSS) are NOT measured
@@ -706,6 +720,11 @@ matters:
   synthetic gaming content. It scores well there.
 · "v4 (TartanAir)" is the SAME v4 model tested on the harder set
   v5/v6.1 use. It crashes hard — about 22 dB lower PSNR.
+
+On the comparison charts, the solid v4 line shows the SRGD trajectory
+across training. The hollow marker at step 300K shows the TartanAir
+distribution-shift score at the same horizontal position as v4's SRGD
+peak.
 
 That cliff is the failure mode that motivated v5 and v6: a model that
 only works on the kind of pictures it was trained on isn't useful for
@@ -758,6 +777,7 @@ let trainingPulseState = {
 let stagnantActivePolls = 0;
 let comparisonShowAll = false;
 let comparisonFullRange = false;
+let comparisonLogX = false;
 let pendingIdleRender = null;
 let pendingIdleRenderFallback = null;
 let infoTooltip = null;
@@ -1193,13 +1213,13 @@ function setTheme(light) {
   document.getElementById("theme-toggle").textContent = light ? "Dark mode" : "Light mode";
 }
 
-function chartOptions({ yTitle = "loss", componentAxis = false, logY = false, indexTooltip = false } = {}) {
+function chartOptions({ yTitle = "loss", componentAxis = false, logY = false } = {}) {
   const scales = {
     x: {
       type: "linear",
       title: { display: true, text: "step", color: "#a1a1aa" },
       grid: { color: "rgba(113,113,122,0.22)" },
-      ticks: { color: "#a1a1aa", maxTicksLimit: 6 },
+      ticks: { color: "#a1a1aa", maxTicksLimit: 6, autoSkip: true },
     },
     y: {
       type: logY ? "logarithmic" : "linear",
@@ -1224,21 +1244,13 @@ function chartOptions({ yTitle = "loss", componentAxis = false, logY = false, in
     parsing: false,
     normalized: true,
     events: ["mousemove", "click"],
-    interaction: { mode: indexTooltip ? "index" : "nearest", intersect: false },
+    interaction: { mode: "point", intersect: true },
     scales,
-    plugins: { legend: { labels: { color: "#d4d4d8", boxWidth: 12 } } },
+    plugins: {
+      legend: { labels: { color: "#d4d4d8", boxWidth: 12 } },
+      tooltip: { mode: "point", intersect: true },
+    },
   };
-}
-
-function bestScoreRow(run) {
-  const rows = run?.score_log || [];
-  if (!rows.length) return null;
-  return rows.reduce((best, row) => {
-    const value = Number(row.model_psnr_mean);
-    const bestValue = Number(best?.model_psnr_mean);
-    if (!best || (Number.isFinite(value) && (!Number.isFinite(bestValue) || value > bestValue))) return row;
-    return best;
-  }, null);
 }
 
 const v4FallbackCrossVersionPoints = [
@@ -1264,79 +1276,172 @@ const v4FallbackCrossVersionPoints = [
   },
 ];
 
-function colorForComparisonPoint(point, metric) {
-  if (point?.color_class === "v4") return colors.v4;
-  return metric === "psnr" ? colors.ossPoint : colors.gold;
+function formatStepTick(value) {
+  const step = Number(value);
+  if (!Number.isFinite(step)) return "";
+  if (step >= 1000000) return `${(step / 1000000).toFixed(1).replace(/\.0$/, "")}M`;
+  if (step >= 1000) {
+    const thousands = step / 1000;
+    return `${thousands >= 100 ? Math.round(thousands).toLocaleString() : thousands.toFixed(1).replace(/\.0$/, "")}K`;
+  }
+  return Math.round(step).toLocaleString();
 }
 
-function versionPointForRun(run, x, options = {}) {
-  const row = bestScoreRow(run);
+function comparisonScorePoint(row, run, options = {}) {
   if (!row) return null;
+  const step = Number(row.step ?? options.step ?? run?.latest_step ?? 0);
   const psnr = Number(row.model_psnr_mean);
   const lpips = Number(row.model_lpips_mean);
-  if (!Number.isFinite(psnr) || !Number.isFinite(lpips)) return null;
+  if (!Number.isFinite(step) || !Number.isFinite(psnr) || !Number.isFinite(lpips)) return null;
   const runLabel = run.history?.title || run.label || run.name;
   return {
-    x,
+    step,
     psnr,
     lpips,
-    step: Number(row.step || run.latest_step || 0),
+    active: Boolean(run.active),
     run: runLabel,
     name: options.name || runLabel,
     label_full: options.label_full || runLabel,
-    manifest: options.manifest || row.manifest || "TartanAir oldtown, 64 frames",
+    manifest: options.manifest || row.manifest || `held-out batch, ${row.n_samples || "?"} frames`,
+    color: options.color || colors.ossPoint,
     color_class: options.color_class || "oss",
     is_in_distribution: options.is_in_distribution ?? true,
+    hollow: Boolean(options.hollow),
   };
 }
 
-function v4ComparisonPoints(run) {
+function comparisonPointsFromScoreLog(run, options = {}) {
+  return (run?.score_log || [])
+    .map((row) => comparisonScorePoint(row, run, options))
+    .filter(Boolean)
+    .sort((a, b) => a.step - b.step);
+}
+
+function v4CrossVersionPoints(run) {
   const source = (run?.cross_version_points || []).length ? run.cross_version_points : v4FallbackCrossVersionPoints;
-  return source.map((point, index) => ({
+  return source.map((point) => ({
     ...point,
-    x: index === 0 ? 0 : 0.42,
+    step: Number(point.step || 300000),
     run: point.name,
-    marker: "rect",
+    color: colors.v4,
   })).filter((point) => Number.isFinite(Number(point.psnr)) && Number.isFinite(Number(point.lpips)));
 }
 
-function crossVersionPoints(data) {
+function comparisonTrajectorySeries(data) {
   const runs = data?.runs || [];
   const byName = new Map(runs.map((run) => [run.name, run]));
-  const v4 = v4ComparisonPoints(byName.get("srcnn-prod-v4-lpips"));
-  const v5 = versionPointForRun(byName.get("srcnn-v5-pixel-temporal-validated"), 1.35, {
+  const v4Run = byName.get("srcnn-prod-v4-lpips") || {};
+  const v4Cross = v4CrossVersionPoints(v4Run);
+  const v4SrgdFallback = v4Cross.find((point) => point.is_in_distribution !== false);
+  const v4Srgd = comparisonPointsFromScoreLog(v4Run, {
+    name: "v4-SRGD",
+    label_full: "v4-SRGD held-out trajectory (in-distribution)",
+    manifest: v4SrgdFallback?.manifest || "SRGD held-out, 8 frames",
+    color: colors.v4,
+    color_class: "v4",
+    is_in_distribution: true,
+  });
+  const v4Tartan = v4Cross.find((point) => point.is_in_distribution === false);
+  const v5 = comparisonPointsFromScoreLog(byName.get("srcnn-v5-pixel-temporal-validated"), {
     name: "v5",
     label_full: "v5-pixel-temporal on TartanAir oldtown",
     manifest: "TartanAir oldtown, 64 frames",
+    color: colors.ossPoint,
   });
-  const v61 = versionPointForRun(byName.get("srcnn-v6.1-pico-001"), 3.25, {
+  const v61Run = byName.get("srcnn-v6.1-pico-001");
+  const v61 = comparisonPointsFromScoreLog(v61Run, {
     name: "v6.1",
     label_full: "v6.1 Pico on TartanAir oldtown",
     manifest: "TartanAir oldtown, 64 frames",
+    color: colors.psnr,
   });
+  const series = [
+    {
+      id: "v4-srgd",
+      label: "v4-SRGD",
+      color: colors.v4,
+      points: v4Srgd.length ? v4Srgd : (v4SrgdFallback ? [{
+        ...v4SrgdFallback,
+        name: "v4-SRGD",
+        label_full: "v4-SRGD held-out (in-distribution)",
+      }] : []),
+    },
+    {
+      id: "v4-tartanair",
+      label: "v4-TartanAir",
+      color: colors.v4,
+      hollow: true,
+      points: v4Tartan ? [{
+        ...v4Tartan,
+        name: "v4-TartanAir",
+        label_full: v4Tartan.label_full || "v4 single-frame on TartanAir oldtown (distribution-shifted)",
+        hollow: true,
+      }] : [],
+    },
+    {
+      id: "v5",
+      label: "v5",
+      color: colors.ossPoint,
+      points: v5,
+    },
+    {
+      id: "v61",
+      label: "v6.1",
+      color: colors.psnr,
+      active: Boolean(v61Run?.active),
+      points: v61,
+    },
+  ].filter((item) => item.points.length);
+  if (v61Run?.active && v61.length) {
+    v61[v61.length - 1].live = true;
+  }
+  const allSteps = series.flatMap((item) => item.points.map((point) => point.step)).filter(Number.isFinite);
+  const maxStep = Math.max(100000, ...allSteps);
+  const minPositiveStep = Math.max(1, Math.min(...allSteps.filter((step) => step > 0)));
   return {
-    labels: [
-      { x: 0, label: ["v4", "SRGD"] },
-      { x: 0.42, label: ["v4", "Tartan"] },
-      { x: 1.35, label: "v5" },
-      { x: 2.25, label: "v6" },
-      { x: 3.25, label: "v6.1" },
-    ],
-    points: [...v4, v5, v61].filter(Boolean),
-    missing: [{ x: 2.25, label: "v6 not measured" }],
+    series,
+    xMin: 0,
+    xMax: Math.ceil(maxStep / 5000) * 5000,
+    logMin: minPositiveStep,
   };
 }
 
-function lineSpan(value, yAxisID, label, color, options = {}) {
+function comparisonDatasetForSeries(series, metric) {
+  return {
+    label: series.label,
+    yAxisID: "y",
+    data: series.points.map((point) => ({ x: point.step, y: point[metric], point })),
+    borderColor: series.color,
+    backgroundColor: series.color,
+    pointBorderColor: series.color,
+    pointBackgroundColor(context) {
+      return context.raw?.point?.hollow || series.hollow ? "#06110f" : series.color;
+    },
+    pointRadius: series.id === "v4-srgd" ? 4 : 6,
+    pointHitRadius: 6,
+    pointHoverRadius: series.id === "v4-srgd" ? 6 : 8,
+    pointBorderWidth(context) {
+      return context.raw?.point?.hollow || series.hollow ? 3 : 2;
+    },
+    showLine: series.points.length > 1,
+    borderWidth: 1.8,
+    tension: 0,
+    runLine: true,
+  };
+}
+
+function lineSpan(value, yAxisID, label, color, bounds, options = {}) {
+  const xStart = comparisonLogX ? bounds.logMin : bounds.xMin;
   return {
     label,
     yAxisID,
-    data: [{ x: -0.45, y: value }, { x: 3.55, y: value }],
+    data: [{ x: xStart, y: value }, { x: bounds.xMax, y: value }],
     borderColor: color,
     backgroundColor: color,
     borderWidth: options.solid ? 1.5 : 1,
     borderDash: options.solid ? [] : [5, 4],
     pointRadius: 0,
+    pointHitRadius: 6,
     pointHoverRadius: 0,
     tension: 0,
     refLine: true,
@@ -1368,41 +1473,19 @@ const crossVersionLabelPlugin = {
       ctx.fillText(dataset.refName, chartArea.right - 4, y);
       ctx.globalAlpha = 1;
     });
-    const missing = chart.options.plugins?.crossVersionMissing || [];
-    const versionLabels = chart.options.plugins?.crossVersionLabels || [];
-    ctx.textAlign = "center";
-    ctx.fillStyle = "#a1a1aa";
-    missing.forEach((item) => {
-      const x = scales.x.getPixelForValue(item.x);
-      ctx.fillText(item.label, x, chartArea.top + 18);
-    });
-    versionLabels.forEach((item, index) => {
-      const label = typeof item === "string" ? item : item.label;
-      const value = typeof item === "string" ? index : item.x;
-      const x = scales.x.getPixelForValue(value);
-      const lines = Array.isArray(label) ? label : [label];
-      const startY = lines.length > 1 ? chartArea.bottom - 17 : chartArea.bottom - 8;
-      lines.forEach((line, lineIndex) => {
-        ctx.fillText(line, x, startY + lineIndex * 10);
-      });
-    });
-    const connectors = chart.options.plugins?.crossVersionConnectors || [];
-    connectors.forEach((item) => {
-      const scale = scales[item.yAxisID || "y"];
+    chart.data.datasets.forEach((dataset, index) => {
+      if (!dataset.runLine || !chart.isDatasetVisible(index)) return;
+      const livePoint = dataset.data?.findLast?.((item) => item.point?.live) || [...(dataset.data || [])].reverse().find((item) => item.point?.live);
+      if (!livePoint) return;
+      const scale = scales[dataset.yAxisID || "y"];
       if (!scale) return;
-      const x1 = scales.x.getPixelForValue(item.from.x);
-      const y1 = scale.getPixelForValue(item.from.y);
-      const x2 = scales.x.getPixelForValue(item.to.x);
-      const y2 = scale.getPixelForValue(item.to.y);
-      ctx.strokeStyle = item.color;
-      ctx.fillStyle = item.color;
-      ctx.globalAlpha = 0.9;
-      ctx.beginPath();
-      ctx.moveTo(x1, y1);
-      ctx.lineTo(x2, y2);
-      ctx.stroke();
+      const x = scales.x.getPixelForValue(livePoint.x);
+      const y = scale.getPixelForValue(livePoint.y);
+      if (x < chartArea.left || x > chartArea.right || y < chartArea.top || y > chartArea.bottom) return;
       ctx.textAlign = "left";
-      ctx.fillText(item.label, Math.min(x1, x2) + 8, Math.min(y1, y2) + 12);
+      ctx.fillStyle = colors.total;
+      ctx.globalAlpha = 0.95;
+      ctx.fillText("● live", Math.min(x + 10, chartArea.right - 48), Math.max(chartArea.top + 10, y - 10));
       ctx.globalAlpha = 1;
     });
     ctx.restore();
@@ -1421,7 +1504,8 @@ function renderCrossVersionComparison(data) {
 function renderSingleMetricComparison(data, metric, opts) {
   const canvas = document.getElementById(opts.canvasId);
   if (!canvas) return null;
-  const { labels, points, missing } = crossVersionPoints(data);
+  const trajectories = comparisonTrajectorySeries(data);
+  const points = trajectories.series.flatMap((series) => series.points);
   const visibleRefs = comparisonReferenceLines.filter((ref) => comparisonShowAll || ref.latest);
   const values = [
     ...points.map((point) => point[metric]),
@@ -1438,55 +1522,12 @@ function renderSingleMetricComparison(data, metric, opts) {
     : Math.ceil((Math.max(...values, opts.autoMax) + padding) * precision) / precision;
   const yMin = comparisonFullRange ? opts.fullMin : Math.max(opts.fullMin, autoMin);
   const yMax = comparisonFullRange ? opts.fullMax : Math.min(opts.fullMax, autoMax);
-  const v4Points = points.filter((point) => point.color_class === "v4");
-  const v4Connector = isPsnr && v4Points.length >= 2
-    ? [{
-        from: { x: v4Points[0].x, y: v4Points[0][metric] },
-        to: { x: v4Points[1].x, y: v4Points[1][metric] },
-        yAxisID: "y",
-        color: colors.v4,
-        label: "↓ on TartanAir, v4 falls off cliff",
-      }]
-    : [];
   const datasets = [
-    {
-      label: `OSS ${isPsnr ? "PSNR" : "LPIPS"} measured`,
-      yAxisID: "y",
-      data: points.map((point) => ({ x: point.x, y: point[metric], point })),
-      borderColor: isPsnr ? colors.ossPoint : colors.gold,
-      backgroundColor: isPsnr ? colors.ossPoint : colors.gold,
-      pointBorderColor(context) {
-        return colorForComparisonPoint(context.raw?.point, metric);
-      },
-      pointBackgroundColor(context) {
-        const point = context.raw?.point;
-        if (point?.color_class === "v4" && point.is_in_distribution === false) return "#06110f";
-        return colorForComparisonPoint(point, metric);
-      },
-      pointStyle(context) {
-        const point = context.raw?.point;
-        if (point?.marker) return point.marker;
-        return isPsnr ? "circle" : "rectRot";
-      },
-      pointRadius(context) {
-        return context.raw?.point?.color_class === "v4" ? 6 : 5;
-      },
-      pointHoverRadius(context) {
-        return context.raw?.point?.color_class === "v4" ? 8 : 7;
-      },
-      showLine: false,
-      borderWidth: 3,
-      pointBorderWidth(context) {
-        const point = context.raw?.point;
-        return point?.color_class === "v4" && point.is_in_distribution === false ? 3 : 2;
-      },
-    },
+    ...trajectories.series.map((series) => comparisonDatasetForSeries(series, metric)),
     ...comparisonReferenceLines.map((ref) => {
       const hidden = !comparisonShowAll && !ref.latest;
-      const hideLpipsByDefault = !comparisonShowAll && ref.id !== "bicubic";
-      const refHidden = isPsnr ? hidden : hidden || hideLpipsByDefault;
       const refNudge = ref.id === "bicubic" ? (isPsnr ? -18 : 14) : ref.nudge;
-      return lineSpan(ref[metric], "y", `${ref.method} ${isPsnr ? "PSNR" : "LPIPS"} ref`, ref.color, { hidden: refHidden, solid: ref.id === "bicubic", refName: `${ref.method} ${isPsnr ? "PSNR" : "LPIPS"}`, source: ref.source, nudge: refNudge });
+      return lineSpan(ref[metric], "y", `${ref.method} ${isPsnr ? "PSNR" : "LPIPS"} ref`, ref.color, trajectories, { hidden, solid: ref.id === "bicubic", refName: `${ref.method} ${isPsnr ? "PSNR" : "LPIPS"}`, source: ref.source, nudge: refNudge });
     }),
   ];
   const options = {
@@ -1496,21 +1537,21 @@ function renderSingleMetricComparison(data, metric, opts) {
     parsing: false,
     normalized: true,
     events: ["mousemove", "click"],
-    interaction: { mode: "nearest", intersect: false },
+    interaction: { mode: "point", intersect: true },
     scales: {
       x: {
-        type: "linear",
-        min: -0.55,
-        max: 3.6,
+        type: comparisonLogX ? "logarithmic" : "linear",
+        min: comparisonLogX ? trajectories.logMin : trajectories.xMin,
+        max: trajectories.xMax,
+        title: { display: true, text: "Training step (cross-run scale not 1:1 — v4 trained 415K steps, v6 targets 100K).", color: "#a1a1aa" },
         grid: { color: "rgba(113,113,122,0.18)" },
         ticks: {
           color: "#a1a1aa",
-          display: false,
-          autoSkip: false,
+          autoSkip: true,
           maxRotation: 0,
-          stepSize: 1,
+          maxTicksLimit: 7,
           callback(value) {
-            return labels[value] || "";
+            return formatStepTick(value);
           },
         },
       },
@@ -1531,14 +1572,15 @@ function renderSingleMetricComparison(data, metric, opts) {
           filter(item) {
             if (comparisonShowAll) return true;
             if (/DLSS 1|DLSS 2|DLSS 3|FSR 1|FSR 2/.test(item.text)) return false;
-            if (!isPsnr && /LPIPS ref/.test(item.text) && !/Bicubic/.test(item.text)) return false;
             return true;
           },
         },
       },
       tooltip: {
+        mode: "point",
+        intersect: true,
         filter(item) {
-          return !item.dataset?.connectorLine;
+          return Boolean(item.dataset?.refLine || item.raw?.point);
         },
         callbacks: {
           title(items) {
@@ -1555,6 +1597,7 @@ function renderSingleMetricComparison(data, metric, opts) {
             if (point) {
               return [
                 `${isPsnr ? "PSNR" : "LPIPS"}: ${fmtNumber(item.parsed.y, isPsnr ? 3 : 4)}`,
+                `Run: ${point.name || point.run || item.dataset.label}`,
                 `Held-out batch: ${point.manifest || "unknown"}`,
                 `Step: ${Number(point.step || 0).toLocaleString()}`,
               ];
@@ -1563,9 +1606,6 @@ function renderSingleMetricComparison(data, metric, opts) {
           },
         },
       },
-      crossVersionMissing: missing,
-      crossVersionLabels: labels,
-      crossVersionConnectors: v4Connector,
     },
   };
   return new Chart(canvas, { type: "line", data: { datasets }, options, plugins: [crossVersionLabelPlugin] });
@@ -1597,16 +1637,19 @@ function renderLossChart(canvas, run) {
       pointBorderWidth: (context) => shouldHighlightLastPoint(run, rows, context) ? 2 : 0,
       pointBorderColor: colors.total,
       pointBackgroundColor: "#09090b",
+      pointHitRadius: 6,
       pointHoverRadius: 5,
       borderWidth: 2,
       tension: 0,
     },
-    { label: "loss_charbonnier", yAxisID: "y1", data: xy(rows, "loss_charbonnier", "l1", "t_l1"), borderColor: colors.charbonnier, backgroundColor: colors.charbonnier, pointRadius: 0, borderWidth: 1.5, borderDash: [5, 3], tension: 0 },
-    { label: "loss_lpips", yAxisID: "y1", data: xy(rows, "loss_lpips", "t_lpips"), borderColor: colors.lpips, backgroundColor: colors.lpips, pointRadius: 0, borderWidth: 1.5, tension: 0 },
+    { label: "loss_charbonnier", yAxisID: "y1", data: xy(rows, "loss_charbonnier", "l1", "t_l1"), borderColor: colors.charbonnier, backgroundColor: colors.charbonnier, pointRadius: 0, pointHitRadius: 6, borderWidth: 1.5, borderDash: [5, 3], tension: 0 },
+    { label: "loss_lpips", yAxisID: "y1", data: xy(rows, "loss_lpips", "t_lpips"), borderColor: colors.lpips, backgroundColor: colors.lpips, pointRadius: 0, pointHitRadius: 6, borderWidth: 1.5, tension: 0 },
   ].filter((dataset) => dataset.data.length);
   if (!datasets.length) return null;
   const options = chartOptions({ yTitle: "total loss", componentAxis: true });
   options.plugins.tooltip = {
+    mode: "point",
+    intersect: true,
     callbacks: {
       title(items) {
         const row = rows[items[0]?.dataIndex] || {};
@@ -1632,14 +1675,17 @@ function renderLossDecompositionChart(canvas, run) {
     borderColor: def.color,
     backgroundColor: def.color,
     pointRadius: 0,
+    pointHitRadius: 6,
     pointHoverRadius: 4,
     borderWidth: 1.8,
     spanGaps: true,
     tension: 0,
   }));
   if (!datasets.length) return null;
-  const options = chartOptions({ yTitle: "loss component value (log scale)", logY: true, indexTooltip: true });
+  const options = chartOptions({ yTitle: "loss component value (log scale)", logY: true });
   options.plugins.tooltip = {
+    mode: "point",
+    intersect: true,
     callbacks: {
       title(items) {
         const row = rows[items[0]?.dataIndex] || {};
@@ -1677,8 +1723,8 @@ function renderTrainingPsnrChart(canvas, run) {
   const ref = referenceLine(rows, 25.703);
   const usesProxy = trainingPsnrUsesProxy(rows);
   const datasets = [
-    { label: `${run.history?.title || run.label || "run"} ${usesProxy ? "PSNR proxy" : "PSNR"}`, data: series, borderColor: colors.psnr, backgroundColor: colors.psnr, pointRadius: 0, pointHoverRadius: 4, borderWidth: 2, tension: 0 },
-    { label: "v5 held-out PSNR ref 25.703 dB", data: ref, borderColor: colors.gold, backgroundColor: colors.gold, pointRadius: 0, borderWidth: 1.5, borderDash: [5, 4], tension: 0 },
+    { label: `${run.history?.title || run.label || "run"} ${usesProxy ? "PSNR proxy" : "PSNR"}`, data: series, borderColor: colors.psnr, backgroundColor: colors.psnr, pointRadius: 0, pointHitRadius: 6, pointHoverRadius: 4, borderWidth: 2, tension: 0 },
+    { label: "v5 held-out PSNR ref 25.703 dB", data: ref, borderColor: colors.gold, backgroundColor: colors.gold, pointRadius: 0, pointHitRadius: 6, borderWidth: 1.5, borderDash: [5, 4], tension: 0 },
   ].filter((dataset) => dataset.data.length);
   return new Chart(canvas, { type: "line", data: { datasets }, options: chartOptions({ yTitle: "training-crop PSNR dB" }) });
 }
@@ -1692,8 +1738,8 @@ function renderTrainingLpipsChart(canvas, run) {
   options.scales.y.min = 0;
   options.scales.y.max = 1;
   const datasets = [
-    { label: `${run.history?.title || run.label || "run"} LPIPS`, data: series, borderColor: colors.lpips, backgroundColor: colors.lpips, pointRadius: 0, pointHoverRadius: 4, borderWidth: 2, tension: 0 },
-    { label: "v5 held-out LPIPS ref 0.1666", data: ref, borderColor: colors.gold, backgroundColor: colors.gold, pointRadius: 0, borderWidth: 1.5, borderDash: [5, 4], tension: 0 },
+    { label: `${run.history?.title || run.label || "run"} LPIPS`, data: series, borderColor: colors.lpips, backgroundColor: colors.lpips, pointRadius: 0, pointHitRadius: 6, pointHoverRadius: 4, borderWidth: 2, tension: 0 },
+    { label: "v5 held-out LPIPS ref 0.1666", data: ref, borderColor: colors.gold, backgroundColor: colors.gold, pointRadius: 0, pointHitRadius: 6, borderWidth: 1.5, borderDash: [5, 4], tension: 0 },
   ].filter((dataset) => dataset.data.length);
   return new Chart(canvas, { type: "line", data: { datasets }, options });
 }
@@ -1704,7 +1750,7 @@ function renderHeldoutChart(canvas, run) {
   const bicubicPsnr = xy(rows, "bicubic_psnr_mean");
   const modelLpips = xy(rows, "model_lpips_mean");
   if (!modelPsnr.length && !bicubicPsnr.length && !modelLpips.length) return null;
-  const options = chartOptions({ yTitle: "held-out PSNR dB", indexTooltip: true });
+  const options = chartOptions({ yTitle: "held-out PSNR dB" });
   options.scales.y1 = {
     type: "linear",
     position: "right",
@@ -1715,9 +1761,9 @@ function renderHeldoutChart(canvas, run) {
     title: { display: true, text: "held-out LPIPS", color: "#a1a1aa" },
   };
   const datasets = [
-    { label: "model PSNR", yAxisID: "y", data: modelPsnr, borderColor: colors.psnr, backgroundColor: colors.psnr, pointRadius: 3, borderWidth: 2, tension: 0 },
-    { label: "bicubic PSNR", yAxisID: "y", data: bicubicPsnr, borderColor: colors.bicubic, backgroundColor: colors.bicubic, pointRadius: 3, borderWidth: 1.7, borderDash: [5, 4], tension: 0 },
-    { label: "model LPIPS", yAxisID: "y1", data: modelLpips, borderColor: colors.lpips, backgroundColor: colors.lpips, pointRadius: 3, borderWidth: 2, tension: 0 },
+    { label: "model PSNR", yAxisID: "y", data: modelPsnr, borderColor: colors.psnr, backgroundColor: colors.psnr, pointRadius: 3, pointHitRadius: 6, borderWidth: 2, tension: 0 },
+    { label: "bicubic PSNR", yAxisID: "y", data: bicubicPsnr, borderColor: colors.bicubic, backgroundColor: colors.bicubic, pointRadius: 3, pointHitRadius: 6, borderWidth: 1.7, borderDash: [5, 4], tension: 0 },
+    { label: "model LPIPS", yAxisID: "y1", data: modelLpips, borderColor: colors.lpips, backgroundColor: colors.lpips, pointRadius: 3, pointHitRadius: 6, borderWidth: 2, tension: 0 },
   ].filter((dataset) => dataset.data.length);
   return new Chart(canvas, { type: "line", data: { datasets }, options });
 }
@@ -2347,6 +2393,7 @@ function initMetricCards() {
 function initComparisonControls() {
   const showAll = document.getElementById("comparison-show-all");
   const fullRange = document.getElementById("comparison-full-range");
+  const logX = document.getElementById("comparison-log-x");
   if (showAll) {
     showAll.checked = comparisonShowAll;
     showAll.addEventListener("change", () => {
@@ -2358,6 +2405,13 @@ function initComparisonControls() {
     fullRange.checked = comparisonFullRange;
     fullRange.addEventListener("change", () => {
       comparisonFullRange = fullRange.checked;
+      if (lastKnownData) renderDashboard(lastKnownData, { preserveTrainingState: true });
+    });
+  }
+  if (logX) {
+    logX.checked = comparisonLogX;
+    logX.addEventListener("change", () => {
+      comparisonLogX = logX.checked;
       if (lastKnownData) renderDashboard(lastKnownData, { preserveTrainingState: true });
     });
   }
