@@ -118,7 +118,7 @@ def enforce_pending_cap(pending_dir: Path, max_bytes: int) -> list[Path]:
     candidates = sorted(
         iter_frames(pending_dir),
         key=lambda frame: (
-            min(frame.frame_path.stat().st_mtime, frame.meta_path.stat().st_mtime),
+            min(frame.frame_path.stat().st_mtime_ns, frame.meta_path.stat().st_mtime_ns),
             str(frame.frame_path),
         ),
     )
