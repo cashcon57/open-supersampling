@@ -298,6 +298,19 @@ def _load_v5_gaussian_engine(ckpt_path: Path, device: str):
     )
 
 
+def _v6_label_from_ckpt(ckpt_path) -> str:
+    """Derive 'v6' / 'v6.1' / 'v6.2' column label from the run-dir name."""
+    if ckpt_path is None:
+        return "v6"
+    name = ckpt_path.parent.name.lower()
+    # Match srcnn-v6.<digit>-* → v6.<digit>; srcnn-v6-* → v6.
+    import re
+    m = re.match(r"srcnn-v(6(?:\.\d+)?)-", name)
+    if m:
+        return "v" + m.group(1)
+    return "v6"
+
+
 def _comparison_panels(
     *,
     lr_up,
@@ -309,6 +322,7 @@ def _comparison_panels(
     err_rgb_v6=None,
     gaussian=None,
     v6=None,
+    v6_label="v6",
 ):
     if v6 is None:
         baseline = bicubic if baseline is None else baseline
@@ -327,7 +341,7 @@ def _comparison_panels(
         panels.append(gaussian)
         labels.append("v5-Gaussian")
     panels.extend([v6, gt, err_rgb, err_rgb_v6 if err_rgb_v6 is not None else err_rgb])
-    labels.extend(["v6", "GT", "|err v5|", "|err v6|"])
+    labels.extend([v6_label, "GT", f"|err v5|", f"|err {v6_label}|"])
     return panels, labels
 
 
@@ -583,6 +597,7 @@ def _render_iteration(
                     gt=gt[0],
                     err_rgb=err_v5,
                     err_rgb_v6=err_v6,
+                    v6_label=_v6_label_from_ckpt(v6_ckpt),
                 )
                 rendered_strips.append(torch.cat(panels, dim=-1).cpu())
 
