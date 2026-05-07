@@ -4,14 +4,14 @@
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Status](https://img.shields.io/badge/status-pre--alpha-orange.svg)](#status-at-a-glance)
 
-> **TL;DR for reviewers.** Open-source ML super-resolution for games, Apache 2.0, solo maintainer (AI-augmented dev). v5-pixel-temporal measures **PSNR 25.703 / LPIPS 0.1666** on the TartanAir `oldtown` held-out batch (2× SR, 64 frames, beats bicubic on 64/64). v6 is the production-target architecture and is currently in training. Cross-game-engine generalization, OSS-FX frame extrapolation, the cross-vendor kernel stack, and the DLL-shim integration path are designed and partially implemented but **not yet measured on game-engine footage**. Looking for compute, hardware loaners, contract or full-time engineering work to take v6 from "in training" to "shipped on real games." See [What I'm asking for](#what-im-asking-for) below.
+> **TL;DR for reviewers.** Open-source ML super-resolution for games, Apache 2.0, solo maintainer (AI-augmented dev). v5-pixel-temporal was **trained on a single dataset (TartanAir Easy, with the `oldtown` environment held out) and evaluated only on that held-out environment** — that is in-distribution generalization, not cross-dataset. On that held-out batch it measures **PSNR 25.703 / LPIPS 0.1666 / temporal ratio 0.337×** (2× SR, 64 frames, beats bicubic on 64/64). v6 is the production-target architecture and is currently in training; cross-game-engine generalization is its explicit objective. OSS-FX frame extrapolation, the cross-vendor kernel stack, and the DLL-shim integration path are designed and partially implemented but **not yet measured on game-engine footage**. Looking for compute, hardware loaners, contract or full-time engineering work to take v6 from "in training" to "shipped on real games." See [What I'm asking for](#what-im-asking-for) below.
 
 ## Status at a glance
 
 | Component | State | Evidence |
 |---|---|---|
 | v4 single-frame upscaler | trained, exported, latency-measured | ~30.1 dB / 0.30 LPIPS on SRGD held-out; 720p→1440p 15.6 ms / 1080p→4K 37.6 ms on RTX 3080 Ti TRT FP16 |
-| v5-pixel-temporal | trained, evaluated in-distribution | 25.703 dB / 0.1666 LPIPS / 0.337× temporal ratio on TartanAir oldtown; [eval memo](docs/superpowers/experiments/2026-05-06-v5-pixel-temporal-final-held-out-eval.md) |
+| v5-pixel-temporal | trained on TartanAir Easy only; evaluated in-distribution on the held-out TartanAir `oldtown` env | 25.703 dB / 0.1666 LPIPS / 0.337× temporal ratio (no cross-dataset eval yet); [eval memo](docs/superpowers/experiments/2026-05-06-v5-pixel-temporal-final-held-out-eval.md) |
 | v5-Gaussian-temporal | scaffolded, no convergence numbers | parked after Option A (2026-05-06) |
 | v6 architecture | forward + trajectory training loop wired | 253 v6 tests pass; canvas warp + spawner + cross-attention + rasterizer all in the forward path |
 | Cross-game-engine eval (UE5/Unity/Source 2) | not yet run | v6 training objective |
@@ -30,7 +30,7 @@ Maintained by Cash Conway (<cashcon57@gmail.com>), solo maintainer with AI-augme
 
 ## Latest results (v5-pixel-temporal, 2026-05-06)
 
-**PSNR 25.703 dB · LPIPS 0.1666 · temporal-stability ratio 0.337×** on the TartanAir `oldtown` held-out batch (64 frames, 2× super-resolution from engine LR + G-buffers).
+**PSNR 25.703 dB · LPIPS 0.1666 · temporal-stability ratio 0.337×** on the TartanAir `oldtown` held-out batch (64 frames, 2× super-resolution from engine LR + G-buffers). Training set: TartanAir Easy with `oldtown` excluded — the model has not been trained or evaluated on any other dataset, and these numbers are in-distribution.
 
 | | PSNR ↑ | LPIPS-VGG ↓ | Temporal ratio ↓ |
 |---|---|---|---|
