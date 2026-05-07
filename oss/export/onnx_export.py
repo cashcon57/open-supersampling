@@ -16,13 +16,24 @@ import torch.nn.functional as F
 from oss.model.oss_pico import OSSPico
 
 
+ExportInputs = tuple[
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+]
+
+
 def _make_export_inputs(
     batch: int,
     h_lr: int,
     w_lr: int,
     h_hr: int,
     w_hr: int,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> ExportInputs:
     """Build deterministic, physically plausible inputs for tracing/parity."""
 
     gen = torch.Generator(device="cpu").manual_seed(20260507)
@@ -47,15 +58,15 @@ def export(ckpt_path: Path, out_path: Path, validate: bool = True):
     """
     # Load checkpoint
     state = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-    scale = state.get("config", {}).get("scale_factor", 2.0)
-    model = OSSPico(scale_factor=float(scale)).eval()
+    scale_factor = float(state.get("config", {}).get("scale_factor", 2.0))
+    model = OSSPico(scale_factor=scale_factor).eval()
     model.load_state_dict(state["model"])
 
     # Dummy inputs for tracing
     B = 1
     H_lr, W_lr = 64, 64  # canonical export shape; runtime can use dynamic axes
-    H_hr = int(H_lr * scale)
-    W_hr = int(W_lr * scale)
+    H_hr = int(H_lr * scale_factor)
+    W_hr = int(W_lr * scale_factor)
 
     # hidden_state: None at sequence start; we trace the explicit-zeros path for ONNX.
     color_lr, depth_lr, motion_lr, normals_lr, albedo_lr, history_hr, hidden_zero = _make_export_inputs(
