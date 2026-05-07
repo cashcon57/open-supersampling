@@ -519,6 +519,11 @@
         </div>
         <div class="flex flex-wrap gap-2">
           <label class="chart-toggle"><input id="comparison-show-all" type="checkbox"> Show all generations</label>
+          <label class="chart-toggle">
+            <input id="comparison-show-bad-data" type="checkbox">
+            Show bad data
+            <button class="info-btn" data-info-key="bad-data" aria-label="What is bad data?" type="button">(i)</button>
+          </label>
           <label class="chart-toggle"><input id="comparison-full-range" type="checkbox"> Full range</label>
           <label class="chart-toggle"><input id="comparison-log-x" type="checkbox"> Log x-axis</label>
         </div>
@@ -731,6 +736,9 @@ only works on the kind of pictures it was trained on isn't useful for
 games it's never seen. v6 is built specifically to NOT cliff like
 this. The v6 cross-game-engine evaluation is the test of whether
 v6.1 actually delivers on that.`,
+  "bad-data": `Disabled by default. These runs were measured on different test sets
+or represent failure modes (e.g. v4 distribution-shifted), so they
+don't compare apples-to-apples with v5/v6.1. Enable for transparency.`,
 };
 
 const lossComponentDefs = [
@@ -776,8 +784,10 @@ let trainingPulseState = {
 };
 let stagnantActivePolls = 0;
 let comparisonShowAll = false;
+let comparisonShowBadData = false;
 let comparisonFullRange = false;
 let comparisonLogX = false;
+let comparisonYAxisBounds = { psnr: null, lpips: null };
 let pendingIdleRender = null;
 let pendingIdleRenderFallback = null;
 let infoTooltip = null;
@@ -800,6 +810,12 @@ const comparisonReferenceLines = [
   { id: "dlss3", method: "DLSS 3", vendor: "NVIDIA", latest: false, psnr: 30.5, lpips: 0.13, color: "#92ffc1", source: "NVIDIA DLSS 3 publications; SR component only, frame generation not directly comparable" },
   { id: "dlss4", method: "DLSS 4", vendor: "NVIDIA", latest: true, psnr: 32.5, lpips: 0.10, color: colors.nvidia, source: "NVIDIA DLSS 4 transformer publications plus Digital Foundry / TechPowerUp image-quality coverage", nudge: 0 },
 ];
+
+const badDataSeriesIds = new Set(["v4-srgd", "v4-tartanair"]);
+const comparisonMetricScale = {
+  psnr: { min: 0, max: 35, pad: 0.5, precision: 1 },
+  lpips: { min: 0, max: 1, pad: 0.03, precision: 100 },
+};
 
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (char) => ({
@@ -1327,7 +1343,12 @@ function v4CrossVersionPoints(run) {
   })).filter((point) => Number.isFinite(Number(point.psnr)) && Number.isFinite(Number(point.lpips)));
 }
 
-function comparisonTrajectorySeries(data) {
+function isBadDataSeries(series) {
+  return badDataSeriesIds.has(series.id);
+}
+
+function comparisonTrajectorySeries(data, options = {}) {
+  const includeBadData = options.includeBadData ?? comparisonShowBadData;
   const runs = data?.runs || [];
   const byName = new Map(runs.map((run) => [run.name, run]));
   const v4Run = byName.get("srcnn-prod-v4-lpips") || {};
@@ -1392,6 +1413,9 @@ function comparisonTrajectorySeries(data) {
       points: v61,
     },
   ].filter((item) => item.points.length);
+  const visibleSeries = includeBadData
+    ? series
+    : series.filter((item) => !isBadDataSeries(item));
   if (v61Run?.active && v61.length) {
     v61[v61.length - 1].live = true;
   }
@@ -1399,11 +1423,12 @@ function comparisonTrajectorySeries(data) {
     v5[0].markerLabel = `v5 final · ${formatStepTick(v5[0].step)} steps`;
     v5[0].markerLabelColor = colors.v5;
   }
-  const allSteps = series.flatMap((item) => item.points.map((point) => point.step)).filter(Number.isFinite);
+  const allSteps = visibleSeries.flatMap((item) => item.points.map((point) => point.step)).filter(Number.isFinite);
   const maxStep = Math.max(100000, ...allSteps);
-  const minPositiveStep = Math.max(1, Math.min(...allSteps.filter((step) => step > 0)));
+  const positiveSteps = allSteps.filter((step) => step > 0);
+  const minPositiveStep = positiveSteps.length ? Math.max(1, Math.min(...positiveSteps)) : 1;
   return {
-    series,
+    series: visibleSeries,
     xMin: 0,
     xMax: Math.ceil(maxStep / 5000) * 5000,
     logMin: minPositiveStep,
@@ -1524,27 +1549,113 @@ function renderCrossVersionComparison(data) {
   ].filter(Boolean);
 }
 
+function normalizedComparisonValue(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function comparisonValuesFromSeries(series, metric) {
+  return (series?.points || [])
+    .map((point) => normalizedComparisonValue(point?.[metric]))
+    .filter((value) => value !== null);
+}
+
+function comparisonValuesFromDataset(dataset) {
+  return (dataset?.data || [])
+    .map((point) => normalizedComparisonValue(point?.y))
+    .filter((value) => value !== null);
+}
+
+function roundedComparisonMin(value, metric) {
+  const scale = comparisonMetricScale[metric];
+  return metric === "psnr"
+    ? Math.floor(value)
+    : Math.floor(value * scale.precision) / scale.precision;
+}
+
+function roundedComparisonMax(value, metric) {
+  const scale = comparisonMetricScale[metric];
+  return metric === "psnr"
+    ? Math.ceil(value)
+    : Math.ceil(value * scale.precision) / scale.precision;
+}
+
+function clampComparisonBounds(bounds, metric) {
+  const scale = comparisonMetricScale[metric];
+  return {
+    yMin: Math.max(scale.min, bounds.yMin),
+    yMax: Math.min(scale.max, bounds.yMax),
+  };
+}
+
+function initialComparisonBounds(values, metric, opts) {
+  const scale = comparisonMetricScale[metric];
+  const usableValues = values.filter(Number.isFinite);
+  if (!usableValues.length) {
+    return { yMin: opts.autoMin, yMax: opts.autoMax };
+  }
+  return clampComparisonBounds({
+    yMin: roundedComparisonMin(Math.min(...usableValues) - scale.pad, metric),
+    yMax: roundedComparisonMax(Math.max(...usableValues) + scale.pad, metric),
+  }, metric);
+}
+
+function expandBoundsIfNeeded(currentMin, currentMax, values, metric) {
+  const scale = comparisonMetricScale[metric];
+  let yMin = currentMin;
+  let yMax = currentMax;
+  values.forEach((value) => {
+    if (!Number.isFinite(value)) return;
+    if (value < yMin) yMin = value - scale.pad;
+    if (value > yMax) yMax = value + scale.pad;
+  });
+  return clampComparisonBounds({ yMin, yMax }, metric);
+}
+
+function ensureComparisonYAxisBounds(metric, opts, series, refs) {
+  const visibleValues = [
+    ...series.flatMap((item) => comparisonValuesFromSeries(item, metric)),
+    ...refs.map((ref) => normalizedComparisonValue(ref[metric])).filter((value) => value !== null),
+  ];
+  if (!comparisonYAxisBounds[metric]) {
+    comparisonYAxisBounds[metric] = initialComparisonBounds(visibleValues, metric, opts);
+  } else {
+    const current = comparisonYAxisBounds[metric];
+    comparisonYAxisBounds[metric] = expandBoundsIfNeeded(current.yMin, current.yMax, visibleValues, metric);
+  }
+  return comparisonYAxisBounds[metric];
+}
+
+function applyComparisonYAxisBounds(chart, metric, opts) {
+  const bounds = comparisonFullRange
+    ? { yMin: opts.fullMin, yMax: opts.fullMax }
+    : comparisonYAxisBounds[metric];
+  if (!bounds || !chart?.options?.scales?.y) return;
+  chart.options.scales.y.min = bounds.yMin;
+  chart.options.scales.y.max = bounds.yMax;
+}
+
+function expandComparisonYAxisForDataset(chart, metric, opts, dataset) {
+  if (!comparisonYAxisBounds[metric]) return;
+  const current = comparisonYAxisBounds[metric];
+  comparisonYAxisBounds[metric] = expandBoundsIfNeeded(
+    current.yMin,
+    current.yMax,
+    comparisonValuesFromDataset(dataset),
+    metric
+  );
+  applyComparisonYAxisBounds(chart, metric, opts);
+}
+
 function renderSingleMetricComparison(data, metric, opts) {
   const canvas = document.getElementById(opts.canvasId);
   if (!canvas) return null;
   const trajectories = comparisonTrajectorySeries(data);
-  const points = trajectories.series.flatMap((series) => series.points);
   const visibleRefs = comparisonReferenceLines.filter((ref) => comparisonShowAll || ref.latest);
-  const values = [
-    ...points.map((point) => point[metric]),
-    ...visibleRefs.map((ref) => ref[metric]),
-  ].filter(Number.isFinite);
   const isPsnr = metric === "psnr";
-  const padding = isPsnr ? 1 : 0.03;
-  const precision = isPsnr ? 1 : 100;
-  const autoMin = isPsnr
-    ? Math.floor(Math.min(...values, opts.autoMin) - padding)
-    : Math.floor((Math.min(...values, opts.autoMin) - padding) * precision) / precision;
-  const autoMax = isPsnr
-    ? Math.ceil(Math.max(...values, opts.autoMax) + padding)
-    : Math.ceil((Math.max(...values, opts.autoMax) + padding) * precision) / precision;
-  const yMin = comparisonFullRange ? opts.fullMin : Math.max(opts.fullMin, autoMin);
-  const yMax = comparisonFullRange ? opts.fullMax : Math.min(opts.fullMax, autoMax);
+  const autoBounds = ensureComparisonYAxisBounds(metric, opts, trajectories.series, visibleRefs);
+  const yMin = comparisonFullRange ? opts.fullMin : autoBounds.yMin;
+  const yMax = comparisonFullRange ? opts.fullMax : autoBounds.yMax;
   const datasets = [
     ...trajectories.series.map((series) => comparisonDatasetForSeries(series, metric)),
     ...comparisonReferenceLines.map((ref) => {
@@ -1589,6 +1700,16 @@ function renderSingleMetricComparison(data, metric, opts) {
     },
     plugins: {
       legend: {
+        onClick(event, item, legend) {
+          const chart = legend.chart;
+          const dataset = chart.data.datasets[item.datasetIndex];
+          const wasVisible = chart.isDatasetVisible(item.datasetIndex);
+          Chart.defaults.plugins.legend.onClick.call(this, event, item, legend);
+          if (!wasVisible && chart.isDatasetVisible(item.datasetIndex)) {
+            expandComparisonYAxisForDataset(chart, metric, opts, dataset);
+          }
+          chart.update("none");
+        },
         labels: {
           color: "#d4d4d8",
           boxWidth: 10,
@@ -2415,12 +2536,20 @@ function initMetricCards() {
 
 function initComparisonControls() {
   const showAll = document.getElementById("comparison-show-all");
+  const showBadData = document.getElementById("comparison-show-bad-data");
   const fullRange = document.getElementById("comparison-full-range");
   const logX = document.getElementById("comparison-log-x");
   if (showAll) {
     showAll.checked = comparisonShowAll;
     showAll.addEventListener("change", () => {
       comparisonShowAll = showAll.checked;
+      if (lastKnownData) renderDashboard(lastKnownData, { preserveTrainingState: true });
+    });
+  }
+  if (showBadData) {
+    showBadData.checked = comparisonShowBadData;
+    showBadData.addEventListener("change", () => {
+      comparisonShowBadData = showBadData.checked;
       if (lastKnownData) renderDashboard(lastKnownData, { preserveTrainingState: true });
     });
   }
