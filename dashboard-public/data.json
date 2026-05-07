@@ -1,8 +1,33 @@
 {
-  "generated_at": "2026-05-07T17:38:30Z",
+  "generated_at": "2026-05-07T17:50:05Z",
   "runs": [
     {
       "active": true,
+      "gpu_status": null,
+      "history": {
+        "default_open": true,
+        "headline": [
+          {
+            "caption": "live run",
+            "label": "Status",
+            "value": "training now"
+          },
+          {
+            "caption": "from metrics.json",
+            "label": "Latest step",
+            "value_from": "latest_step"
+          },
+          {
+            "caption": "latest total",
+            "label": "Loss",
+            "value_from": "loss_total"
+          }
+        ],
+        "note": "",
+        "status": "active, training now",
+        "summary": "current v6.1 Pico run from the 3080 Ti training host",
+        "title": "v6.1 Pico"
+      },
       "label": "v6.1 Pico (active)",
       "latest_metrics": {},
       "latest_step": 0,
@@ -13,7 +38,32 @@
     },
     {
       "active": false,
-      "label": "v5 Pixel Temporal (validated)",
+      "gpu_status": null,
+      "history": {
+        "default_open": false,
+        "headline": [
+          {
+            "caption": "dB, higher is better",
+            "label": "PSNR",
+            "value": "25.703"
+          },
+          {
+            "caption": "lower is better",
+            "label": "LPIPS",
+            "value": "0.1666"
+          },
+          {
+            "caption": "versus v4 baseline",
+            "label": "Temporal ratio",
+            "value": "0.337x"
+          }
+        ],
+        "note": "",
+        "status": "measured, in-distribution",
+        "summary": "validated temporal SR reference result on the held-out oldtown split",
+        "title": "v5-pixel-temporal"
+      },
+      "label": "v5-pixel-temporal (measured)",
       "latest_metrics": {},
       "latest_step": 0,
       "loss_curve": [],
@@ -23,7 +73,67 @@
     },
     {
       "active": false,
-      "label": "v6 Pico (historical)",
+      "gpu_status": null,
+      "history": {
+        "default_open": false,
+        "headline": [
+          {
+            "caption": "single-frame baseline",
+            "label": "SRGD PSNR",
+            "value": "30.1 dB"
+          },
+          {
+            "caption": "lower is better",
+            "label": "SRGD LPIPS",
+            "value": "0.30"
+          },
+          {
+            "caption": "engine / end-to-end",
+            "label": "TRT FP16",
+            "value": "15.6 / 37.6 ms"
+          }
+        ],
+        "note": "SRGD reference: 30.1 dB / 0.30 LPIPS. TensorRT FP16 latency: 15.6 ms engine-only, 37.6 ms end-to-end.",
+        "status": "single-frame baseline",
+        "summary": "production v4 LPIPS-tuned single-frame baseline",
+        "title": "v4"
+      },
+      "label": "v4 (single-frame baseline)",
+      "latest_metrics": {},
+      "latest_step": 0,
+      "loss_curve": [],
+      "name": "srcnn-prod-v4-lpips",
+      "score_log": [],
+      "viz_pngs": []
+    },
+    {
+      "active": false,
+      "gpu_status": null,
+      "history": {
+        "default_open": false,
+        "headline": [
+          {
+            "caption": "v6.1 replaced this run",
+            "label": "Status",
+            "value": "superseded"
+          },
+          {
+            "caption": "expected around 20K",
+            "label": "Final step",
+            "value_from": "latest_step"
+          },
+          {
+            "caption": "documented in viz strip",
+            "label": "Artifact",
+            "value": "16 px grid"
+          }
+        ],
+        "note": "Stopped after the structural 16-pixel grid artifact was diagnosed; v6.1 supersedes.",
+        "status": "superseded by v6.1, 2026-05-07",
+        "summary": "stopped v6 Pico run retained to show the diagnosed grid artifact",
+        "title": "v6 Pico"
+      },
+      "label": "v6 Pico (superseded)",
       "latest_metrics": {},
       "latest_step": 0,
       "loss_curve": [],

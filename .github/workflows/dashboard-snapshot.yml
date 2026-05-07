@@ -80,6 +80,7 @@ jobs:
           allow=(
             "srcnn-v6.1-pico-001"
             "srcnn-v5-pixel-temporal-validated"
+            "srcnn-prod-v4-lpips"
             "srcnn-v6-pico-001"
           )
           deny='aborted|smoke|sanity|test|leak|preflight|paramprobe|init-fix|diag'
@@ -98,6 +99,7 @@ jobs:
             timeout 120s rsync -az --timeout=45 --prune-empty-dirs \
               --include='metrics.json' \
               --include='score_log.json' \
+              --include='gpu_status.json' \
               --include='viz/' \
               --include='viz/step-*.png' \
               --exclude='*' \
@@ -124,6 +126,51 @@ jobs:
               rm -f "$tmp_log"
             else
               mv "$tmp_log" "$dest/train.log"
+            fi
+
+            if [[ "$run" == "srcnn-v6.1-pico-001" ]]; then
+              gpu_cmd='nvidia-smi --query-gpu=name,memory.used,memory.total,utilization.gpu --format=csv,noheader,nounits'
+              tmp_gpu="$dest/gpu_status.csv.tmp"
+              timeout 30s ${DASHBOARD_REMOTE_SSH} "${DASHBOARD_REMOTE_USER}@${DASHBOARD_REMOTE_HOST}" "$gpu_cmd" > "$tmp_gpu"
+              status=$?
+              if [[ $status -ne 0 ]]; then
+                echo "warning: nvidia-smi failed for $run with status $status"
+                rm -f "$tmp_gpu"
+              else
+                captured_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                python3 - "$tmp_gpu" "$dest/gpu_status.json" "$captured_at" <<'PY'
+import csv
+import json
+import sys
+from pathlib import Path
+
+csv_path = Path(sys.argv[1])
+out_path = Path(sys.argv[2])
+captured_at = sys.argv[3]
+rows = list(csv.reader(csv_path.read_text(encoding="utf-8", errors="replace").splitlines()))
+if not rows or len(rows[0]) < 4:
+    raise SystemExit("nvidia-smi returned no GPU rows")
+name = rows[0][0].strip()
+used = int(float(rows[0][1].strip()))
+total = int(float(rows[0][2].strip()))
+util = int(float(rows[0][3].strip()))
+payload = {
+    "captured_at": captured_at,
+    "gpu_name": name,
+    "memory_used_mib": used,
+    "memory_total_mib": total,
+    "memory_used_pct": round((used / total) * 100, 1) if total else 0.0,
+    "utilization_pct": util,
+}
+out_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+                status=$?
+                rm -f "$tmp_gpu"
+                if [[ $status -ne 0 ]]; then
+                  echo "warning: failed to parse nvidia-smi output for $run"
+                  rm -f "$dest/gpu_status.json"
+                fi
+              fi
             fi
           done
 

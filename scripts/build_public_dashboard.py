@@ -8,6 +8,7 @@ The output is a static index.html plus data.json. No third-party Python deps.
 
 from __future__ import annotations
 
+import argparse
 import datetime as _dt
 import html
 import json
@@ -24,12 +25,58 @@ DATA_JSON = PUBLIC_DIR / "data.json"
 INDEX_HTML = PUBLIC_DIR / "index.html"
 
 RUN_CONFIG = {
-    "srcnn-v6.1-pico-001": {"label": "v6.1 Pico (active)", "active": True},
-    "srcnn-v5-pixel-temporal-validated": {
-        "label": "v5 Pixel Temporal (validated)",
-        "active": False,
+    "srcnn-v6.1-pico-001": {
+        "active": True,
+        "default_open": True,
+        "history_title": "v6.1 Pico",
+        "status": "active, training now",
+        "summary": "current v6.1 Pico run from the 3080 Ti training host",
+        "note": "",
+        "headline": [
+            {"label": "Status", "value": "training now", "caption": "live run"},
+            {"label": "Latest step", "value_from": "latest_step", "caption": "from metrics.json"},
+            {"label": "Loss", "value_from": "loss_total", "caption": "latest total"},
+        ],
     },
-    "srcnn-v6-pico-001": {"label": "v6 Pico (historical)", "active": False},
+    "srcnn-v5-pixel-temporal-validated": {
+        "active": False,
+        "default_open": False,
+        "history_title": "v5-pixel-temporal",
+        "status": "measured, in-distribution",
+        "summary": "validated temporal SR reference result on the held-out oldtown split",
+        "note": "",
+        "headline": [
+            {"label": "PSNR", "value": "25.703", "caption": "dB, higher is better"},
+            {"label": "LPIPS", "value": "0.1666", "caption": "lower is better"},
+            {"label": "Temporal ratio", "value": "0.337x", "caption": "versus v4 baseline"},
+        ],
+    },
+    "srcnn-prod-v4-lpips": {
+        "active": False,
+        "default_open": False,
+        "history_title": "v4",
+        "status": "single-frame baseline",
+        "summary": "production v4 LPIPS-tuned single-frame baseline",
+        "note": "SRGD reference: 30.1 dB / 0.30 LPIPS. TensorRT FP16 latency: 15.6 ms engine-only, 37.6 ms end-to-end.",
+        "headline": [
+            {"label": "SRGD PSNR", "value": "30.1 dB", "caption": "single-frame baseline"},
+            {"label": "SRGD LPIPS", "value": "0.30", "caption": "lower is better"},
+            {"label": "TRT FP16", "value": "15.6 / 37.6 ms", "caption": "engine / end-to-end"},
+        ],
+    },
+    "srcnn-v6-pico-001": {
+        "active": False,
+        "default_open": False,
+        "history_title": "v6 Pico",
+        "status": "superseded by v6.1, 2026-05-07",
+        "summary": "stopped v6 Pico run retained to show the diagnosed grid artifact",
+        "note": "Stopped after the structural 16-pixel grid artifact was diagnosed; v6.1 supersedes.",
+        "headline": [
+            {"label": "Status", "value": "superseded", "caption": "v6.1 replaced this run"},
+            {"label": "Final step", "value_from": "latest_step", "caption": "expected around 20K"},
+            {"label": "Artifact", "value": "16 px grid", "caption": "documented in viz strip"},
+        ],
+    },
 }
 
 RUN_ORDER = list(RUN_CONFIG)
@@ -38,10 +85,37 @@ DENY_RE = re.compile(
     re.IGNORECASE,
 )
 VIZ_RE = re.compile(r"step-(\d+)\.png$")
+V6_RUN_RE = re.compile(r"srcnn-v(6(?:\.\d+)?)-", re.IGNORECASE)
 
 
 def utc_now_iso() -> str:
     return _dt.datetime.now(_dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def configure_paths(runs_dir: Path, out_dir: Path) -> None:
+    global PUBLIC_DIR, RUNS_DIR, DATA_JSON, INDEX_HTML
+    PUBLIC_DIR = out_dir
+    RUNS_DIR = runs_dir
+    DATA_JSON = PUBLIC_DIR / "data.json"
+    INDEX_HTML = PUBLIC_DIR / "index.html"
+
+
+def v6_revision_from_run_name(name: str) -> str | None:
+    match = V6_RUN_RE.match(name)
+    return f"v{match.group(1)}" if match else None
+
+
+def label_for_run(name: str, config: dict[str, Any]) -> str:
+    v6_revision = v6_revision_from_run_name(name)
+    if v6_revision:
+        if config.get("active"):
+            return f"{v6_revision} Pico (active)"
+        return f"{v6_revision} Pico (superseded)"
+    if name == "srcnn-v5-pixel-temporal-validated":
+        return "v5-pixel-temporal (measured)"
+    if name.startswith("srcnn-prod-v4") or name.startswith("srcnn-v4"):
+        return "v4 (single-frame baseline)"
+    return str(config.get("history_title") or name)
 
 
 def read_rows(path: Path) -> list[dict[str, Any]]:
@@ -118,6 +192,27 @@ def list_viz_pngs(run_dir: Path) -> list[str]:
     return sorted((path.name for path in viz_dir.glob("step-*.png")), key=viz_step)
 
 
+def read_gpu_status(run_dir: Path) -> dict[str, Any] | None:
+    path = run_dir / "gpu_status.json"
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    allowed = {
+        "captured_at",
+        "gpu_name",
+        "memory_used_mib",
+        "memory_total_mib",
+        "memory_used_pct",
+        "utilization_pct",
+    }
+    return {key: primitive_value(payload.get(key)) for key in allowed if key in payload}
+
+
 def load_previous_runs() -> dict[str, dict[str, Any]]:
     if not DATA_JSON.is_file():
         return {}
@@ -153,20 +248,24 @@ def build_run(name: str, previous: dict[str, Any] | None) -> dict[str, Any] | No
     if not metrics and not scores and not viz_pngs and previous_has_data:
         cached = dict(previous)
         cached["cached"] = True
-        cached["label"] = config["label"]
+        cached["label"] = label_for_run(name, config)
         cached["active"] = config["active"]
+        cached["history"] = history_for_run(name, config)
+        cached["gpu_status"] = read_gpu_status(run_dir) or cached.get("gpu_status")
         return cached
 
     if not metrics and not scores and not viz_pngs:
         return {
             "name": name,
-            "label": config["label"],
+            "label": label_for_run(name, config),
             "active": config["active"],
+            "history": history_for_run(name, config),
             "latest_step": 0,
             "latest_metrics": {},
             "loss_curve": [],
             "score_log": [],
             "viz_pngs": [],
+            "gpu_status": read_gpu_status(run_dir),
         }
 
     metrics = sorted(metrics, key=step_value)
@@ -175,13 +274,26 @@ def build_run(name: str, previous: dict[str, Any] | None) -> dict[str, Any] | No
 
     return {
         "name": name,
-        "label": config["label"],
+        "label": label_for_run(name, config),
         "active": config["active"],
+        "history": history_for_run(name, config),
         "latest_step": latest_step,
         "latest_metrics": latest,
         "loss_curve": [slim_row(row) for row in metrics[-1000:]],
         "score_log": [slim_row(row) for row in scores],
         "viz_pngs": viz_pngs,
+        "gpu_status": read_gpu_status(run_dir),
+    }
+
+
+def history_for_run(name: str, config: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "title": config.get("history_title") or label_for_run(name, config),
+        "status": config.get("status", ""),
+        "summary": config.get("summary", ""),
+        "note": config.get("note", ""),
+        "default_open": bool(config.get("default_open")),
+        "headline": config.get("headline", []),
     }
 
 
@@ -248,158 +360,99 @@ HTML_TEMPLATE = r"""<!doctype html>
   </script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0"></script>
   <style>
+    html { color-scheme: dark; }
+    body { background: #09090b; }
+    details > summary { list-style: none; }
+    details > summary::-webkit-details-marker { display: none; }
+    details[open] .summary-chevron { transform: rotate(90deg); }
     .viz-strip { scrollbar-width: thin; }
-    .chart-wrap { height: 18rem; }
-    .light-mode [class*="bg-zinc-950"] { background-color: #f8fafc !important; }
-    .light-mode [class*="bg-zinc-900"] { background-color: rgba(255, 255, 255, 0.92) !important; }
-    .light-mode [class*="border-zinc-800"],
-    .light-mode [class*="border-zinc-700"] { border-color: #d4d4d8 !important; }
-    .light-mode [class*="text-zinc-50"],
-    .light-mode [class*="text-zinc-100"] { color: #18181b !important; }
-    .light-mode [class*="text-zinc-200"],
-    .light-mode [class*="text-zinc-300"],
-    .light-mode [class*="text-zinc-400"] { color: #3f3f46 !important; }
-    .light-mode [class*="text-zinc-500"] { color: #71717a !important; }
-    .light-mode select { background-color: #ffffff !important; color: #18181b !important; }
-    @media (max-width: 640px) { .chart-wrap { height: 16rem; } }
+    .chart-wrap { height: 18rem; min-height: 16rem; }
+    .score-scroll { scrollbar-width: thin; }
+    .light-mode { background: #f8fafc; color: #18181b; color-scheme: light; }
+    .light-mode [data-surface] { background-color: rgba(255, 255, 255, 0.92) !important; border-color: #d4d4d8 !important; }
+    .light-mode [data-muted-surface] { background-color: #f4f4f5 !important; border-color: #d4d4d8 !important; }
+    .light-mode [data-text] { color: #18181b !important; }
+    .light-mode [data-subtext] { color: #3f3f46 !important; }
+    .light-mode [data-dim] { color: #71717a !important; }
+    @media (max-width: 640px) {
+      .chart-wrap { height: 15rem; }
+      .viz-frame, .viz-frame img { width: 18rem; }
+    }
   </style>
 </head>
-<body class="min-h-screen bg-zinc-950 text-zinc-100 antialiased transition-colors dark:bg-zinc-950 dark:text-zinc-100">
+<body class="min-h-screen bg-zinc-950 text-zinc-100 antialiased">
   <main class="mx-auto flex max-w-7xl flex-col gap-6 px-4 py-5 sm:px-6 lg:px-8">
-    <header class="border-b border-zinc-800 pb-5 dark:border-zinc-800">
-      <div class="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+    <header class="border-b border-zinc-800 pb-5">
+      <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div class="max-w-4xl">
-          <p class="text-xs font-semibold uppercase tracking-wide text-sky-400">OpenSuperSampling</p>
-          <h1 class="mt-2 text-3xl font-semibold tracking-normal text-zinc-50 sm:text-4xl">Public training dashboard</h1>
-          <p class="mt-3 max-w-3xl text-sm leading-6 text-zinc-300">__PITCH_HTML__</p>
-          <div class="mt-4 flex flex-wrap items-center gap-3 text-sm text-zinc-400">
-            <a class="font-medium text-sky-400 hover:text-sky-300" href="https://github.com/cashcon57/open-supersampling">GitHub repo</a>
+          <p class="text-xs font-semibold uppercase tracking-wide text-cyan-300">OpenSuperSampling</p>
+          <h1 class="mt-2 text-3xl font-semibold tracking-normal text-zinc-50 sm:text-4xl" data-text>Public training dashboard</h1>
+          <p class="mt-3 max-w-3xl text-sm leading-6 text-zinc-300" data-subtext>__PITCH_HTML__</p>
+          <div class="mt-4 flex flex-wrap items-center gap-3 text-sm text-zinc-400" data-subtext>
+            <a class="font-medium text-cyan-300 hover:text-cyan-200" href="https://github.com/cashcon57/open-supersampling">GitHub repo</a>
             <span class="hidden text-zinc-700 sm:inline">/</span>
             <span id="updated-line">updated just now</span>
             <span id="data-state" class="rounded border border-zinc-700 px-2 py-0.5 text-xs text-zinc-300">loading</span>
           </div>
         </div>
-        <button id="theme-toggle" class="inline-flex h-9 items-center justify-center rounded-md border border-zinc-700 px-3 text-sm text-zinc-200 hover:border-sky-500 hover:text-white" type="button">Light mode</button>
+        <button id="theme-toggle" class="inline-flex h-9 w-fit items-center justify-center rounded-md border border-zinc-700 px-3 text-sm text-zinc-200 hover:border-cyan-500 hover:text-white" type="button">Light mode</button>
       </div>
     </header>
 
-    <nav class="flex gap-2 overflow-x-auto border-b border-zinc-800 pb-2" aria-label="Dashboard sections">
-      <button class="tab-btn rounded-md bg-sky-500 px-3 py-2 text-sm font-medium text-white" data-tab="active" type="button">Active runs</button>
-      <button class="tab-btn rounded-md px-3 py-2 text-sm font-medium text-zinc-300 hover:bg-zinc-900" data-tab="result" type="button">Latest measured result</button>
-      <button class="tab-btn rounded-md px-3 py-2 text-sm font-medium text-zinc-300 hover:bg-zinc-900" data-tab="architecture" type="button">Architecture</button>
-    </nav>
-
-    <section id="tab-active" class="tab-panel flex flex-col gap-5">
-      <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h2 class="text-xl font-semibold text-zinc-50">Active v6.1 training signal</h2>
-          <p class="mt-1 text-sm text-zinc-400">Loss curves, held-out eval rows, and the latest in-flight visualization strips.</p>
+    <section class="grid gap-4 lg:grid-cols-[1.4fr_1fr_1fr]" aria-label="At a glance">
+      <article class="rounded-md border border-cyan-900/70 bg-cyan-950/20 p-4" data-surface>
+        <div class="flex items-center gap-2 text-sm font-medium text-cyan-200">
+          <span class="h-2.5 w-2.5 rounded-full bg-emerald-400"></span>
+          <span id="hero-active-status">training status loading</span>
         </div>
-        <label class="flex items-center gap-2 text-sm text-zinc-400">
-          <span>run</span>
-          <select id="run-select" class="rounded-md border border-zinc-700 bg-zinc-950 px-3 py-2 font-mono text-xs text-zinc-100"></select>
-        </label>
-      </div>
-
-      <div id="active-empty" class="hidden rounded-md border border-zinc-800 bg-zinc-900/60 p-5 text-sm text-zinc-300">
-        No active run data has been published yet. Once the operator configures the Tailscale secrets, this page will populate from the 3080 Ti training host.
-      </div>
-
-      <div id="active-content" class="grid gap-5 lg:grid-cols-2">
-        <article class="rounded-md border border-zinc-800 bg-zinc-900/60 p-4">
-          <div class="flex items-start justify-between gap-4">
-            <div>
-              <h3 id="active-title" class="text-base font-semibold text-zinc-50">Run</h3>
-              <p id="active-meta" class="mt-1 text-sm text-zinc-400">waiting for data</p>
-            </div>
-            <div class="grid grid-cols-2 gap-2 text-right text-xs">
-              <div class="rounded border border-zinc-800 px-3 py-2">
-                <div class="text-zinc-500">step</div>
-                <div id="active-step" class="font-mono text-base text-zinc-100">0</div>
-              </div>
-              <div class="rounded border border-zinc-800 px-3 py-2">
-                <div class="text-zinc-500">loss</div>
-                <div id="active-loss" class="font-mono text-base text-zinc-100">--</div>
-              </div>
-            </div>
-          </div>
-          <div class="chart-wrap mt-4">
-            <canvas id="loss-chart"></canvas>
-          </div>
-        </article>
-
-        <article class="rounded-md border border-zinc-800 bg-zinc-900/60 p-4">
-          <h3 class="text-base font-semibold text-zinc-50">Held-out eval</h3>
-          <p id="score-meta" class="mt-1 text-sm text-zinc-400">PSNR and LPIPS populate when score_log.json lands.</p>
-          <div class="chart-wrap mt-4">
-            <canvas id="score-chart"></canvas>
-          </div>
-        </article>
-
-        <article class="rounded-md border border-zinc-800 bg-zinc-900/60 p-4 lg:col-span-2">
-          <div class="flex items-center justify-between gap-4">
-            <h3 class="text-base font-semibold text-zinc-50">Visualization strip</h3>
-            <span id="viz-count" class="text-sm text-zinc-400">0 images</span>
-          </div>
-          <div id="viz-strip" class="viz-strip mt-4 flex gap-3 overflow-x-auto pb-2"></div>
-        </article>
-      </div>
-    </section>
-
-    <section id="tab-result" class="tab-panel hidden flex-col gap-5">
-      <div>
-        <h2 class="text-xl font-semibold text-zinc-50">Latest measured result</h2>
-        <p class="mt-1 text-sm text-zinc-400">v5-pixel-temporal final held-out eval on TartanAir oldtown.</p>
-      </div>
-      <div class="grid gap-4 sm:grid-cols-3">
-        <div class="rounded-md border border-zinc-800 bg-zinc-900/60 p-5">
-          <div class="text-sm uppercase text-zinc-500">PSNR</div>
-          <div class="mt-2 font-mono text-3xl font-semibold text-emerald-400">25.703</div>
-          <div class="mt-1 text-sm text-zinc-400">dB, higher is better</div>
-        </div>
-        <div class="rounded-md border border-zinc-800 bg-zinc-900/60 p-5">
-          <div class="text-sm uppercase text-zinc-500">LPIPS</div>
-          <div class="mt-2 font-mono text-3xl font-semibold text-emerald-400">0.1666</div>
-          <div class="mt-1 text-sm text-zinc-400">lower is better</div>
-        </div>
-        <div class="rounded-md border border-zinc-800 bg-zinc-900/60 p-5">
-          <div class="text-sm uppercase text-zinc-500">Temporal ratio</div>
-          <div class="mt-2 font-mono text-3xl font-semibold text-emerald-400">0.337x</div>
-          <div class="mt-1 text-sm text-zinc-400">versus v4 baseline</div>
-        </div>
-      </div>
-      <article class="rounded-md border border-zinc-800 bg-zinc-900/60 p-4">
-        <div class="flex items-center justify-between gap-4">
-          <h3 class="text-base font-semibold text-zinc-50">v5 examples</h3>
-          <span id="result-viz-count" class="text-sm text-zinc-400">0 images</span>
-        </div>
-        <div id="result-viz-strip" class="viz-strip mt-4 flex gap-3 overflow-x-auto pb-2"></div>
+        <h2 id="hero-active-title" class="mt-2 text-xl font-semibold text-zinc-50" data-text>v6.1 Pico</h2>
+        <p id="hero-active-meta" class="mt-1 text-sm text-zinc-300" data-subtext>waiting for metrics.json</p>
+      </article>
+      <article class="rounded-md border border-zinc-800 bg-zinc-900/60 p-4" data-surface>
+        <div class="text-sm uppercase text-zinc-500" data-dim>Latest measured result</div>
+        <div class="mt-2 font-mono text-2xl font-semibold text-emerald-300">25.703 dB</div>
+        <p class="mt-1 text-sm text-zinc-400" data-subtext>v5-pixel-temporal, LPIPS 0.1666, temporal ratio 0.337x</p>
+      </article>
+      <article id="hero-gpu" class="rounded-md border border-zinc-800 bg-zinc-900/60 p-4" data-surface>
+        <div class="text-sm uppercase text-zinc-500" data-dim>GPU usage</div>
+        <div class="mt-2 text-sm text-zinc-400" data-subtext>loading GPU status</div>
       </article>
     </section>
 
-    <section id="tab-architecture" class="tab-panel hidden flex-col gap-5">
-      <div class="rounded-md border border-zinc-800 bg-zinc-900/60 p-5">
-        <h2 class="text-xl font-semibold text-zinc-50">Architecture memo</h2>
-        <p class="mt-2 max-w-3xl text-sm leading-6 text-zinc-300">The canonical v6 design is the source of truth for the persistent Gaussian canvas, covariance-resampled rasterizer, cross-attention fusion path, and OSS-FX frame extrapolation plan.</p>
-        <a class="mt-4 inline-flex rounded-md border border-sky-500 px-3 py-2 text-sm font-medium text-sky-300 hover:bg-sky-500 hover:text-white" href="https://github.com/cashcon57/open-supersampling/blob/main/docs/superpowers/experiments/2026-05-05-v6-architecture-canonical.md">Open canonical memo</a>
+    <section class="flex flex-col gap-3" aria-labelledby="run-history-title">
+      <div class="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h2 id="run-history-title" class="text-xl font-semibold text-zinc-50" data-text>Run history</h2>
+          <p class="text-sm text-zinc-400" data-subtext>Active training first, then measured and superseded references.</p>
+        </div>
       </div>
+      <div id="run-history" class="flex flex-col gap-3"></div>
+      <div id="load-error" class="hidden rounded-md border border-red-900 bg-red-950/30 p-4 text-sm text-red-200"></div>
+    </section>
+
+    <section class="rounded-md border border-zinc-800 bg-zinc-900/60 p-5" data-surface>
+      <h2 class="text-xl font-semibold text-zinc-50" data-text>Architecture memo</h2>
+      <p class="mt-2 max-w-3xl text-sm leading-6 text-zinc-300" data-subtext>The canonical v6 design is the source of truth for the persistent Gaussian canvas, covariance-resampled rasterizer, cross-attention fusion path, and OSS-FX frame extrapolation plan.</p>
+      <a class="mt-4 inline-flex rounded-md border border-cyan-500 px-3 py-2 text-sm font-medium text-cyan-300 hover:bg-cyan-500 hover:text-zinc-950" href="https://github.com/cashcon57/open-supersampling/blob/main/docs/superpowers/experiments/2026-05-05-v6-architecture-canonical.md">Open canonical memo</a>
     </section>
   </main>
 
 <script>
 "use strict";
 
-let dashboardData = null;
-let lossChart = null;
-let scoreChart = null;
-
 const colors = {
   total: "#38bdf8",
   charbonnier: "#f59e0b",
-  lpips: "#f43f5e",
+  lpips: "#fb7185",
   psnr: "#34d399",
   bicubic: "#94a3b8",
 };
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[char]));
+}
 
 function fmtNumber(value, digits = 4) {
   if (value === undefined || value === null || Number.isNaN(Number(value))) return "--";
@@ -429,66 +482,6 @@ function runUrl(run, file) {
   return `runs/${encodeURIComponent(run.name)}/viz/${encodeURIComponent(file)}`;
 }
 
-function setTheme(light) {
-  document.documentElement.classList.toggle("dark", !light);
-  document.body.classList.toggle("light-mode", light);
-  document.body.classList.toggle("bg-white", light);
-  document.body.classList.toggle("text-zinc-950", light);
-  document.body.classList.toggle("bg-zinc-950", !light);
-  document.body.classList.toggle("text-zinc-100", !light);
-  localStorage.setItem("oss-dashboard-theme", light ? "light" : "dark");
-  document.getElementById("theme-toggle").textContent = light ? "Dark mode" : "Light mode";
-}
-
-function setupTabs() {
-  document.querySelectorAll(".tab-btn").forEach((button) => {
-    button.addEventListener("click", () => {
-      const tab = button.dataset.tab;
-      document.querySelectorAll(".tab-btn").forEach((item) => {
-        const active = item.dataset.tab === tab;
-        item.classList.toggle("bg-sky-500", active);
-        item.classList.toggle("text-white", active);
-        item.classList.toggle("text-zinc-300", !active);
-      });
-      document.querySelectorAll(".tab-panel").forEach((panel) => {
-        panel.classList.toggle("hidden", panel.id !== `tab-${tab}`);
-        panel.classList.toggle("flex", panel.id === `tab-${tab}`);
-      });
-    });
-  });
-}
-
-function makeLineChart(canvasId, yTitle) {
-  const ctx = document.getElementById(canvasId);
-  return new Chart(ctx, {
-    type: "line",
-    data: { datasets: [] },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      animation: false,
-      parsing: false,
-      interaction: { mode: "nearest", intersect: false },
-      scales: {
-        x: {
-          type: "linear",
-          title: { display: true, text: "step", color: "#a1a1aa" },
-          grid: { color: "rgba(113,113,122,0.22)" },
-          ticks: { color: "#a1a1aa" },
-        },
-        y: {
-          title: { display: true, text: yTitle, color: "#a1a1aa" },
-          grid: { color: "rgba(113,113,122,0.22)" },
-          ticks: { color: "#a1a1aa" },
-        },
-      },
-      plugins: {
-        legend: { labels: { color: "#d4d4d8", boxWidth: 12 } },
-      },
-    },
-  });
-}
-
 function xy(rows, key, ...aliases) {
   return (rows || []).map((row) => {
     let value = row[key];
@@ -501,13 +494,85 @@ function xy(rows, key, ...aliases) {
   }).filter(Boolean);
 }
 
-function renderVizStrip(hostId, countId, run, limit) {
-  const host = document.getElementById(hostId);
-  const count = document.getElementById(countId);
-  host.replaceChildren();
+function headlineValue(run, item) {
+  if (item.value !== undefined) return item.value;
+  if (item.value_from === "latest_step") return Number(run.latest_step || 0).toLocaleString();
+  if (item.value_from === "loss_total") {
+    const latest = run.latest_metrics || {};
+    return fmtNumber(latest.loss_total ?? latest.loss, 5);
+  }
+  return "--";
+}
 
+function setTheme(light) {
+  document.documentElement.classList.toggle("dark", !light);
+  document.body.classList.toggle("light-mode", light);
+  localStorage.setItem("oss-dashboard-theme", light ? "light" : "dark");
+  document.getElementById("theme-toggle").textContent = light ? "Dark mode" : "Light mode";
+}
+
+function chartOptions({ yTitle = "loss", lpipsAxis = false } = {}) {
+  const scales = {
+    x: {
+      type: "linear",
+      title: { display: true, text: "step", color: "#a1a1aa" },
+      grid: { color: "rgba(113,113,122,0.22)" },
+      ticks: { color: "#a1a1aa", maxTicksLimit: 6 },
+    },
+    y: {
+      title: { display: true, text: yTitle, color: "#a1a1aa" },
+      grid: { color: "rgba(113,113,122,0.22)" },
+      ticks: { color: "#a1a1aa", maxTicksLimit: 6 },
+    },
+  };
+  if (lpipsAxis) {
+    scales.y1 = {
+      type: "linear",
+      position: "right",
+      grid: { drawOnChartArea: false },
+      ticks: { color: "#a1a1aa", maxTicksLimit: 6 },
+      title: { display: true, text: "LPIPS", color: "#a1a1aa" },
+    };
+  }
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: false,
+    parsing: false,
+    interaction: { mode: "nearest", intersect: false },
+    scales,
+    plugins: { legend: { labels: { color: "#d4d4d8", boxWidth: 12 } } },
+  };
+}
+
+function renderLossChart(canvas, run) {
+  const rows = run.loss_curve || [];
+  const datasets = [
+    { label: "loss_total", yAxisID: "y", data: xy(rows, "loss_total", "loss"), borderColor: colors.total, backgroundColor: colors.total, pointRadius: 0, tension: 0 },
+    { label: "loss_charbonnier", yAxisID: "y1", data: xy(rows, "loss_charbonnier", "l1", "t_l1"), borderColor: colors.charbonnier, backgroundColor: colors.charbonnier, pointRadius: 0, tension: 0 },
+    { label: "loss_lpips", yAxisID: "y1", data: xy(rows, "loss_lpips", "t_lpips"), borderColor: colors.lpips, backgroundColor: colors.lpips, pointRadius: 0, tension: 0 },
+  ].filter((dataset) => dataset.data.length);
+  if (!datasets.length) return null;
+  return new Chart(canvas, { type: "line", data: { datasets }, options: chartOptions({ yTitle: "total loss", lpipsAxis: true }) });
+}
+
+function renderScoreTable(host, run) {
+  const rows = (run.score_log || []).slice(-6).reverse();
+  if (!rows.length) {
+    host.innerHTML = `<p class="rounded border border-zinc-800 bg-zinc-950/40 px-4 py-5 text-sm text-zinc-400" data-muted-surface data-subtext>No held-out score_log.json rows published for this run.</p>`;
+    return;
+  }
+  const keys = Array.from(new Set(rows.flatMap((row) => Object.keys(row))))
+    .filter((key) => /step|psnr|lpips|temporal|ratio|latency/i.test(key))
+    .slice(0, 6);
+  const head = keys.map((key) => `<th class="px-3 py-2 text-left font-medium">${escapeHtml(key)}</th>`).join("");
+  const body = rows.map((row) => `<tr class="border-t border-zinc-800">${keys.map((key) => `<td class="px-3 py-2 font-mono">${escapeHtml(fmtNumber(row[key], 4))}</td>`).join("")}</tr>`).join("");
+  host.innerHTML = `<div class="score-scroll overflow-x-auto rounded border border-zinc-800"><table class="min-w-full text-sm text-zinc-300"><thead class="bg-zinc-950/50 text-xs uppercase text-zinc-500"><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+}
+
+function renderVizStrip(host, run, limit) {
   const files = (run && run.viz_pngs ? run.viz_pngs : []).slice(-limit).reverse();
-  count.textContent = `${files.length} image${files.length === 1 ? "" : "s"}`;
+  host.replaceChildren();
   if (!files.length) {
     const empty = document.createElement("div");
     empty.className = "rounded border border-zinc-800 px-4 py-6 text-sm text-zinc-400";
@@ -515,12 +580,11 @@ function renderVizStrip(hostId, countId, run, limit) {
     host.appendChild(empty);
     return;
   }
-
   for (const file of files) {
     const frame = document.createElement("figure");
-    frame.className = "w-72 shrink-0";
+    frame.className = "viz-frame w-72 shrink-0";
     const img = document.createElement("img");
-    img.className = "aspect-video w-72 rounded border border-zinc-800 object-contain";
+    img.className = "aspect-video w-72 rounded border border-zinc-800 bg-black object-contain";
     img.loading = "lazy";
     img.alt = `${run.label} ${file}`;
     img.src = runUrl(run, file);
@@ -532,66 +596,120 @@ function renderVizStrip(hostId, countId, run, limit) {
   }
 }
 
-function renderActiveRun(run) {
-  const empty = document.getElementById("active-empty");
-  const content = document.getElementById("active-content");
-  if (!run) {
-    empty.classList.remove("hidden");
-    content.classList.add("hidden");
-    return;
+function gpuPanelHtml(run) {
+  const gpu = run.gpu_status;
+  if (!gpu) {
+    return `<div class="rounded-md border border-zinc-800 bg-zinc-950/40 p-4 opacity-70" data-muted-surface>
+      <div class="text-sm uppercase text-zinc-500" data-dim>GPU usage</div>
+      <div class="mt-2 text-sm text-zinc-400" data-subtext>GPU stats unavailable</div>
+      <p class="mt-1 text-xs text-zinc-500" data-dim>host offline or rsync failed</p>
+    </div>`;
   }
+  const pct = Math.max(0, Math.min(100, Number(gpu.memory_used_pct || 0)));
+  const roundedPct = Math.round(pct);
+  return `<div class="rounded-md border border-emerald-900/60 bg-emerald-950/20 p-4" data-surface>
+    <div class="flex items-center justify-between gap-3">
+      <div class="text-sm uppercase text-zinc-500" data-dim>GPU usage</div>
+      <div class="text-sm font-medium text-emerald-300">${escapeHtml(gpu.utilization_pct)}% util</div>
+    </div>
+    <div class="mt-3 h-2 rounded-full bg-zinc-800">
+      <div class="h-2 rounded-full bg-emerald-400" style="width: ${pct}%"></div>
+    </div>
+    <div class="mt-2 text-sm text-zinc-300" data-subtext>${escapeHtml(gpu.memory_used_mib)} / ${escapeHtml(gpu.memory_total_mib)} MiB (${roundedPct}%)</div>
+    <p class="mt-1 text-xs text-zinc-500" data-dim>${escapeHtml(gpu.gpu_name || "GPU")} sampled ${escapeHtml(agoText(gpu.captured_at))}</p>
+  </div>`;
+}
 
-  empty.classList.add("hidden");
-  content.classList.remove("hidden");
-  document.getElementById("active-title").textContent = run.label || run.name;
-  document.getElementById("active-meta").textContent = run.cached ? `${run.name} (cached)` : run.name;
-  document.getElementById("active-step").textContent = Number(run.latest_step || 0).toLocaleString();
-  const latest = run.latest_metrics || {};
-  document.getElementById("active-loss").textContent = fmtNumber(latest.loss_total ?? latest.loss, 5);
+function renderHero(data) {
+  const active = (data.runs || []).find((run) => run.active) || (data.runs || [])[0];
+  if (!active) return;
+  document.getElementById("hero-active-status").textContent = active.history?.status || "active run";
+  document.getElementById("hero-active-title").textContent = active.label || active.name;
+  const latest = active.latest_metrics || {};
+  document.getElementById("hero-active-meta").textContent = `step ${Number(active.latest_step || 0).toLocaleString()} / loss ${fmtNumber(latest.loss_total ?? latest.loss, 5)}`;
+  document.getElementById("hero-gpu").innerHTML = gpuPanelHtml(active).replace("rounded-md border ", "");
+}
 
+function renderRun(run, index) {
+  const history = run.history || {};
+  const activeClass = run.active ? "border-cyan-800 bg-cyan-950/20" : "border-zinc-800 bg-zinc-900/60";
+  const open = history.default_open ? "open" : "";
+  const headline = (history.headline || []).map((item) => `
+    <div class="rounded border border-zinc-800 bg-zinc-950/35 px-3 py-3" data-muted-surface>
+      <div class="text-xs uppercase text-zinc-500" data-dim>${escapeHtml(item.label)}</div>
+      <div class="mt-1 font-mono text-lg font-semibold text-zinc-100" data-text>${escapeHtml(headlineValue(run, item))}</div>
+      <div class="mt-1 text-xs text-zinc-500" data-dim>${escapeHtml(item.caption || "")}</div>
+    </div>`).join("");
+  const note = history.note ? `<p class="rounded border border-amber-900/60 bg-amber-950/20 px-4 py-3 text-sm text-amber-100">${escapeHtml(history.note)}</p>` : "";
+  const gpu = run.active ? gpuPanelHtml(run) : "";
+  const chartId = `loss-chart-${index}`;
+  const scoreId = `score-table-${index}`;
+  const vizId = `viz-strip-${index}`;
   const rows = run.loss_curve || [];
-  lossChart.data.datasets = [
-    { label: "loss_total", data: xy(rows, "loss_total", "loss"), borderColor: colors.total, backgroundColor: colors.total, pointRadius: 0, tension: 0 },
-    { label: "loss_charbonnier", data: xy(rows, "loss_charbonnier", "l1", "t_l1"), borderColor: colors.charbonnier, backgroundColor: colors.charbonnier, pointRadius: 0, tension: 0 },
-    { label: "loss_lpips", data: xy(rows, "loss_lpips", "t_lpips"), borderColor: colors.lpips, backgroundColor: colors.lpips, pointRadius: 0, tension: 0 },
-  ].filter((dataset) => dataset.data.length);
-  lossChart.update();
-
-  const scoreRows = run.score_log || [];
-  document.getElementById("score-meta").textContent = scoreRows.length
-    ? `${scoreRows.length} held-out eval row${scoreRows.length === 1 ? "" : "s"}`
-    : "No held-out eval rows published yet.";
-  scoreChart.data.datasets = [
-    { label: "model PSNR", yAxisID: "y", data: xy(scoreRows, "model_psnr_mean"), borderColor: colors.psnr, backgroundColor: colors.psnr, pointRadius: 2, tension: 0 },
-    { label: "bicubic PSNR", yAxisID: "y", data: xy(scoreRows, "bicubic_psnr_mean"), borderColor: colors.bicubic, backgroundColor: colors.bicubic, borderDash: [4, 4], pointRadius: 2, tension: 0 },
-    { label: "model LPIPS", yAxisID: "y1", data: xy(scoreRows, "model_lpips_mean"), borderColor: colors.lpips, backgroundColor: colors.lpips, pointRadius: 2, tension: 0 },
-  ].filter((dataset) => dataset.data.length);
-  scoreChart.update();
-
-  renderVizStrip("viz-strip", "viz-count", run, 8);
+  const chartBody = rows.length
+    ? `<div class="chart-wrap mt-3"><canvas id="${chartId}"></canvas></div>`
+    : `<p class="mt-3 rounded border border-zinc-800 bg-zinc-950/40 px-4 py-5 text-sm text-zinc-400" data-muted-surface data-subtext>No loss metrics published yet.</p>`;
+  return `<details ${open} class="rounded-md border ${activeClass}" data-surface>
+    <summary class="flex cursor-pointer items-start gap-3 p-4">
+      <span class="summary-chevron mt-1 text-zinc-500 transition-transform">›</span>
+      <span class="min-w-0 flex-1">
+        <span class="flex flex-wrap items-center gap-2">
+          <span class="text-base font-semibold text-zinc-50" data-text>${escapeHtml(run.label || run.name)}</span>
+          <span class="rounded border ${run.active ? "border-emerald-700 text-emerald-300" : "border-zinc-700 text-zinc-300"} px-2 py-0.5 text-xs">${escapeHtml(history.status || "")}</span>
+        </span>
+        <span class="mt-1 block text-sm text-zinc-400" data-subtext>${escapeHtml(history.summary || run.name)}</span>
+      </span>
+      <span class="hidden font-mono text-sm text-zinc-500 sm:block" data-dim>step ${Number(run.latest_step || 0).toLocaleString()}</span>
+    </summary>
+    <div class="grid gap-4 border-t border-zinc-800 p-4 lg:grid-cols-[1.15fr_0.85fr]">
+      <div class="flex flex-col gap-4">
+        <div class="grid gap-3 sm:grid-cols-3">${headline}</div>
+        ${gpu}
+        ${note}
+        <article class="rounded-md border border-zinc-800 bg-zinc-950/25 p-4" data-muted-surface>
+          <div class="flex items-center justify-between gap-3">
+            <h3 class="text-base font-semibold text-zinc-50" data-text>Loss curve</h3>
+            <span class="text-sm text-zinc-500" data-dim>${rows.length} points</span>
+          </div>
+          ${chartBody}
+        </article>
+      </div>
+      <div class="flex flex-col gap-4">
+        <article class="rounded-md border border-zinc-800 bg-zinc-950/25 p-4" data-muted-surface>
+          <h3 class="text-base font-semibold text-zinc-50" data-text>Held-out scores</h3>
+          <div id="${scoreId}" class="mt-3"></div>
+        </article>
+        <article class="rounded-md border border-zinc-800 bg-zinc-950/25 p-4" data-muted-surface>
+          <div class="flex items-center justify-between gap-3">
+            <h3 class="text-base font-semibold text-zinc-50" data-text>Viz strips</h3>
+            <span class="text-sm text-zinc-500" data-dim>${(run.viz_pngs || []).length} images</span>
+          </div>
+          <div id="${vizId}" class="viz-strip mt-3 flex gap-3 overflow-x-auto pb-2"></div>
+        </article>
+      </div>
+    </div>
+  </details>`;
 }
 
-function setupRunPicker(data) {
-  const select = document.getElementById("run-select");
-  select.replaceChildren();
-  const activeRuns = (data.runs || []).filter((run) => run.active);
-  const selectable = activeRuns.length ? activeRuns : (data.runs || []);
-  for (const run of selectable) {
-    const option = document.createElement("option");
-    option.value = run.name;
-    option.textContent = run.label || run.name;
-    select.appendChild(option);
-  }
-  select.disabled = selectable.length === 0;
-  select.addEventListener("change", () => {
-    renderActiveRun(selectable.find((run) => run.name === select.value));
+function renderRuns(data) {
+  const host = document.getElementById("run-history");
+  const runs = data.runs || [];
+  host.innerHTML = runs.map(renderRun).join("");
+  const charts = [];
+  runs.forEach((run, index) => {
+    const canvas = document.getElementById(`loss-chart-${index}`);
+    if (canvas) {
+      const chart = renderLossChart(canvas, run);
+      if (chart) charts.push(chart);
+    }
+    renderScoreTable(document.getElementById(`score-table-${index}`), run);
+    renderVizStrip(document.getElementById(`viz-strip-${index}`), run, 4);
   });
-  renderActiveRun(selectable[0] || null);
-}
-
-function renderMeasuredResult(data) {
-  const v5 = (data.runs || []).find((run) => run.name === "srcnn-v5-pixel-temporal-validated");
-  renderVizStrip("result-viz-strip", "result-viz-count", v5, 4);
+  host.querySelectorAll("details").forEach((details) => {
+    details.addEventListener("toggle", () => {
+      if (details.open) window.requestAnimationFrame(() => charts.forEach((chart) => chart.resize()));
+    });
+  });
 }
 
 async function loadDashboard() {
@@ -599,21 +717,22 @@ async function loadDashboard() {
   try {
     const response = await fetch("data.json", { cache: "no-store" });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    dashboardData = await response.json();
+    const data = await response.json();
     state.textContent = "loaded";
     state.classList.remove("border-zinc-700");
     state.classList.add("border-emerald-700", "text-emerald-300");
-    document.getElementById("updated-line").textContent = agoText(dashboardData.generated_at);
-    setupRunPicker(dashboardData);
-    renderMeasuredResult(dashboardData);
+    document.getElementById("updated-line").textContent = agoText(data.generated_at);
+    renderHero(data);
+    renderRuns(data);
     window.setInterval(() => {
-      document.getElementById("updated-line").textContent = agoText(dashboardData.generated_at);
+      document.getElementById("updated-line").textContent = agoText(data.generated_at);
     }, 30000);
   } catch (error) {
     state.textContent = "data load failed";
     state.classList.add("border-red-700", "text-red-300");
-    document.getElementById("active-empty").classList.remove("hidden");
-    document.getElementById("active-empty").textContent = `Could not load data.json: ${error.message}`;
+    const errorBox = document.getElementById("load-error");
+    errorBox.classList.remove("hidden");
+    errorBox.textContent = `Could not load data.json: ${error.message}`;
   }
 }
 
@@ -622,16 +741,6 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("theme-toggle").addEventListener("click", () => {
     setTheme(document.documentElement.classList.contains("dark"));
   });
-  setupTabs();
-  lossChart = makeLineChart("loss-chart", "loss");
-  scoreChart = makeLineChart("score-chart", "score");
-  scoreChart.options.scales.y1 = {
-    type: "linear",
-    position: "right",
-    grid: { drawOnChartArea: false },
-    ticks: { color: "#a1a1aa" },
-    title: { display: true, text: "LPIPS", color: "#a1a1aa" },
-  };
   loadDashboard();
 });
 </script>
@@ -640,11 +749,26 @@ document.addEventListener("DOMContentLoaded", () => {
 """
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--runs-dir", type=Path, default=RUNS_DIR)
+    parser.add_argument("--out", type=Path, default=PUBLIC_DIR)
+    return parser.parse_args()
+
+
 def main() -> None:
+    args = parse_args()
+    configure_paths(args.runs_dir, args.out)
     data = build_data()
     write_data(data)
     write_index(extract_pitch())
-    print(f"wrote {DATA_JSON.relative_to(ROOT)} and {INDEX_HTML.relative_to(ROOT)}")
+    try:
+        data_path = DATA_JSON.relative_to(ROOT)
+        index_path = INDEX_HTML.relative_to(ROOT)
+    except ValueError:
+        data_path = DATA_JSON
+        index_path = INDEX_HTML
+    print(f"wrote {data_path} and {index_path}")
 
 
 if __name__ == "__main__":

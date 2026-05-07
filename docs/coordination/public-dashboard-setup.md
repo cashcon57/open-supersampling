@@ -39,6 +39,7 @@ Default host settings in the workflow:
 - Runs allow-listed for public sync:
   - `srcnn-v6.1-pico-001`
   - `srcnn-v5-pixel-temporal-validated`
+  - `srcnn-prod-v4-lpips`
   - `srcnn-v6-pico-001`
 
 Optional repo variables if the SSH/rsync setup differs:
@@ -75,3 +76,11 @@ https://cashcon57.github.io/open-supersampling/dashboard-public/
 Each fetch is expected to transfer about 5 MB. At 144 scheduled runs per day,
 that is about 720 MB/day from the training host. Sanity-check the home
 connection before leaving the schedule enabled long term.
+
+**Data-source architecture.** The public dashboard pulls directly from the
+3080ti training host via GitHub Actions + Tailscale OAuth. The maintainer's
+local development machine is NOT in the loop - if it sleeps or goes offline,
+the public dashboard is unaffected. The only failure mode is the 3080ti going
+offline (training crash, reboot, ISP outage); in that case the GH Action's
+rsync step fails gracefully and the dashboard serves last-cached data with a
+visible "updated <X> min ago" stamp.
