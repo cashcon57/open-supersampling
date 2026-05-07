@@ -18,7 +18,17 @@
     details[open] .summary-chevron { transform: rotate(90deg); }
     details[open] .closed-hint { display: none; }
     .viz-strip { scrollbar-width: thin; }
-    .viz-button { cursor: zoom-in; }
+    .accordion-body { max-height: 0; overflow: hidden; opacity: 0.65; transition: max-height 320ms ease, opacity 220ms ease; }
+    details[open] .accordion-body { max-height: 2600px; opacity: 1; }
+    .viz-button { position: relative; cursor: zoom-in; transition: transform 180ms ease, filter 180ms ease; }
+    .viz-button:hover { transform: translateY(-3px); filter: saturate(1.08); }
+    .viz-overlay { position: absolute; inset: auto 0 0 0; display: flex; justify-content: center; background: linear-gradient(to top, rgba(0,0,0,0.78), rgba(0,0,0,0)); padding: 1.3rem 0.5rem 0.45rem; color: #ecfeff; opacity: 0; transition: opacity 160ms ease; pointer-events: none; }
+    .viz-button:hover .viz-overlay, .viz-button:focus-visible .viz-overlay { opacity: 1; }
+    .metric-card { transform-origin: center; transition: border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease, background-color 180ms ease; }
+    .metric-card:hover { border-color: rgba(34,211,238,0.65); transform: translateY(-1px); }
+    .metric-card.expanded { border-color: rgba(34,211,238,0.8); box-shadow: 0 0 0 1px rgba(34,211,238,0.2), 0 16px 44px rgba(8,145,178,0.12); transform: scale(1.015); }
+    .metric-sparkline { display: none; }
+    .metric-card.expanded .metric-sparkline { display: block; }
     .chart-wrap { height: 18rem; min-height: 16rem; max-width: 100%; overflow: hidden; }
     .chart-wrap canvas { max-width: 100% !important; }
     .lightbox {
@@ -49,6 +59,21 @@
       gap: 0.5rem;
       min-height: 3rem;
     }
+    .lightbox-tool {
+      min-height: 2.75rem;
+      border-radius: 9999px;
+      border: 1px solid rgba(212, 212, 216, 0.45);
+      background: rgba(24, 24, 27, 0.85);
+      padding: 0 0.875rem;
+      color: #f4f4f5;
+      font-size: 0.875rem;
+    }
+    .lightbox-tool[aria-pressed="false"],
+    .lightbox-tool:disabled {
+      border-color: rgba(113, 113, 122, 0.5);
+      color: #a1a1aa;
+    }
+    .lightbox-tool:disabled { cursor: not-allowed; }
     .lightbox-close {
       min-width: 3rem;
       min-height: 3rem;
@@ -60,6 +85,7 @@
       line-height: 1;
     }
     .lightbox-stage {
+      position: relative;
       display: flex;
       min-width: 0;
       min-height: 0;
@@ -74,6 +100,21 @@
       object-fit: contain;
       user-select: none;
     }
+    .lightbox-image.magnifier-active { cursor: crosshair; }
+    .lightbox-magnifier {
+      position: absolute;
+      width: 200px;
+      height: 200px;
+      display: none;
+      border: 2px solid rgba(244, 244, 245, 0.95);
+      border-radius: 9999px;
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+      image-rendering: pixelated;
+      pointer-events: none;
+      transform: translate(-50%, -50%);
+      z-index: 2;
+    }
+    .lightbox-magnifier.visible { display: block; }
     .lightbox-caption {
       min-height: 2rem;
       padding-top: 0.5rem;
@@ -99,6 +140,10 @@
     @media (prefers-reduced-motion: reduce) {
       .live-indicator.live .indicator-dot,
       .step-ticker-row.is-new { animation: none; }
+      .accordion-body,
+      .metric-card,
+      .viz-button,
+      .viz-overlay { transition: none; }
     }
     .light-mode { background: #f8fafc; color: #18181b; color-scheme: light; }
     .light-mode [data-surface] { background-color: rgba(255, 255, 255, 0.92) !important; border-color: #d4d4d8 !important; }
@@ -106,9 +151,10 @@
     .light-mode [data-text] { color: #18181b !important; }
     .light-mode [data-subtext] { color: #3f3f46 !important; }
     .light-mode [data-dim] { color: #71717a !important; }
-    @media (max-width: 640px) {
+      @media (max-width: 640px) {
       .chart-wrap { height: 15rem; }
       .viz-frame, .viz-frame img { width: 18rem; }
+      .lightbox-tool { min-height: 3rem; }
     }
   </style>
 </head>
@@ -173,10 +219,12 @@
   <dialog id="viz-lightbox" class="lightbox" aria-label="Visualization image viewer">
     <div class="lightbox-shell">
       <div class="lightbox-toolbar">
+        <button id="lightbox-magnifier-toggle" class="lightbox-tool" type="button" aria-pressed="true">&#128269; Magnifier</button>
         <button id="lightbox-close" class="lightbox-close" type="button" aria-label="Close visualization viewer">&times;</button>
       </div>
       <div id="lightbox-stage" class="lightbox-stage">
         <img id="lightbox-image" class="lightbox-image" alt="">
+        <div id="lightbox-magnifier" class="lightbox-magnifier" aria-hidden="true"></div>
       </div>
       <div id="lightbox-caption" class="lightbox-caption"></div>
     </div>
@@ -202,6 +250,8 @@ let pollTimer = null;
 let stampTimer = null;
 let lightboxItems = [];
 let lightboxIndex = 0;
+let magnifierEnabled = true;
+let magnifierPointerFine = window.matchMedia("(pointer: fine)").matches;
 let lastActiveStep = null;
 let trainingPulseState = {
   activeRunName: null,
@@ -337,6 +387,57 @@ function headlineValue(run, item) {
   return "--";
 }
 
+function metricKeyForHeadline(item) {
+  const from = String(item.value_from || "").toLowerCase();
+  const label = String(item.label || "").toLowerCase();
+  if (from === "latest_step" || /step/.test(label)) return "step";
+  if (from === "loss_total" || /loss/.test(label)) return "loss_total";
+  if (/lpips/.test(label)) return "lpips";
+  if (/psnr/.test(label)) return "psnr";
+  if (/temporal/.test(label)) return "temporal_ratio";
+  return null;
+}
+
+function valueForMetricRow(row, key) {
+  if (!row || !key) return null;
+  if (key === "step") return row.step;
+  if (key === "loss_total") return row.loss_total ?? row.loss;
+  if (key === "lpips") return row.loss_lpips ?? row.lpips ?? row.t_lpips;
+  if (key === "psnr") return row.psnr ?? row.t_psnr;
+  if (key === "temporal_ratio") return row.temporal_ratio ?? row.ratio;
+  return row[key];
+}
+
+function sparklinePoints(run, item) {
+  const key = metricKeyForHeadline(item);
+  if (!key) return [];
+  const sourceRows = (run.loss_curve || []).length ? run.loss_curve : (run.score_log || []);
+  return sourceRows.slice(-100).map((row, index) => ({
+    x: Number(row.step ?? index),
+    y: Number(valueForMetricRow(row, key)),
+  })).filter((point) => Number.isFinite(point.y));
+}
+
+function sparklineSvg(run, item) {
+  const points = sparklinePoints(run, item);
+  if (points.length < 2) {
+    return `<div class="metric-sparkline mt-3 text-xs text-zinc-500" data-dim>No series for this card.</div>`;
+  }
+  const width = 180;
+  const height = 42;
+  const minY = Math.min(...points.map((point) => point.y));
+  const maxY = Math.max(...points.map((point) => point.y));
+  const range = maxY - minY || 1;
+  const polyline = points.map((point, index) => {
+    const x = points.length === 1 ? 0 : (index / (points.length - 1)) * width;
+    const y = height - ((point.y - minY) / range) * height;
+    return `${fmtNumber(x, 2)},${fmtNumber(y, 2)}`;
+  }).join(" ");
+  return `<svg class="metric-sparkline mt-3 h-12 w-full overflow-visible" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(item.label)} sparkline">
+    <polyline points="${polyline}" fill="none" stroke="${colors.total}" stroke-width="2" vector-effect="non-scaling-stroke"></polyline>
+  </svg>`;
+}
+
 function setTheme(light) {
   document.documentElement.classList.toggle("dark", !light);
   document.body.classList.toggle("light-mode", light);
@@ -378,6 +479,20 @@ function chartOptions({ yTitle = "loss", componentAxis = false } = {}) {
   };
 }
 
+function chartTooltipLines(row, run) {
+  const lines = [
+    `loss_total: ${fmtNumber(row.loss_total ?? row.loss, 5)}`,
+    `loss_charbonnier: ${fmtNumber(row.loss_charbonnier ?? row.l1 ?? row.t_l1, 5)}`,
+    `loss_lpips: ${fmtNumber(row.loss_lpips ?? row.lpips ?? row.t_lpips, 5)}`,
+  ];
+  if (row.gpu_status) {
+    lines.push(`gpu_status: ${row.gpu_status}`);
+  } else if (run.gpu_status?.captured_at && Number(row.step || 0) === Number(run.latest_step || 0)) {
+    lines.push(`gpu_status: ${run.gpu_status.utilization_pct}% util, ${run.gpu_status.memory_used_mib}/${run.gpu_status.memory_total_mib} MiB`);
+  }
+  return lines;
+}
+
 function renderLossChart(canvas, run) {
   const rows = run.loss_curve || [];
   const datasets = [
@@ -399,7 +514,23 @@ function renderLossChart(canvas, run) {
     { label: "loss_lpips", yAxisID: "y1", data: xy(rows, "loss_lpips", "t_lpips"), borderColor: colors.lpips, backgroundColor: colors.lpips, pointRadius: 0, borderWidth: 1.5, tension: 0 },
   ].filter((dataset) => dataset.data.length);
   if (!datasets.length) return null;
-  return new Chart(canvas, { type: "line", data: { datasets }, options: chartOptions({ yTitle: "total loss", componentAxis: true }) });
+  const options = chartOptions({ yTitle: "total loss", componentAxis: true });
+  options.plugins.tooltip = {
+    callbacks: {
+      title(items) {
+        const row = rows[items[0]?.dataIndex] || {};
+        return `step ${Number(row.step || items[0]?.parsed?.x || 0).toLocaleString()}`;
+      },
+      label() {
+        return "";
+      },
+      afterBody(items) {
+        const row = rows[items[0]?.dataIndex] || {};
+        return chartTooltipLines(row, run);
+      },
+    },
+  };
+  return new Chart(canvas, { type: "line", data: { datasets }, options });
 }
 
 function renderScoreTable(host, run) {
@@ -443,7 +574,10 @@ function renderVizStrip(host, run, limit) {
     img.loading = "lazy";
     img.alt = `${run.label} ${file}`;
     img.src = runUrl(run, file);
-    button.appendChild(img);
+    const overlay = document.createElement("span");
+    overlay.className = "viz-overlay font-mono text-xs";
+    overlay.textContent = `step ${stepFromName(file).toLocaleString()}`;
+    button.append(img, overlay);
     const caption = document.createElement("figcaption");
     caption.className = "mt-2 text-center font-mono text-xs text-zinc-400";
     caption.textContent = `step ${stepFromName(file).toLocaleString()}`;
@@ -470,6 +604,7 @@ function showLightboxItem(index) {
   image.src = item.src;
   image.alt = `${item.runLabel} ${item.file}`;
   document.getElementById("lightbox-caption").textContent = lightboxCaption(item);
+  hideMagnifier();
 }
 
 function openLightbox(run, files, selectedFile) {
@@ -491,15 +626,67 @@ function closeLightbox() {
   if (dialog.open) dialog.close();
 }
 
+function updateMagnifierToggle() {
+  const button = document.getElementById("lightbox-magnifier-toggle");
+  magnifierPointerFine = window.matchMedia("(pointer: fine)").matches;
+  button.disabled = !magnifierPointerFine;
+  button.setAttribute("aria-pressed", magnifierEnabled && magnifierPointerFine ? "true" : "false");
+}
+
+function hideMagnifier() {
+  const magnifier = document.getElementById("lightbox-magnifier");
+  const image = document.getElementById("lightbox-image");
+  if (magnifier) magnifier.classList.remove("visible");
+  if (image) image.classList.remove("magnifier-active");
+}
+
+function showMagnifier(event) {
+  if (!magnifierEnabled || !magnifierPointerFine || event.pointerType !== "mouse") return;
+  const image = document.getElementById("lightbox-image");
+  const magnifier = document.getElementById("lightbox-magnifier");
+  if (!image.complete || !image.naturalWidth || !image.naturalHeight) return;
+  const imageRect = image.getBoundingClientRect();
+  const stageRect = document.getElementById("lightbox-stage").getBoundingClientRect();
+  const x = event.clientX - imageRect.left;
+  const y = event.clientY - imageRect.top;
+  if (x < 0 || y < 0 || x > imageRect.width || y > imageRect.height) {
+    hideMagnifier();
+    return;
+  }
+  const sourceX = (x / imageRect.width) * image.naturalWidth;
+  const sourceY = (y / imageRect.height) * image.naturalHeight;
+  magnifier.style.left = `${event.clientX - stageRect.left}px`;
+  magnifier.style.top = `${event.clientY - stageRect.top}px`;
+  magnifier.style.backgroundImage = `url("${image.currentSrc || image.src}")`;
+  magnifier.style.backgroundSize = `${image.naturalWidth * 4}px ${image.naturalHeight * 4}px`;
+  magnifier.style.backgroundPosition = `${100 - sourceX * 4}px ${100 - sourceY * 4}px`;
+  magnifier.classList.add("visible");
+  image.classList.add("magnifier-active");
+}
+
 function initLightbox() {
   const dialog = document.getElementById("viz-lightbox");
   const stage = document.getElementById("lightbox-stage");
+  const image = document.getElementById("lightbox-image");
+  const magnifierToggle = document.getElementById("lightbox-magnifier-toggle");
   document.getElementById("lightbox-close").addEventListener("click", closeLightbox);
+  magnifierToggle.addEventListener("click", () => {
+    magnifierEnabled = !magnifierEnabled;
+    updateMagnifierToggle();
+    hideMagnifier();
+  });
+  image.addEventListener("pointerenter", showMagnifier);
+  image.addEventListener("pointermove", showMagnifier);
+  image.addEventListener("pointerleave", hideMagnifier);
+  image.addEventListener("load", hideMagnifier);
+  window.matchMedia("(pointer: fine)").addEventListener("change", updateMagnifierToggle);
   dialog.addEventListener("close", () => {
     document.body.classList.remove("lightbox-open");
+    hideMagnifier();
   });
   dialog.addEventListener("cancel", () => {
     document.body.classList.remove("lightbox-open");
+    hideMagnifier();
   });
   dialog.addEventListener("click", (event) => {
     if (event.target === dialog || event.target === stage) closeLightbox();
@@ -514,6 +701,7 @@ function initLightbox() {
       showLightboxItem(lightboxIndex + 1);
     }
   });
+  updateMagnifierToggle();
 }
 
 function gpuPanelHtml(run) {
@@ -556,11 +744,12 @@ function renderRun(run, index, openByRun = new Map()) {
   const preservedOpen = openByRun.get(run.name);
   const open = (preservedOpen ?? history.default_open) ? "open" : "";
   const headline = (history.headline || []).map((item) => `
-    <div class="rounded border border-zinc-800 bg-zinc-950/35 px-3 py-3" data-muted-surface>
+    <button class="metric-card rounded border border-zinc-800 bg-zinc-950/35 px-3 py-3 text-left" type="button" data-metric-card data-muted-surface>
       <div class="text-xs uppercase text-zinc-500" data-dim>${escapeHtml(item.label)}</div>
       <div class="mt-1 font-mono text-lg font-semibold text-zinc-100" data-text>${escapeHtml(headlineValue(run, item))}</div>
       <div class="mt-1 text-xs text-zinc-500" data-dim>${escapeHtml(item.caption || "")}</div>
-    </div>`).join("");
+      ${sparklineSvg(run, item)}
+    </button>`).join("");
   const note = history.note ? `<p class="rounded border border-amber-900/60 bg-amber-950/20 px-4 py-3 text-sm text-amber-100">${escapeHtml(history.note)}</p>` : "";
   const gpu = run.active ? gpuPanelHtml(run) : "";
   const ticker = trainingTickerHtml(run);
@@ -587,7 +776,8 @@ function renderRun(run, index, openByRun = new Map()) {
         <span class="block font-mono">step ${Number(run.latest_step || 0).toLocaleString()}</span>
       </span>
     </summary>
-    <div class="grid min-w-0 gap-4 border-t border-zinc-800 p-4 lg:grid-cols-[1.15fr_0.85fr]">
+    <div class="accordion-body border-t border-zinc-800">
+    <div class="grid min-w-0 gap-4 p-4 lg:grid-cols-[1.15fr_0.85fr]">
       <div class="flex min-w-0 flex-col gap-4">
         <div class="grid min-w-0 gap-3 sm:grid-cols-3">${headline}</div>
         ${ticker}
@@ -614,6 +804,7 @@ function renderRun(run, index, openByRun = new Map()) {
           <div id="${vizId}" class="viz-strip mt-3 flex gap-3 overflow-x-auto pb-2"></div>
         </article>
       </div>
+    </div>
     </div>
   </details>`;
 }
