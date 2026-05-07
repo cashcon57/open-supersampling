@@ -171,6 +171,70 @@
     .chart-wrap { height: 18rem; min-height: 16rem; max-width: 100%; overflow: hidden; }
     .chart-wrap canvas { max-width: 100% !important; }
     .comparison-chart-wrap { height: 20rem; min-height: 18rem; }
+    .title-with-info {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      min-width: 0;
+    }
+    .info-btn {
+      display: inline-flex;
+      width: 1.35rem;
+      height: 1.35rem;
+      flex: 0 0 auto;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--oss-line-strong);
+      background: rgba(4, 8, 5, 0.86);
+      color: var(--oss-accent);
+      font-family: "JetBrains Mono", ui-monospace, monospace;
+      font-size: 0.68rem;
+      line-height: 1;
+      cursor: help;
+    }
+    .info-btn:hover,
+    .info-btn:focus-visible {
+      border-color: var(--oss-accent);
+      background: rgba(140, 255, 193, 0.12);
+      outline: none;
+      box-shadow: 0 0 0 2px rgba(140, 255, 193, 0.16);
+    }
+    .info-tooltip {
+      position: fixed;
+      z-index: 10000;
+      width: min(32ch, calc(100vw - 24px));
+      border: 1px solid var(--oss-line-strong);
+      background: rgba(0, 0, 0, 0.96);
+      color: var(--oss-subtext);
+      padding: 0.7rem 0.75rem;
+      font-family: "JetBrains Mono", ui-monospace, monospace;
+      font-size: 0.76rem;
+      line-height: 1.45;
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(-2px);
+      transition: opacity 200ms ease, transform 200ms ease;
+      box-shadow: 0 16px 44px rgba(0, 0, 0, 0.55), 0 0 20px rgba(140, 255, 193, 0.08);
+    }
+    .info-tooltip.is-open { opacity: 1; pointer-events: auto; transform: translateY(0); }
+    .info-tooltip p + p { margin-top: 0.65rem; }
+    .info-close {
+      display: none;
+      position: absolute;
+      top: 0.55rem;
+      right: 0.65rem;
+      color: var(--oss-accent);
+      font-size: 1.2rem;
+      line-height: 1;
+    }
+    .info-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      display: none;
+      background: rgba(0, 0, 0, 0.58);
+    }
+    .info-backdrop.is-open { display: block; }
     .chart-toggle {
       display: inline-flex;
       min-height: 2.75rem;
@@ -202,12 +266,13 @@
       padding: max(0.75rem, env(safe-area-inset-top)) max(0.75rem, env(safe-area-inset-right)) max(0.75rem, env(safe-area-inset-bottom)) max(0.75rem, env(safe-area-inset-left));
       background: rgba(0, 0, 0, 0.85);
     }
-    /* Viz strip imagery sits ABOVE the CRT shader overlay so pixels render
-       cleanly during peeping. The CRT canvas (#oss-crt-overlay) is at z-index 1. */
+    /* Viz strip gallery on the dashboard surface sits ABOVE the CRT shader
+       overlay (#oss-crt-overlay at z-index 1) so pixels render cleanly during
+       peeping. We DO NOT include lightbox imagery here — <dialog> top-layer
+       already escapes the shader, and lifting lightbox img/canvas to z-50
+       would put them above the Multi-Magnify overlay (z-2) and hide it. */
     .viz-frame img,
-    .viz-frame canvas,
-    .lightbox img,
-    .lightbox canvas {
+    .viz-frame canvas {
       position: relative;
       z-index: 50;
     }
@@ -377,6 +442,24 @@
       .viz-frame, .viz-frame img { width: 18rem; }
       .lightbox-tool { min-height: 3rem; }
       .magnifier-readout { display: none; }
+      .info-tooltip.is-sheet {
+        left: 0 !important;
+        right: 0;
+        top: auto !important;
+        bottom: 0;
+        width: 100vw;
+        max-width: none;
+        max-height: min(72dvh, 36rem);
+        overflow: auto;
+        padding: 1.1rem 1rem max(1.1rem, env(safe-area-inset-bottom));
+        border-right: 0;
+        border-bottom: 0;
+        border-left: 0;
+        transform: translateY(1rem);
+      }
+      .info-tooltip.is-sheet.is-open { transform: translateY(0); }
+      .info-tooltip.is-sheet .info-copy { padding-right: 2rem; }
+      .info-tooltip.is-sheet .info-close { display: inline-flex; }
     }
   </style>
 </head>
@@ -432,7 +515,7 @@
     <section class="rounded-md border border-zinc-800 bg-zinc-900/60 p-5" data-surface aria-labelledby="comparison-title">
       <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
-          <h2 id="comparison-title" class="text-xl font-semibold text-zinc-50" data-text>Held-out PSNR / LPIPS by version</h2>
+          <h2 id="comparison-title" class="title-with-info text-xl font-semibold text-zinc-50" data-text><span>Held-out PSNR / LPIPS by version</span><button class="info-btn" data-info-key="held-out-psnr" type="button" aria-label="What is this chart?">(i)</button></h2>
           <p class="mt-1 max-w-3xl text-sm text-zinc-400" data-subtext>OSS measured points against conservative DLSS / FSR / XeSS reference lines.</p>
         </div>
         <div class="flex flex-wrap gap-2">
@@ -443,11 +526,11 @@
       <div id="comparison-density-note" class="mt-3 hidden text-xs text-amber-200">(many overlapping lines — use checkbox above to hide older gens)</div>
       <div class="grid gap-4 mt-4 lg:grid-cols-2">
         <div>
-          <h3 class="text-sm font-semibold text-zinc-300 mb-2 font-mono">PSNR — higher is better</h3>
+          <h3 class="title-with-info text-sm font-semibold text-zinc-300 mb-2 font-mono"><span>PSNR — higher is better</span><button class="info-btn" data-info-key="held-out-psnr" type="button" aria-label="What is this chart?">(i)</button></h3>
           <div class="chart-wrap comparison-chart-wrap"><canvas id="cross-version-psnr-chart"></canvas></div>
         </div>
         <div>
-          <h3 class="text-sm font-semibold text-zinc-300 mb-2 font-mono">LPIPS — lower is better</h3>
+          <h3 class="title-with-info text-sm font-semibold text-zinc-300 mb-2 font-mono"><span>LPIPS — lower is better</span><button class="info-btn" data-info-key="held-out-lpips" type="button" aria-label="What is this chart?">(i)</button></h3>
           <div class="chart-wrap comparison-chart-wrap"><canvas id="cross-version-lpips-chart"></canvas></div>
         </div>
       </div>
@@ -525,6 +608,60 @@ const colors = {
   ossPoint: "#f4f4f5",
 };
 
+const INFO_COPY = {
+  loss: `Per-step training loss for the active run. Lower means the model is
+closer to the target on the training crops it sees during fitting.
+This is INTERNAL training loss — not the same as held-out metrics
+below. Total loss = sum of weighted components (charbonnier + LPIPS +
+multi-scale VGG + sobel + temporal-consistency + wavelet + GAN-G,
+GAN-D when applicable).`,
+  "loss-decomp": `Each component of the total loss plotted separately on log scale (so
+sub-percent-magnitude perceptual losses stay visible alongside the
+larger reconstruction losses). Click a series in the legend to hide
+it. The dominant components shift over training: charbonnier+LPIPS
+early, GAN-G+GAN-D after warmup. Lower is better for every series.`,
+  "psnr-live": `Per-step training-crop PSNR and LPIPS proxies. These run on the same
+crops the loss is computed on, so they are biased optimistically vs
+held-out evaluation (~3-5 dB high on PSNR vs the held-out batch).
+Use them to track training health, NOT as comparison-grade numbers.`,
+  "lpips-live": `Per-step training-crop PSNR and LPIPS proxies. These run on the same
+crops the loss is computed on, so they are biased optimistically vs
+held-out evaluation (~3-5 dB high on PSNR vs the held-out batch).
+Use them to track training health, NOT as comparison-grade numbers.`,
+  "held-out-psnr": `PSNR (or LPIPS) on the frozen TartanAir oldtown 64-frame held-out
+batch — the canonical evaluation OSS uses for cross-version
+comparison. Values are the model's mean over all 64 frames, scored
+against a fixed v5 manifest so versions are directly comparable.
+
+DLSS / FSR / XeSS reference lines are ESTIMATES from public sources:
+NVIDIA / AMD / Intel published values + Digital Foundry, TechPowerUp,
+Insider Gaming benchmark coverage, mostly on Cyberpunk 2077, Death
+Stranding, and Hitman 3. They are NOT measured on the OSS TartanAir
+oldtown batch. They establish order-of-magnitude context, not
+apples-to-apples comparison. Bicubic IS measured on the same OSS
+batch (solid line). OSS aims to publish head-to-head numbers on
+game-engine footage as the v6 cross-game-engine eval matures.`,
+  "held-out-lpips": `PSNR (or LPIPS) on the frozen TartanAir oldtown 64-frame held-out
+batch — the canonical evaluation OSS uses for cross-version
+comparison. Values are the model's mean over all 64 frames, scored
+against a fixed v5 manifest so versions are directly comparable.
+
+DLSS / FSR / XeSS reference lines are ESTIMATES from public sources:
+NVIDIA / AMD / Intel published values + Digital Foundry, TechPowerUp,
+Insider Gaming benchmark coverage, mostly on Cyberpunk 2077, Death
+Stranding, and Hitman 3. They are NOT measured on the OSS TartanAir
+oldtown batch. They establish order-of-magnitude context, not
+apples-to-apples comparison. Bicubic IS measured on the same OSS
+batch (solid line). OSS aims to publish head-to-head numbers on
+game-engine footage as the v6 cross-game-engine eval matures.`,
+  gpu: `Live GPU memory used + utilization on the active training host (3080
+Ti, 12 GB). Sampled by nvidia-smi during the watcher's push cycle
+(~30s). Memory near 12000 MiB is normal — Pico's working-set sizes
+to fit. Sustained 100% utilization means the GPU is bottlenecked on
+compute (good); persistently low utilization means we're bottlenecked
+on data-loading or CPU-side work.`,
+};
+
 const lossComponentDefs = [
   { key: "loss_charbonnier", label: "loss_charbonnier", color: colors.charbonnier, aliases: ["l1", "t_l1"] },
   { key: "loss_lpips", label: "loss_lpips", color: colors.lpips, aliases: ["lpips", "t_lpips"] },
@@ -571,6 +708,11 @@ let comparisonShowAll = false;
 let comparisonFullRange = false;
 let pendingIdleRender = null;
 let pendingIdleRenderFallback = null;
+let infoTooltip = null;
+let infoBackdrop = null;
+let infoHoverTimer = null;
+let infoHideTimer = null;
+let activeInfoButton = null;
 
 const comparisonReferenceLines = [
   { id: "bicubic", method: "Bicubic baseline", vendor: "OSS", latest: true, psnr: 23.909, lpips: 0.2945, color: colors.bicubic, dash: [], source: "measured directly on the OSS TartanAir oldtown held-out batch", nudge: -12 },
@@ -588,6 +730,115 @@ function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (char) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
   }[char]));
+}
+
+function infoButtonHtml(key) {
+  return `<button class="info-btn" data-info-key="${escapeHtml(key)}" type="button" aria-label="What is this chart?">(i)</button>`;
+}
+
+function tooltipHtml(copy) {
+  const paragraphs = String(copy || "").split(/\n\s*\n/).map((paragraph) =>
+    `<p>${escapeHtml(paragraph).replace(/\n/g, "<br>")}</p>`
+  ).join("");
+  return `<button class="info-close" type="button" aria-label="Close tooltip">&times;</button><div class="info-copy">${paragraphs}</div>`;
+}
+
+function ensureInfoTooltip() {
+  if (!infoBackdrop) {
+    infoBackdrop = document.createElement("div");
+    infoBackdrop.className = "info-backdrop";
+    infoBackdrop.addEventListener("click", hideAllTooltips);
+    document.body.appendChild(infoBackdrop);
+  }
+  if (!infoTooltip) {
+    infoTooltip = document.createElement("div");
+    infoTooltip.id = "chart-info-tooltip";
+    infoTooltip.className = "info-tooltip";
+    infoTooltip.setAttribute("role", "tooltip");
+    infoTooltip.addEventListener("click", (event) => {
+      if (event.target.closest(".info-close")) hideAllTooltips();
+      event.stopPropagation();
+    });
+    document.body.appendChild(infoTooltip);
+  }
+}
+
+function isMobileTooltip() {
+  return window.matchMedia("(max-width: 640px)").matches;
+}
+
+function showTooltip(button, copy) {
+  if (!button || !copy) return;
+  ensureInfoTooltip();
+  activeInfoButton = button;
+  button.setAttribute("aria-describedby", "chart-info-tooltip");
+  infoTooltip.className = "info-tooltip";
+  infoTooltip.innerHTML = tooltipHtml(copy);
+  infoTooltip.style.visibility = "hidden";
+  infoTooltip.style.left = "0px";
+  infoTooltip.style.top = "0px";
+  infoTooltip.classList.remove("is-open", "is-sheet");
+  infoBackdrop.classList.toggle("is-open", isMobileTooltip());
+  if (isMobileTooltip()) {
+    infoTooltip.classList.add("is-sheet");
+  } else {
+    const rect = button.getBoundingClientRect();
+    const tooltipRect = infoTooltip.getBoundingClientRect();
+    const width = tooltipRect.width || Math.min(360, window.innerWidth - 24);
+    const height = tooltipRect.height || 240;
+    const gap = 8;
+    const left = Math.max(12, Math.min(rect.left, window.innerWidth - width - 12));
+    const below = rect.bottom + gap;
+    const top = below + height <= window.innerHeight - 12
+      ? below
+      : Math.max(12, rect.top - height - gap);
+    infoTooltip.style.left = `${left}px`;
+    infoTooltip.style.top = `${top}px`;
+  }
+  infoTooltip.style.visibility = "";
+  window.requestAnimationFrame(() => infoTooltip?.classList.add("is-open"));
+}
+
+function hideAllTooltips() {
+  if (infoHoverTimer) window.clearTimeout(infoHoverTimer);
+  if (infoHideTimer) window.clearTimeout(infoHideTimer);
+  infoHoverTimer = null;
+  infoHideTimer = null;
+  if (activeInfoButton) activeInfoButton.removeAttribute("aria-describedby");
+  activeInfoButton = null;
+  infoTooltip?.classList.remove("is-open");
+  infoBackdrop?.classList.remove("is-open");
+}
+
+function setupInfoTooltips() {
+  document.querySelectorAll(".info-btn").forEach((button) => {
+    if (button.dataset.infoBound === "true") return;
+    button.dataset.infoBound = "true";
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      showTooltip(button, INFO_COPY[button.dataset.infoKey]);
+    });
+    button.addEventListener("mouseenter", () => {
+      if (isMobileTooltip()) return;
+      if (infoHideTimer) window.clearTimeout(infoHideTimer);
+      infoHoverTimer = window.setTimeout(() => showTooltip(button, INFO_COPY[button.dataset.infoKey]), 200);
+    });
+    button.addEventListener("mouseleave", () => {
+      if (infoHoverTimer) window.clearTimeout(infoHoverTimer);
+      infoHideTimer = window.setTimeout(hideAllTooltips, 120);
+    });
+    button.addEventListener("focus", () => showTooltip(button, INFO_COPY[button.dataset.infoKey]));
+    button.addEventListener("blur", () => {
+      if (!isMobileTooltip()) hideAllTooltips();
+    });
+  });
+  if (document.body.dataset.infoDocBound === "true") return;
+  document.body.dataset.infoDocBound = "true";
+  document.addEventListener("click", hideAllTooltips);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") hideAllTooltips();
+  });
+  window.addEventListener("resize", hideAllTooltips);
 }
 
 function fmtNumber(value, digits = 4) {
@@ -1619,7 +1870,9 @@ function gpuPanelHtml(run) {
   const gpu = run.gpu_status;
   if (!gpu) {
     return `<div class="rounded-md border border-zinc-800 bg-zinc-950/40 p-4 opacity-70" data-muted-surface>
-      <div class="text-sm uppercase text-zinc-500" data-dim>GPU usage</div>
+      <div class="flex items-center justify-between gap-3">
+        <div class="title-with-info text-sm uppercase text-zinc-500" data-dim><span>GPU usage</span>${infoButtonHtml("gpu")}</div>
+      </div>
       <div class="mt-2 text-sm text-zinc-400" data-subtext>GPU stats unavailable</div>
       <p class="mt-1 text-xs text-zinc-500" data-dim>host offline or rsync failed</p>
     </div>`;
@@ -1628,7 +1881,7 @@ function gpuPanelHtml(run) {
   const roundedPct = Math.round(pct);
   return `<div class="rounded-md border border-emerald-900/60 bg-emerald-950/20 p-4" data-surface>
     <div class="flex items-center justify-between gap-3">
-      <div class="text-sm uppercase text-zinc-500" data-dim>GPU usage</div>
+      <div class="title-with-info text-sm uppercase text-zinc-500" data-dim><span>GPU usage</span>${infoButtonHtml("gpu")}</div>
       <div class="text-sm font-medium text-emerald-300">${escapeHtml(gpu.utilization_pct)}% util</div>
     </div>
     <div class="mt-3 h-2 rounded-full bg-zinc-800">
@@ -1733,7 +1986,7 @@ function renderRun(run, index, openByRun = new Map()) {
         ${note}
         <article class="min-w-0 rounded-md border border-zinc-800 bg-zinc-950/25 p-4" data-muted-surface>
           <div class="flex items-center justify-between gap-3">
-            <h3 class="text-base font-semibold text-zinc-50" data-text>Loss curve</h3>
+            <h3 class="title-with-info text-base font-semibold text-zinc-50" data-text><span>Loss curve</span>${infoButtonHtml("loss")}</h3>
             <span class="text-sm text-zinc-500" data-dim>${rows.length} points</span>
           </div>
           ${directionHtml("loss_total")}
@@ -1741,7 +1994,7 @@ function renderRun(run, index, openByRun = new Map()) {
         </article>
         <article class="min-w-0 rounded-md border border-zinc-800 bg-zinc-950/25 p-4" data-muted-surface>
           <div class="flex items-center justify-between gap-3">
-            <h3 class="text-base font-semibold text-zinc-50" data-text>Live PSNR</h3>
+            <h3 class="title-with-info text-base font-semibold text-zinc-50" data-text><span>Live PSNR</span>${infoButtonHtml("psnr-live")}</h3>
             <span class="text-sm text-zinc-500" data-dim>training crops</span>
           </div>
           <div class="metric-direction" data-direction="higher">↑ higher is better. Training-crop PSNR is biased ~3-5 dB high vs held-out; x-axis is step within run.</div>
@@ -1749,7 +2002,7 @@ function renderRun(run, index, openByRun = new Map()) {
         </article>
         <article class="min-w-0 rounded-md border border-zinc-800 bg-zinc-950/25 p-4" data-muted-surface>
           <div class="flex items-center justify-between gap-3">
-            <h3 class="text-base font-semibold text-zinc-50" data-text>Live LPIPS</h3>
+            <h3 class="title-with-info text-base font-semibold text-zinc-50" data-text><span>Live LPIPS</span>${infoButtonHtml("lpips-live")}</h3>
             <span class="text-sm text-zinc-500" data-dim>training crops</span>
           </div>
           <div class="metric-direction" data-direction="lower">↓ lower is better. Training-crop LPIPS is biased versus held-out; x-axis is step within run.</div>
@@ -1757,7 +2010,7 @@ function renderRun(run, index, openByRun = new Map()) {
         </article>
         <article class="min-w-0 rounded-md border border-zinc-800 bg-zinc-950/25 p-4" data-muted-surface>
           <div class="flex items-center justify-between gap-3">
-            <h3 class="text-base font-semibold text-zinc-50" data-text>Loss decomposition</h3>
+            <h3 class="title-with-info text-base font-semibold text-zinc-50" data-text><span>Loss decomposition</span>${infoButtonHtml("loss-decomp")}</h3>
             <span class="text-sm text-zinc-500" data-dim>${rows.length} points</span>
           </div>
           <div class="metric-direction" data-direction="lower">↓ lower is better for every series.</div>
@@ -1766,7 +2019,7 @@ function renderRun(run, index, openByRun = new Map()) {
       </div>
       <div class="flex min-w-0 flex-col gap-4">
         <article class="min-w-0 rounded-md border border-zinc-800 bg-zinc-950/25 p-4" data-muted-surface>
-          <h3 class="text-base font-semibold text-zinc-50" data-text>Held-out scores</h3>
+          <h3 class="title-with-info text-base font-semibold text-zinc-50" data-text><span>Held-out scores</span>${infoButtonHtml("held-out-psnr")}</h3>
           <div class="metric-direction" data-direction="mixed">PSNR ↑ higher is better / LPIPS ↓ lower is better / temporal ratio ↓ lower is better</div>
           ${heldoutChartBody}
           <div id="${scoreId}" class="mt-3"></div>
@@ -1936,6 +2189,7 @@ function renderDashboard(data, options = {}) {
   comparisonCharts.forEach((chart) => {
     if (chart) activeCharts.push(chart);
   });
+  setupInfoTooltips();
   setLoadedState();
 }
 
@@ -1997,6 +2251,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initLightbox();
   initMetricCards();
   initComparisonControls();
+  setupInfoTooltips();
   startAsciiSpinner();
   pollDashboard();
   startLiveUpdates();
