@@ -841,7 +841,7 @@ function lineSpan(value, yAxisID, label, color, options = {}) {
   return {
     label,
     yAxisID,
-    data: [{ x: -0.15, y: value }, { x: 3.35, y: value }],
+    data: [{ x: -0.45, y: value }, { x: 3.55, y: value }],
     borderColor: color,
     backgroundColor: color,
     borderWidth: options.solid ? 1.5 : 1,
@@ -879,11 +879,16 @@ const crossVersionLabelPlugin = {
       ctx.globalAlpha = 1;
     });
     const missing = chart.options.plugins?.crossVersionMissing || [];
+    const versionLabels = chart.options.plugins?.crossVersionLabels || [];
     ctx.textAlign = "center";
     ctx.fillStyle = "#a1a1aa";
     missing.forEach((item) => {
       const x = scales.x.getPixelForValue(item.x);
       ctx.fillText(item.label, x, chartArea.top + 18);
+    });
+    versionLabels.forEach((label, index) => {
+      const x = scales.x.getPixelForValue(index);
+      ctx.fillText(label, x, chartArea.bottom - 8);
     });
     ctx.restore();
   },
@@ -954,11 +959,12 @@ function renderCrossVersionComparison(data) {
     scales: {
       x: {
         type: "linear",
-        min: -0.25,
-        max: 3.45,
+        min: -0.55,
+        max: 3.6,
         grid: { color: "rgba(113,113,122,0.18)" },
         ticks: {
           color: "#a1a1aa",
+          display: false,
           autoSkip: false,
           maxRotation: 0,
           stepSize: 1,
@@ -1017,6 +1023,7 @@ function renderCrossVersionComparison(data) {
         },
       },
       crossVersionMissing: missing,
+      crossVersionLabels: labels,
     },
   };
   return new Chart(canvas, { type: "line", data: { datasets }, options, plugins: [crossVersionLabelPlugin] });
