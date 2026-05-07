@@ -985,6 +985,13 @@ def train_step(
                 parts["v5_kd"] = 0.0
                 parts["lambda_v5_kd"] = 0.0
             total_g_loss = frame_loss if total_g_loss is None else total_g_loss + frame_loss
+            # Diagnostic output statistics — surfaced in the dashboard's
+            # "Output stats" chart so we can see if the model's output
+            # range is healthy (not collapsing to a constant, not
+            # exploding). Cheap; one mean+std per frame.
+            with torch.no_grad():
+                parts["sr_out_mean"] = float(pred.detach().float().mean())
+                parts["sr_out_std"] = float(pred.detach().float().std())
             for k, v in parts.items():
                 if k == "first_non_finite_component":
                     accum_parts.setdefault(k, v)
@@ -1070,6 +1077,17 @@ def train_step(
         "loss_tc": float(parts_avg.get("temporal", 0.0)),
         "loss_v5_kd": float(parts_avg.get("v5_kd", 0.0)),
         "lambda_v5_kd": float(parts_avg.get("lambda_v5_kd", 0.0)),
+        # PSNR (dB) averaged across trajectory frames, computed by
+        # V6CompositeLoss on each pred/target pair. Dashboard plots
+        # this directly. NOT a held-out PSNR — that's separately
+        # populated in score_log.json by sr_temporal_held_out.py.
+        "psnr_db": float(parts_avg.get("psnr", 0.0)),
+        # Output-stats diagnostics: dashboard's "Output stats" chart.
+        # Healthy output has mean ~ scene-mean (~ 0.4 for SDR natural
+        # images) and std > 0.05 (real signal variance, not collapsed
+        # to a constant). Computed on softplus/sigmoid output post-clamp.
+        "sr_out_mean": float(parts_avg.get("sr_out_mean", 0.0)),
+        "sr_out_std": float(parts_avg.get("sr_out_std", 0.0)),
         "d_step": 1.0 if d_fired else 0.0,
         "n_pruned": float(pruned),
         "canvas_count_after_frame0": canvas_count_after_frame0,

@@ -372,6 +372,19 @@ class V6CompositeLoss(nn.Module):
         in_dtype = pred.dtype
         parts: dict[str, Any] = {}
 
+        # PSNR — measured on the same pred/target the loss sees. Computed
+        # as -10*log10(MSE) on the [0,1]-clamped pair to match the held-out
+        # eval pipeline's convention. Reported in dB for the dashboard;
+        # NOT used as a training signal — the loss components below drive
+        # gradients.
+        with torch.autocast(device_type=pred.device.type, enabled=False):
+            p32 = pred.detach().float().clamp(0.0, 1.0)
+            t32 = target.detach().float().clamp(0.0, 1.0)
+            mse = (p32 - t32).square().mean()
+            # Floor MSE at 1e-10 so PSNR doesn't blow up at perfect match.
+            psnr_db = -10.0 * torch.log10(mse.clamp(min=1.0e-10))
+        parts["psnr"] = float(psnr_db.detach())
+
         # Charbonnier.
         l_char = charbonnier_loss(pred, target)
         parts["charbonnier"] = float(l_char.detach())

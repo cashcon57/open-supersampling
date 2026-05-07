@@ -1231,12 +1231,22 @@ async function refresh() {
     }).filter(p => p.y !== undefined && p.y !== null);
 
     setChart(charts.loss, [
-      { label: 'total loss', data: trainXY('loss'), borderColor: '#58a6ff', backgroundColor: '#58a6ff', tension: 0, pointRadius: 0 },
-      { label: 't_l1', data: trainXY('l1', 't_l1'), borderColor: '#d29922', backgroundColor: '#d29922', tension: 0, pointRadius: 0 },
-      { label: 'tp1_l1', data: trainXY('tp1_l1'), borderColor: '#a371f7', backgroundColor: '#a371f7', tension: 0, pointRadius: 0 },
-      { label: 't_lpips', data: trainXY('t_lpips'), borderColor: '#f85149', backgroundColor: '#f85149', tension: 0, pointRadius: 0 },
-      { label: 'tp1_lpips', data: trainXY('tp1_lpips'), borderColor: '#ff7b72', backgroundColor: '#ff7b72', tension: 0, pointRadius: 0 },
-      { label: 'tc (temporal-consistency)', data: trainXY('tc'), borderColor: '#3fb950', backgroundColor: '#3fb950', tension: 0, pointRadius: 0 },
+      // v6 trainer column names primary; v5 fallback aliases for backward
+      // compat with older runs. v5-only series (tp1_*) only render on v5
+      // rows; they stay empty for v6 runs.
+      { label: 'total',        data: trainXY('loss_total', 'loss'),                    borderColor: '#58a6ff', backgroundColor: '#58a6ff', tension: 0, pointRadius: 0 },
+      { label: 'charbonnier',  data: trainXY('loss_charbonnier', 'l1', 't_l1'),       borderColor: '#d29922', backgroundColor: '#d29922', tension: 0, pointRadius: 0 },
+      { label: 'LPIPS-VGG',    data: trainXY('loss_lpips', 't_lpips'),                borderColor: '#f85149', backgroundColor: '#f85149', tension: 0, pointRadius: 0 },
+      { label: 'multi-scale VGG', data: trainXY('loss_msvgg'),                         borderColor: '#a371f7', backgroundColor: '#a371f7', tension: 0, pointRadius: 0 },
+      { label: 'wavelet',      data: trainXY('loss_wavelet'),                          borderColor: '#bc8cff', backgroundColor: '#bc8cff', tension: 0, pointRadius: 0 },
+      { label: 'sobel edge',   data: trainXY('loss_sobel'),                            borderColor: '#ff7b72', backgroundColor: '#ff7b72', tension: 0, pointRadius: 0 },
+      { label: 'temporal',     data: trainXY('loss_tc', 'tc'),                         borderColor: '#3fb950', backgroundColor: '#3fb950', tension: 0, pointRadius: 0 },
+      { label: 'GAN-G',        data: trainXY('loss_gan_g'),                            borderColor: '#56d364', backgroundColor: '#56d364', tension: 0, pointRadius: 0 },
+      { label: 'GAN-D',        data: trainXY('loss_gan_d'),                            borderColor: '#7ee787', backgroundColor: '#7ee787', tension: 0, pointRadius: 0 },
+      { label: 'v5-KD',        data: trainXY('loss_v5_kd'),                            borderColor: '#79c0ff', backgroundColor: '#79c0ff', tension: 0, pointRadius: 0 },
+      // v5-only series — empty for v6 runs.
+      { label: 'tp1_l1',       data: trainXY('tp1_l1'),                                borderColor: '#a371f7', backgroundColor: '#a371f7', tension: 0, pointRadius: 0 },
+      { label: 'tp1_lpips',    data: trainXY('tp1_lpips'),                             borderColor: '#ff7b72', backgroundColor: '#ff7b72', tension: 0, pointRadius: 0 },
     ]);
 
     // Throughput series: rolling steps/min computed from train-row timestamps.
@@ -1278,15 +1288,29 @@ async function refresh() {
     const evalXY = (key) => scoreRows
       .map(r => ({ x: r.step, y: r[key] }))
       .filter(p => p.y !== undefined && p.y !== null);
-    // Live training-time PSNR proxy (rough: −10·log10(t_l1²) when t_l1 ≈ sqrt(MSE)).
-    // Captures the relative trend; absolute values may differ from held-out PSNR
-    // by 1-2 dB. Refresh once held-out eval rows arrive in score_log.json.
+    // Live training-time PSNR.
+    // v6 trainer (post-fix) writes ``psnr_db`` directly per step
+    // (computed in V6CompositeLoss on each pred/target pair, averaged
+    // across trajectory frames).
+    // For older v6 rows (no psnr_db), fall back to charbonnier proxy:
+    //   psnr ≈ -10*log10(charbonnier²) — charbonnier ≈ |pred-target|
+    //   so this is the L1 proxy, off from true MSE-PSNR by 1-2 dB but
+    //   the relative trend is correct.
+    // For v5 rows, ``l1`` / ``t_l1`` was the field name; same proxy.
     const trainPsnrXY = train.map(r => {
-      const v = (r.l1 != null) ? r.l1 : r.t_l1;
+      if (r.psnr_db != null) return { x: r.step, y: r.psnr_db };
+      const v = (r.loss_charbonnier != null) ? r.loss_charbonnier
+              : (r.l1 != null)               ? r.l1
+              : r.t_l1;
       if (v == null || v <= 0) return null;
       return { x: r.step, y: -10 * Math.log10(v * v) };
     }).filter(p => p !== null);
-    const trainLpipsXY = trainXY('t_lpips');
+    // v6 writes loss_lpips; v5 wrote t_lpips. Both are LPIPS-VGG.
+    const trainLpipsXY = train.map(r => {
+      const v = (r.loss_lpips != null) ? r.loss_lpips : r.t_lpips;
+      if (v == null) return null;
+      return { x: r.step, y: v };
+    }).filter(p => p !== null);
 
     setChart(charts.psnr, [
       { label: 'live train PSNR proxy', data: trainPsnrXY, borderColor: '#58a6ff', backgroundColor: '#58a6ff', tension: 0, pointRadius: 0 },
