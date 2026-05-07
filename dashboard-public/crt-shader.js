@@ -388,18 +388,30 @@ export async function mountCRT(_root, { defaultEnabled = false, defaultHDR = tru
   let enabled  = false;
   let lastActivity = performance.now();
   let rafId    = 0;
+  let idleLogged = false;
   const start = performance.now();
 
   const tick = () => {
     if (!enabled) { rafId = 0; return; }
     const now = performance.now();
-    if (now - lastActivity > IDLE_PAUSE_MS) { rafId = 0; return; }
+    if (now - lastActivity > IDLE_PAUSE_MS) {
+      rafId = 0;
+      if (!idleLogged) {
+        console.debug('crt: animation paused after idle');
+        idleLogged = true;
+      }
+      return;
+    }
     backend.draw((now - start) / 1000);
     rafId = requestAnimationFrame(tick);
   };
   const wake = () => {
     lastActivity = performance.now();
-    if (enabled && !rafId) rafId = requestAnimationFrame(tick);
+    if (enabled && !rafId) {
+      if (idleLogged) console.debug('crt: animation resumed');
+      idleLogged = false;
+      rafId = requestAnimationFrame(tick);
+    }
   };
   ['scroll','wheel','touchstart','pointermove','pointerdown','keydown'].forEach(ev =>
     window.addEventListener(ev, wake, { passive: true })

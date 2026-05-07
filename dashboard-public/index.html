@@ -50,6 +50,8 @@
       pointer-events: none;
       background: repeating-linear-gradient(0deg, rgba(255,255,255,0.018) 0 1px, transparent 1px 3px);
       mix-blend-mode: screen;
+      transform: translateZ(0);
+      will-change: transform;
       z-index: 9999;
     }
     .font-mono, code, pre, .live-indicator, .lightbox-caption, .metric-direction { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important; }
@@ -65,7 +67,22 @@
     .metric-card, .rounded, .rounded-md, .rounded-lg, .rounded-full { border-radius: 0 !important; }
     .lightbox-shell { border-radius: 8px !important; }
     .viz-frame img, .viz-button { border-radius: 4px !important; }
-    .terminal-divider { color: var(--oss-dim); font-size: 0.78rem; overflow: hidden; white-space: nowrap; }
+    .terminal-divider {
+      display: flex;
+      align-items: center;
+      color: var(--oss-dim);
+      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.78rem;
+      overflow: hidden;
+      white-space: nowrap;
+    }
+    .terminal-divider .td-corner { flex: 0 0 auto; }
+    .terminal-divider .td-rule {
+      flex: 1 1 auto;
+      height: 1px;
+      background: currentColor;
+      align-self: center;
+    }
     .oss-logo { display: block; width: min(100%, 600px); height: auto; filter: drop-shadow(0 0 16px rgba(110, 231, 183, 0.16)); }
     .oss-mark {
       width: max-content;
@@ -78,12 +95,23 @@
     }
     .ascii-spinner {
       display: inline-block;
+      position: relative;
       min-width: 5ch;
+      height: 1em;
       color: var(--oss-accent);
       font-family: "JetBrains Mono", ui-monospace, monospace;
       font-variant-ligatures: none;
       text-align: left;
       text-shadow: 0 0 10px rgba(140, 255, 193, 0.28);
+      vertical-align: -0.08em;
+      contain: content;
+    }
+    .ascii-spinner .spin-frame {
+      position: absolute;
+      inset: 0 auto auto 0;
+      opacity: 0;
+      animation: ascii-spinner-frame 2664ms steps(1, end) infinite;
+      animation-delay: calc(var(--frame) * 333ms);
     }
     .ascii-spinner[data-static="true"] {
       color: var(--oss-dim);
@@ -92,6 +120,15 @@
     .cursor-blink {
       animation: step-blink 1s steps(1, end) infinite;
       color: var(--oss-accent);
+      will-change: opacity;
+    }
+    .deferred-section {
+      content-visibility: auto;
+      contain-intrinsic-size: 900px;
+    }
+    .canonical-card {
+      content-visibility: auto;
+      contain-intrinsic-size: 280px;
     }
     .initial-loader {
       display: flex;
@@ -296,7 +333,7 @@
     .live-indicator { display: inline-flex; align-items: center; gap: 0.35rem; border: 1px solid rgba(113,113,122,0.55); padding: 0.08rem 0.42rem; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; font-size: 0.72rem; font-weight: 600; line-height: 1.2; vertical-align: middle; }
     .live-indicator.live { border-color: rgba(52,211,153,0.7); color: #6ee7b7; }
     .live-indicator.idle { color: #a1a1aa; }
-    .terminal-cursor { animation: step-blink 1s steps(1, end) infinite; color: var(--oss-accent); }
+    .terminal-cursor { animation: step-blink 1s steps(1, end) infinite; color: var(--oss-accent); will-change: opacity; }
     .training-progress-track { height: 0.55rem; border: 1px solid var(--oss-line); background: rgba(0,0,0,0.55); }
     .training-progress-fill { height: 100%; background: linear-gradient(90deg, var(--oss-accent), var(--gold)); box-shadow: 0 0 16px rgba(110,231,183,0.35); }
     .step-ticker-row.is-new { animation: ticker-slide 620ms cubic-bezier(0.2, 0.8, 0.2, 1); }
@@ -312,9 +349,16 @@
       0%, 49% { opacity: 1; }
       50%, 100% { opacity: 0; }
     }
+    @keyframes ascii-spinner-frame {
+      0%, 12.49% { opacity: 1; }
+      12.5%, 100% { opacity: 0; }
+    }
     @media (prefers-reduced-motion: reduce) {
       .cursor-blink,
+      .terminal-cursor,
+      .ascii-spinner .spin-frame,
       .step-ticker-row.is-new { animation: none; }
+      .ascii-spinner .spin-frame:first-child { opacity: 1; }
       .accordion-body,
       .metric-card,
       .viz-button,
@@ -361,7 +405,7 @@
       </div>
     </header>
 
-    <div class="terminal-divider" aria-hidden="true">┌─ signal ─────────────────────────────────────────────────────────────────────────────┐</div>
+    <div class="terminal-divider" aria-hidden="true"><span class="td-corner">┌─ signal ─</span><span class="td-rule"></span><span class="td-corner">─┐</span></div>
     <section class="grid items-start gap-4 lg:grid-cols-[1.4fr_1fr_1fr]" aria-label="At a glance">
       <article class="rounded-md border border-cyan-900/70 bg-cyan-950/20 p-4" data-surface>
         <div class="flex items-center gap-2 text-sm font-medium text-cyan-200">
@@ -384,7 +428,7 @@
       </article>
     </section>
 
-    <div class="terminal-divider" aria-hidden="true">├─ industry context ───────────────────────────────────────────────────────────────────┤</div>
+    <div class="terminal-divider" aria-hidden="true"><span class="td-corner">├─ industry context ─</span><span class="td-rule"></span><span class="td-corner">─┤</span></div>
     <section class="rounded-md border border-zinc-800 bg-zinc-900/60 p-5" data-surface aria-labelledby="comparison-title">
       <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
@@ -411,8 +455,8 @@
       <p class="mt-2 text-xs leading-5 text-zinc-500" data-dim>Sources: bicubic is measured on the OSS TartanAir oldtown batch; FSR references use AMD GPUOpen/FidelityFX documentation plus Digital Foundry/Insider Gaming comparisons; XeSS references use Intel XeSS paper and game-benchmark coverage; DLSS references use NVIDIA DLSS publications plus Digital Foundry/TechPowerUp comparisons. Values are favorable competitor-side reference anchors, not OSS-measured head-to-head scores.</p>
     </section>
 
-    <div class="terminal-divider" aria-hidden="true">├─ lineage ────────────────────────────────────────────────────────────────────────────┤</div>
-    <section class="flex flex-col gap-3" aria-labelledby="run-history-title">
+    <div class="terminal-divider" aria-hidden="true"><span class="td-corner">├─ lineage ─</span><span class="td-rule"></span><span class="td-corner">─┤</span></div>
+    <section class="deferred-section flex flex-col gap-3" aria-labelledby="run-history-title">
       <div class="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h2 id="run-history-title" class="text-xl font-semibold text-zinc-50" data-text>Inspect training lineage</h2>
@@ -420,14 +464,14 @@
         </div>
       </div>
       <div id="initial-loader" class="initial-loader">
-        <span class="ascii-spinner" aria-hidden="true">[░░░]</span><span class="cursor-blink" aria-hidden="true">▋</span>
+        <span class="ascii-spinner" aria-hidden="true"><span class="spin-frame" style="--frame: 0">[░░░]</span><span class="spin-frame" style="--frame: 1">[█░░]</span><span class="spin-frame" style="--frame: 2">[██░]</span><span class="spin-frame" style="--frame: 3">[███]</span><span class="spin-frame" style="--frame: 4">[▓██]</span><span class="spin-frame" style="--frame: 5">[░██]</span><span class="spin-frame" style="--frame: 6">[░░█]</span><span class="spin-frame" style="--frame: 7">[░░░]</span></span><span class="cursor-blink" aria-hidden="true">▋</span>
         <span class="font-mono text-sm">loading dashboard data...</span>
       </div>
       <div id="run-history" class="flex flex-col gap-3"></div>
       <div id="load-error" class="hidden rounded-md border border-red-900 bg-red-950/30 p-4 text-sm text-red-200"></div>
     </section>
 
-    <section class="rounded-md border border-zinc-800 bg-zinc-900/60 p-5" data-surface>
+    <section class="canonical-card rounded-md border border-zinc-800 bg-zinc-900/60 p-5" data-surface>
       <h2 class="text-xl font-semibold text-zinc-50" data-text>Read canonical v6 design</h2>
       <p class="mt-2 max-w-3xl text-sm leading-6 text-zinc-300" data-subtext>The canonical v6 design is the source of truth for the persistent Gaussian canvas, covariance-resampled rasterizer, cross-attention fusion path, and OSS-FX frame extrapolation plan.</p>
       <a class="mt-4 inline-flex rounded-md border border-cyan-500 px-3 py-2 text-sm font-medium text-cyan-300 hover:bg-cyan-500 hover:text-zinc-950" href="https://github.com/cashcon57/open-supersampling/blob/main/docs/superpowers/experiments/2026-05-05-v6-architecture-canonical.md">Open canonical memo</a>
@@ -449,7 +493,7 @@
         <button id="lightbox-close" class="lightbox-close" type="button" aria-label="Close visualization viewer">&times;</button>
       </div>
       <div id="lightbox-stage" class="lightbox-stage">
-        <img id="lightbox-image" class="lightbox-image" alt="">
+        <img id="lightbox-image" class="lightbox-image" alt="" decoding="async" fetchpriority="low">
         <div id="multi-magnifier" class="multi-magnifier" aria-hidden="true">
           <div id="multi-lens-a" class="multi-lens"><canvas id="multi-canvas-a" width="140" height="140"></canvas><span id="multi-label-a" class="multi-lens-label"></span></div>
           <div id="multi-lens-b" class="multi-lens"><canvas id="multi-canvas-b" width="140" height="140"></canvas><span id="multi-label-b" class="multi-lens-label"></span></div>
@@ -523,10 +567,10 @@ let trainingPulseState = {
   stagnantPolls: 0,
 };
 let stagnantActivePolls = 0;
-const asciiSpinnerFrames = ["[░░░]", "[█░░]", "[██░]", "[███]", "[▓██]", "[░██]", "[░░█]", "[░░░]"];
-let asciiSpinnerIndex = 0;
 let comparisonShowAll = false;
 let comparisonFullRange = false;
+let pendingIdleRender = null;
+let pendingIdleRenderFallback = null;
 
 const comparisonReferenceLines = [
   { id: "bicubic", method: "Bicubic baseline", vendor: "OSS", latest: true, psnr: 23.909, lpips: 0.2945, color: colors.bicubic, dash: [], source: "measured directly on the OSS TartanAir oldtown held-out batch", nudge: -12 },
@@ -673,18 +717,16 @@ function trainingIndicatorHtml(run) {
   if (!run?.active) return "";
   const live = trainingPulseState.activeRunName === run.name && trainingPulseState.live;
   return `<span class="live-indicator ${live ? "live" : "idle"}" aria-label="${live ? "live training" : "idle training"}">
-    ${live ? `<span class="ascii-spinner" aria-hidden="true">[░░░]</span><span>live</span><span class="cursor-blink" aria-hidden="true">▋</span>` : `<span class="ascii-spinner" data-static="true" aria-hidden="true">[___]</span><span>idle</span>`}
+    ${live ? `${spinnerHtml()}<span>live</span><span class="cursor-blink" aria-hidden="true">▋</span>` : `<span class="ascii-spinner" data-static="true" aria-hidden="true">[___]</span><span>idle</span>`}
   </span>`;
 }
 
+function spinnerHtml() {
+  return `<span class="ascii-spinner" aria-hidden="true"><span class="spin-frame" style="--frame: 0">[░░░]</span><span class="spin-frame" style="--frame: 1">[█░░]</span><span class="spin-frame" style="--frame: 2">[██░]</span><span class="spin-frame" style="--frame: 3">[███]</span><span class="spin-frame" style="--frame: 4">[▓██]</span><span class="spin-frame" style="--frame: 5">[░██]</span><span class="spin-frame" style="--frame: 6">[░░█]</span><span class="spin-frame" style="--frame: 7">[░░░]</span></span>`;
+}
+
 function startAsciiSpinner() {
-  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-  window.setInterval(() => {
-    asciiSpinnerIndex += 1;
-    document.querySelectorAll(".ascii-spinner:not([data-static='true'])").forEach((el) => {
-      el.textContent = asciiSpinnerFrames[asciiSpinnerIndex % asciiSpinnerFrames.length];
-    });
-  }, 333);
+  // Kept as an init hook for older dashboard passes; animation is now CSS-only.
 }
 
 function trainingTickerHtml(run) {
@@ -814,6 +856,8 @@ function chartOptions({ yTitle = "loss", componentAxis = false, logY = false, in
     maintainAspectRatio: false,
     animation: false,
     parsing: false,
+    normalized: true,
+    events: ["mousemove", "click"],
     interaction: { mode: indexTooltip ? "index" : "nearest", intersect: false },
     scales,
     plugins: { legend: { labels: { color: "#d4d4d8", boxWidth: 12 } } },
@@ -973,6 +1017,8 @@ function renderSingleMetricComparison(data, metric, opts) {
     maintainAspectRatio: false,
     animation: false,
     parsing: false,
+    normalized: true,
+    events: ["mousemove", "click"],
     interaction: { mode: "nearest", intersect: false },
     scales: {
       x: {
@@ -1221,6 +1267,8 @@ function renderVizStrip(host, run, limit) {
     const img = document.createElement("img");
     img.className = "aspect-video w-72 rounded border border-zinc-800 bg-black object-contain";
     img.loading = "lazy";
+    img.decoding = "async";
+    img.fetchPriority = "low";
     img.alt = `${run.label} ${file}`;
     img.src = runUrl(run, file);
     const overlay = document.createElement("span");
@@ -1259,6 +1307,8 @@ function showLightboxItem(index) {
   }
   populateCompareSelectors();
   image.src = item.src;
+  image.decoding = "async";
+  image.fetchPriority = "low";
   image.alt = `${item.runLabel} ${item.file}`;
   document.getElementById("lightbox-caption").textContent = lightboxCaption(item);
   hideMagnifier();
@@ -1903,12 +1953,39 @@ async function pollDashboard() {
   }
 }
 
+function scheduleDashboardRender(data) {
+  if (pendingIdleRender !== null && "cancelIdleCallback" in window) {
+    window.cancelIdleCallback(pendingIdleRender);
+  }
+  if (pendingIdleRenderFallback !== null) {
+    window.clearTimeout(pendingIdleRenderFallback);
+  }
+  const run = () => {
+    pendingIdleRender = null;
+    pendingIdleRenderFallback = null;
+    renderDashboard(data);
+  };
+  if ("requestIdleCallback" in window) {
+    pendingIdleRender = window.requestIdleCallback(run, { timeout: 1500 });
+  } else {
+    pendingIdleRenderFallback = window.setTimeout(run, 100);
+  }
+}
+
+async function pollDashboardIdle() {
+  try {
+    scheduleDashboardRender(await fetchDashboardData());
+  } catch (error) {
+    setRetryingState(error, Boolean(lastKnownData));
+  }
+}
+
 function startLiveUpdates() {
   if (!stampTimer) {
     stampTimer = window.setInterval(updateStamp, STAMP_MS);
   }
   if (!pollTimer) {
-    pollTimer = window.setInterval(pollDashboard, POLL_MS);
+    pollTimer = window.setInterval(pollDashboardIdle, POLL_MS);
   }
 }
 
