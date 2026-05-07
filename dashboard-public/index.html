@@ -271,7 +271,13 @@
       border: 2px solid var(--neutral);
       border-radius: 9999px !important;
       box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6), 0 0 18px rgba(110, 231, 183, 0.18);
-      background-repeat: no-repeat;
+      background: #000;
+      image-rendering: pixelated;
+    }
+    .multi-lens canvas {
+      display: block;
+      width: 140px;
+      height: 140px;
       image-rendering: pixelated;
     }
     .multi-lens-label {
@@ -298,6 +304,13 @@
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
       font-size: 0.8125rem;
       color: #d4d4d8;
+    }
+    .magnifier-readout {
+      flex: 1 1 26rem;
+      min-width: min(100%, 22rem);
+      color: var(--oss-subtext);
+      font-size: 0.72rem;
+      line-height: 1.25;
     }
     .score-scroll { scrollbar-width: thin; }
     .live-indicator { display: inline-flex; align-items: center; gap: 0.35rem; border: 1px solid rgba(113,113,122,0.55); padding: 0.08rem 0.42rem; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; font-size: 0.72rem; font-weight: 600; line-height: 1.2; vertical-align: middle; }
@@ -338,6 +351,7 @@
       .chart-wrap { height: 15rem; }
       .viz-frame, .viz-frame img { width: 18rem; }
       .lightbox-tool { min-height: 3rem; }
+      .magnifier-readout { display: none; }
     }
   </style>
 </head>
@@ -418,19 +432,15 @@
           <select id="compare-column-b" class="lightbox-select" aria-label="Multi-Magnify second column"></select>
         </div>
         <button id="lightbox-magnifier-toggle" class="lightbox-tool" type="button" aria-pressed="true">&#128269; Multi-Magnify</button>
-        <select id="magnifier-zoom" class="lightbox-select" aria-label="Multi-Magnify zoom">
-          <option value="1">1x</option>
-          <option value="2" selected>2x</option>
-          <option value="4">4x</option>
-          <option value="8">8x</option>
-        </select>
+        <button id="magnifier-zoom-cycle" class="lightbox-tool" type="button" aria-label="Cycle Multi-Magnify pixel pitch">+/- 200%</button>
+        <span id="magnifier-readout" class="magnifier-readout">Magnifier: 200% — 1 source px → 2×2 display px • covering 70×70 source pixels per circle</span>
         <button id="lightbox-close" class="lightbox-close" type="button" aria-label="Close visualization viewer">&times;</button>
       </div>
       <div id="lightbox-stage" class="lightbox-stage">
         <img id="lightbox-image" class="lightbox-image" alt="">
         <div id="multi-magnifier" class="multi-magnifier" aria-hidden="true">
-          <div id="multi-lens-a" class="multi-lens"><span id="multi-label-a" class="multi-lens-label"></span></div>
-          <div id="multi-lens-b" class="multi-lens"><span id="multi-label-b" class="multi-lens-label"></span></div>
+          <div id="multi-lens-a" class="multi-lens"><canvas id="multi-canvas-a" width="140" height="140"></canvas><span id="multi-label-a" class="multi-lens-label"></span></div>
+          <div id="multi-lens-b" class="multi-lens"><canvas id="multi-canvas-b" width="140" height="140"></canvas><span id="multi-label-b" class="multi-lens-label"></span></div>
         </div>
       </div>
       <div id="lightbox-caption" class="lightbox-caption"></div>
@@ -477,6 +487,7 @@ let lightboxItems = [];
 let lightboxIndex = 0;
 let magnifierEnabled = true;
 let magnifierZoom = 2;
+const magnifierZoomLevels = [1, 2, 4, 8];
 let magnifierPointerFine = window.matchMedia("(pointer: fine)").matches;
 let currentVizColumns = [];
 let selectedCompareA = "";
@@ -1018,13 +1029,34 @@ function closeLightbox() {
 function updateMagnifierToggle() {
   const button = document.getElementById("lightbox-magnifier-toggle");
   const controls = document.getElementById("multi-compare-controls");
-  const zoom = document.getElementById("magnifier-zoom");
+  const zoom = document.getElementById("magnifier-zoom-cycle");
+  const readout = document.getElementById("magnifier-readout");
   magnifierPointerFine = window.matchMedia("(pointer: fine)").matches;
   button.disabled = !magnifierPointerFine;
   button.setAttribute("aria-pressed", magnifierEnabled && magnifierPointerFine ? "true" : "false");
   button.textContent = magnifierEnabled && magnifierPointerFine ? "🔍 Multi-Magnify on" : "🔍 Multi-Magnify off";
   if (controls) controls.hidden = !magnifierPointerFine;
   if (zoom) zoom.hidden = !magnifierPointerFine;
+  if (readout) readout.hidden = !magnifierPointerFine;
+  updateMagnifierReadout();
+}
+
+function magnifierPercent() {
+  return `${magnifierZoom * 100}%`;
+}
+
+function sourcePixelsCovered() {
+  return Math.round(140 / magnifierZoom);
+}
+
+function updateMagnifierReadout() {
+  const readout = document.getElementById("magnifier-readout");
+  const zoom = document.getElementById("magnifier-zoom-cycle");
+  const covered = sourcePixelsCovered();
+  if (zoom) zoom.textContent = `+/- ${magnifierPercent()}`;
+  if (readout) {
+    readout.textContent = `Magnifier: ${magnifierPercent()} — 1 source px → ${magnifierZoom}×${magnifierZoom} display px • covering ${covered}×${covered} source pixels per circle`;
+  }
 }
 
 function hideMagnifier() {
@@ -1193,16 +1225,19 @@ function showMagnifier(event) {
   const columnBIndex = Math.max(0, currentVizColumns.indexOf(selectedCompareB));
   magnifier.style.left = `${event.clientX - stageRect.left}px`;
   magnifier.style.top = `${event.clientY - stageRect.top}px`;
-  const imageUrl = `url("${image.currentSrc || image.src}")`;
   [
-    { lens: document.getElementById("multi-lens-a"), label: document.getElementById("multi-label-a"), index: columnAIndex, name: selectedCompareA },
-    { lens: document.getElementById("multi-lens-b"), label: document.getElementById("multi-label-b"), index: columnBIndex, name: selectedCompareB },
-  ].forEach(({ lens, label, index, name }) => {
+    { canvas: document.getElementById("multi-canvas-a"), label: document.getElementById("multi-label-a"), index: columnAIndex, name: selectedCompareA },
+    { canvas: document.getElementById("multi-canvas-b"), label: document.getElementById("multi-label-b"), index: columnBIndex, name: selectedCompareB },
+  ].forEach(({ canvas, label, index, name }) => {
     const lensSize = 140;
     const compareSourceX = index * colWidth + withinColumnX;
-    lens.style.backgroundImage = imageUrl;
-    lens.style.backgroundSize = `${image.naturalWidth * magnifierZoom}px ${image.naturalHeight * magnifierZoom}px`;
-    lens.style.backgroundPosition = `${(lensSize / 2) - compareSourceX * magnifierZoom}px ${(lensSize / 2) - sourceY * magnifierZoom}px`;
+    const sourceSpan = lensSize / magnifierZoom;
+    const sx = clamp(compareSourceX - sourceSpan / 2, 0, image.naturalWidth - sourceSpan);
+    const sy = clamp(sourceY - sourceSpan / 2, 0, image.naturalHeight - sourceSpan);
+    const ctx = canvas.getContext("2d");
+    ctx.imageSmoothingEnabled = false;
+    ctx.clearRect(0, 0, lensSize, lensSize);
+    ctx.drawImage(image, sx, sy, sourceSpan, sourceSpan, 0, 0, lensSize, lensSize);
     label.textContent = name;
   });
   magnifier.classList.add("visible");
@@ -1216,7 +1251,7 @@ function initLightbox() {
   const magnifierToggle = document.getElementById("lightbox-magnifier-toggle");
   const selectA = document.getElementById("compare-column-a");
   const selectB = document.getElementById("compare-column-b");
-  const zoomSelect = document.getElementById("magnifier-zoom");
+  const zoomCycle = document.getElementById("magnifier-zoom-cycle");
   document.getElementById("lightbox-close").addEventListener("click", closeLightbox);
   magnifierToggle.addEventListener("click", () => {
     magnifierEnabled = !magnifierEnabled;
@@ -1231,8 +1266,10 @@ function initLightbox() {
     selectedCompareB = selectB.value;
     hideMagnifier();
   });
-  zoomSelect.addEventListener("change", () => {
-    magnifierZoom = Number(zoomSelect.value || 2);
+  zoomCycle.addEventListener("click", () => {
+    const index = magnifierZoomLevels.indexOf(magnifierZoom);
+    magnifierZoom = magnifierZoomLevels[(index + 1) % magnifierZoomLevels.length];
+    updateMagnifierReadout();
     hideMagnifier();
   });
   image.addEventListener("pointerenter", showMagnifier);
