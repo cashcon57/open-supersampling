@@ -713,6 +713,8 @@ let infoBackdrop = null;
 let infoHoverTimer = null;
 let infoHideTimer = null;
 let activeInfoButton = null;
+let pinnedInfoButton = null;
+let lastInfoOpenedAt = 0;
 
 const comparisonReferenceLines = [
   { id: "bicubic", method: "Bicubic baseline", vendor: "OSS", latest: true, psnr: 23.909, lpips: 0.2945, color: colors.bicubic, dash: [], source: "measured directly on the OSS TartanAir oldtown held-out batch", nudge: -12 },
@@ -769,7 +771,12 @@ function isMobileTooltip() {
 
 function showTooltip(button, copy) {
   if (!button || !copy) return;
+  if (infoHoverTimer) window.clearTimeout(infoHoverTimer);
+  if (infoHideTimer) window.clearTimeout(infoHideTimer);
+  infoHoverTimer = null;
+  infoHideTimer = null;
   ensureInfoTooltip();
+  lastInfoOpenedAt = performance.now();
   activeInfoButton = button;
   button.setAttribute("aria-describedby", "chart-info-tooltip");
   infoTooltip.className = "info-tooltip";
@@ -796,7 +803,7 @@ function showTooltip(button, copy) {
     infoTooltip.style.top = `${top}px`;
   }
   infoTooltip.style.visibility = "";
-  window.requestAnimationFrame(() => infoTooltip?.classList.add("is-open"));
+  infoTooltip.classList.add("is-open");
 }
 
 function hideAllTooltips() {
@@ -806,6 +813,7 @@ function hideAllTooltips() {
   infoHideTimer = null;
   if (activeInfoButton) activeInfoButton.removeAttribute("aria-describedby");
   activeInfoButton = null;
+  pinnedInfoButton = null;
   infoTooltip?.classList.remove("is-open");
   infoBackdrop?.classList.remove("is-open");
 }
@@ -815,7 +823,9 @@ function setupInfoTooltips() {
     if (button.dataset.infoBound === "true") return;
     button.dataset.infoBound = "true";
     button.addEventListener("click", (event) => {
+      event.preventDefault();
       event.stopPropagation();
+      pinnedInfoButton = button;
       showTooltip(button, INFO_COPY[button.dataset.infoKey]);
     });
     button.addEventListener("mouseenter", () => {
@@ -825,16 +835,17 @@ function setupInfoTooltips() {
     });
     button.addEventListener("mouseleave", () => {
       if (infoHoverTimer) window.clearTimeout(infoHoverTimer);
-      infoHideTimer = window.setTimeout(hideAllTooltips, 120);
+      infoHoverTimer = null;
     });
     button.addEventListener("focus", () => showTooltip(button, INFO_COPY[button.dataset.infoKey]));
-    button.addEventListener("blur", () => {
-      if (!isMobileTooltip()) hideAllTooltips();
-    });
   });
   if (document.body.dataset.infoDocBound === "true") return;
   document.body.dataset.infoDocBound = "true";
-  document.addEventListener("click", hideAllTooltips);
+  document.addEventListener("click", (event) => {
+    if (performance.now() - lastInfoOpenedAt < 250) return;
+    if (event.target.closest(".info-btn, .info-tooltip")) return;
+    hideAllTooltips();
+  });
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") hideAllTooltips();
   });
