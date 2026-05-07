@@ -201,14 +201,17 @@
     .info-tooltip {
       position: fixed;
       z-index: 10000;
-      width: min(32ch, calc(100vw - 24px));
+      max-width: 32ch;
+      width: max-content;
       border: 1px solid var(--oss-line-strong);
       background: rgba(0, 0, 0, 0.96);
       color: var(--oss-subtext);
-      padding: 0.7rem 0.75rem;
+      padding: 8px 10px;
       font-family: "JetBrains Mono", ui-monospace, monospace;
-      font-size: 0.76rem;
+      font-size: 12px;
       line-height: 1.45;
+      word-break: normal;
+      overflow-wrap: break-word;
       opacity: 0;
       pointer-events: none;
       transform: translateY(-2px);
@@ -435,6 +438,9 @@
     .light-mode [data-subtext] { color: #3f3f46 !important; }
     .light-mode [data-dim] { color: #71717a !important; }
     .live-indicator.live { border-color: var(--oss-line-strong); color: var(--oss-accent); }
+    @media (max-width: 480px) {
+      .info-tooltip { max-width: 90vw; }
+    }
     @media (max-width: 640px) {
       .chart-wrap { height: 15rem; }
       .comparison-chart-wrap { height: 20rem; min-height: 18rem; }
@@ -616,129 +622,15 @@ const colors = {
 };
 
 const INFO_COPY = {
-  loss: `The model's training error per step. Lower means it's getting better
-at the task. The model has been training for the number of steps
-shown here; this chart shows how the error has shrunk over those
-steps.
-
-This is "training error" — measured on the same images the model is
-learning from, not on a separate test set. Test-set scores are below
-in "Held-out PSNR / LPIPS by version."`,
-  "loss-decomp": `The training error broken down into the parts that go into it. The
-model is told to optimize all of these at once — pixel error,
-perceptual look, edge sharpness, temporal stability, and a few more.
-
-Click any line in the legend to hide it and isolate the others. Watch
-how the dominant part shifts as training progresses: early in training
-it's mostly raw pixel error and perceptual look; later, the
-adversarial training (where one network tries to fool another) takes
-over and starts pushing for "looks real" rather than just
-"pixel-close to truth."`,
-  "psnr-live": `Image quality scores for the model on its OWN training data, computed
-on each batch as it learns.
-
-PSNR (peak signal-to-noise ratio): how close the model's output is to
-the ground-truth image, in decibels. Higher = sharper, less noise.
-LPIPS (learned perceptual image patch similarity): how close it LOOKS
-to the ground truth, judged by a pretrained vision network. Lower =
-looks more like the real image.
-
-These numbers are slightly inflated compared to what you'd see on
-unseen test data — the model has already seen these specific image
-patches. Treat them as "is training healthy?", not "how good is the
-model?". For the real comparison-grade scores, see "Held-out PSNR /
-LPIPS by version" below.`,
-  "lpips-live": `Image quality scores for the model on its OWN training data, computed
-on each batch as it learns.
-
-PSNR (peak signal-to-noise ratio): how close the model's output is to
-the ground-truth image, in decibels. Higher = sharper, less noise.
-LPIPS (learned perceptual image patch similarity): how close it LOOKS
-to the ground truth, judged by a pretrained vision network. Lower =
-looks more like the real image.
-
-These numbers are slightly inflated compared to what you'd see on
-unseen test data — the model has already seen these specific image
-patches. Treat them as "is training healthy?", not "how good is the
-model?". For the real comparison-grade scores, see "Held-out PSNR /
-LPIPS by version" below.`,
-  "held-out-psnr": `Image quality scores on held-out test sets plotted by training step.
-Each OSS run is a trajectory line with markers, so v4's 35 evaluations
-show the actual training path instead of collapsing into one version
-bucket.
-
-The x-axis is a shared training-step scale, not an apples-to-apples
-compute scale: v4 trained for about 415K steps, v5 is plotted at 80K,
-and v6.1 starts at step 500 and extends as training publishes more
-held-out score_log.json rows.
-
-The dashed lines for Deep Learning Super Sampling (DLSS), FidelityFX
-Super Resolution (FSR), and Xe Super Sampling (XeSS) are NOT measured
-by us. They are best-published numbers that NVIDIA, AMD, and Intel
-cite for their upscalers, on different test content (Cyberpunk 2077,
-Death Stranding, Hitman 3). They give a rough "where does OSS sit"
-anchor, but they aren't head-to-head with our numbers.
-
-The bicubic line IS measured on our test set (solid line) — that's
-the simplest possible upscaler, the floor any model should clear.
-
-We aim to publish actual head-to-head numbers on real game-engine
-footage (Unreal Engine 5, Unity, Source 2) once the v6
-cross-game-engine training matures.`,
-  "held-out-lpips": `Image quality scores on held-out test sets plotted by training step.
-Each OSS run is a trajectory line with markers, so v4's 35 evaluations
-show the actual training path instead of collapsing into one version
-bucket.
-
-LPIPS is reversed on the y-axis so better scores still move upward on
-the chart. The x-axis is a shared training-step scale, not an
-apples-to-apples compute scale: v4 trained for about 415K steps, v5 is
-plotted at 80K, and v6.1 starts at step 500 and extends as training
-publishes more held-out score_log.json rows.
-
-The dashed lines for Deep Learning Super Sampling (DLSS), FidelityFX
-Super Resolution (FSR), and Xe Super Sampling (XeSS) are NOT measured
-by us. They are best-published numbers that NVIDIA, AMD, and Intel
-cite for their upscalers, on different test content (Cyberpunk 2077,
-Death Stranding, Hitman 3). They give a rough "where does OSS sit"
-anchor, but they aren't head-to-head with our numbers.
-
-The bicubic line IS measured on our test set (solid line) — that's
-the simplest possible upscaler, the floor any model should clear.
-
-We aim to publish actual head-to-head numbers on real game-engine
-footage (Unreal Engine 5, Unity, Source 2) once the v6
-cross-game-engine training matures.`,
-  gpu: `Live snapshot of the training graphics processing unit (GPU), an
-NVIDIA RTX 3080 Ti with 12 GB of memory. Refreshed every 30 seconds.
-
-"Memory used" near the top of the bar is normal — the model is sized
-to fit what's available. "Utilization" near 100% means the GPU is
-working flat-out (good); persistently low utilization means the GPU
-is waiting on something else (data loading, CPU work) — bad.`,
-  "v4-two-points": `v4 is OSS's first model — a single-frame upscaler from before the
-temporal-accumulation idea. Two data points are shown because v4 was
-tested on a DIFFERENT data set than v5/v6.1, and the difference
-matters:
-
-· "v4 (SRGD)" is v4 tested on its OWN training distribution — smooth
-  synthetic gaming content. It scores well there.
-· "v4 (TartanAir)" is the SAME v4 model tested on the harder set
-  v5/v6.1 use. It crashes hard — about 22 dB lower PSNR.
-
-On the comparison charts, the solid v4 line shows the SRGD trajectory
-across training. The hollow marker at step 300K shows the TartanAir
-distribution-shift score at the same horizontal position as v4's SRGD
-peak.
-
-That cliff is the failure mode that motivated v5 and v6: a model that
-only works on the kind of pictures it was trained on isn't useful for
-games it's never seen. v6 is built specifically to NOT cliff like
-this. The v6 cross-game-engine evaluation is the test of whether
-v6.1 actually delivers on that.`,
-  "bad-data": `Disabled by default. These runs were measured on different test sets
-or represent failure modes (e.g. v4 distribution-shifted), so they
-don't compare apples-to-apples with v5/v6.1. Enable for transparency.`,
+  loss: "How wrong the model is at each training step. Lower = better. This is on training data, not the test set.",
+  "loss-decomp": "The training error split into its parts. Click a series in the legend to hide it. Lower is better for every line.",
+  "psnr-live": "Computed on the patches the model is currently learning from — NOT a held-out test, so it is biased optimistically. Use this to track training health, not to rank models. Real comparison numbers are in the held-out chart below.",
+  "lpips-live": "Same caveat as live PSNR — measured on training patches, not test data. Use for training health, not for ranking.",
+  "held-out-psnr": "Image sharpness on a fixed test set the model NEVER trained on (TartanAir oldtown, 64 frames). This is the real comparison number; higher = better. Dashed lines for DLSS/FSR/XeSS are public-source estimates, not measured on our test data.",
+  "held-out-lpips": "How real the output looks on a fixed test set the model NEVER trained on. Lower = better. Dashed competitor lines are public-source estimates, not measured on our data.",
+  gpu: "Live GPU usage on the training machine. High utilization = working hard. High memory = normal (model sized to fit).",
+  "bad-data": "Off by default. Hides runs that aren't apples-to-apples with the current models — different test sets, failure modes. Toggle on for transparency.",
+  "v4-two-points": "v4 was the first single-frame model. It looks fine on its training data but fails badly when you change the content (~22 dB cliff). v5 and v6 were designed to NOT do this.",
 };
 
 const lossComponentDefs = [
