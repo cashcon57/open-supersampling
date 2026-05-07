@@ -354,7 +354,8 @@ HTML_TEMPLATE = r"""<!doctype html>
     details > summary::-webkit-details-marker { display: none; }
     details[open] .summary-chevron { transform: rotate(90deg); }
     .viz-strip { scrollbar-width: thin; }
-    .chart-wrap { height: 18rem; min-height: 16rem; }
+    .chart-wrap { height: 18rem; min-height: 16rem; max-width: 100%; overflow: hidden; }
+    .chart-wrap canvas { max-width: 100% !important; }
     .score-scroll { scrollbar-width: thin; }
     .light-mode { background: #f8fafc; color: #18181b; color-scheme: light; }
     .light-mode [data-surface] { background-color: rgba(255, 255, 255, 0.92) !important; border-color: #d4d4d8 !important; }
@@ -649,12 +650,12 @@ function renderRun(run, index) {
       </span>
       <span class="hidden font-mono text-sm text-zinc-500 sm:block" data-dim>step ${Number(run.latest_step || 0).toLocaleString()}</span>
     </summary>
-    <div class="grid gap-4 border-t border-zinc-800 p-4 lg:grid-cols-[1.15fr_0.85fr]">
-      <div class="flex flex-col gap-4">
-        <div class="grid gap-3 sm:grid-cols-3">${headline}</div>
+    <div class="grid min-w-0 gap-4 border-t border-zinc-800 p-4 lg:grid-cols-[1.15fr_0.85fr]">
+      <div class="flex min-w-0 flex-col gap-4">
+        <div class="grid min-w-0 gap-3 sm:grid-cols-3">${headline}</div>
         ${gpu}
         ${note}
-        <article class="rounded-md border border-zinc-800 bg-zinc-950/25 p-4" data-muted-surface>
+        <article class="min-w-0 rounded-md border border-zinc-800 bg-zinc-950/25 p-4" data-muted-surface>
           <div class="flex items-center justify-between gap-3">
             <h3 class="text-base font-semibold text-zinc-50" data-text>Loss curve</h3>
             <span class="text-sm text-zinc-500" data-dim>${rows.length} points</span>
@@ -662,12 +663,12 @@ function renderRun(run, index) {
           ${chartBody}
         </article>
       </div>
-      <div class="flex flex-col gap-4">
-        <article class="rounded-md border border-zinc-800 bg-zinc-950/25 p-4" data-muted-surface>
+      <div class="flex min-w-0 flex-col gap-4">
+        <article class="min-w-0 rounded-md border border-zinc-800 bg-zinc-950/25 p-4" data-muted-surface>
           <h3 class="text-base font-semibold text-zinc-50" data-text>Held-out scores</h3>
           <div id="${scoreId}" class="mt-3"></div>
         </article>
-        <article class="rounded-md border border-zinc-800 bg-zinc-950/25 p-4" data-muted-surface>
+        <article class="min-w-0 rounded-md border border-zinc-800 bg-zinc-950/25 p-4" data-muted-surface>
           <div class="flex items-center justify-between gap-3">
             <h3 class="text-base font-semibold text-zinc-50" data-text>Viz strips</h3>
             <span class="text-sm text-zinc-500" data-dim>${(run.viz_pngs || []).length} images</span>
