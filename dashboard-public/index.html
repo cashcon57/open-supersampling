@@ -18,9 +18,86 @@
     details[open] .summary-chevron { transform: rotate(90deg); }
     details[open] .closed-hint { display: none; }
     .viz-strip { scrollbar-width: thin; }
+    .viz-button { cursor: zoom-in; }
     .chart-wrap { height: 18rem; min-height: 16rem; max-width: 100%; overflow: hidden; }
     .chart-wrap canvas { max-width: 100% !important; }
+    .lightbox {
+      width: 100vw;
+      max-width: none;
+      height: 100dvh;
+      max-height: none;
+      margin: 0;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: inherit;
+    }
+    .lightbox::backdrop { background: rgba(0, 0, 0, 0.85); }
+    .lightbox-shell {
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      min-height: 100dvh;
+      padding: max(0.75rem, env(safe-area-inset-top)) max(0.75rem, env(safe-area-inset-right)) max(0.75rem, env(safe-area-inset-bottom)) max(0.75rem, env(safe-area-inset-left));
+      background: rgba(0, 0, 0, 0.85);
+    }
+    .lightbox-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 0.5rem;
+      min-height: 3rem;
+    }
+    .lightbox-close {
+      min-width: 3rem;
+      min-height: 3rem;
+      border-radius: 9999px;
+      border: 1px solid rgba(212, 212, 216, 0.45);
+      background: rgba(24, 24, 27, 0.85);
+      color: #f4f4f5;
+      font-size: 1.75rem;
+      line-height: 1;
+    }
+    .lightbox-stage {
+      display: flex;
+      min-width: 0;
+      min-height: 0;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+    .lightbox-image {
+      display: block;
+      max-width: 100%;
+      max-height: calc(100dvh - 8rem);
+      object-fit: contain;
+      user-select: none;
+    }
+    .lightbox-caption {
+      min-height: 2rem;
+      padding-top: 0.5rem;
+      text-align: center;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 0.8125rem;
+      color: #d4d4d8;
+    }
     .score-scroll { scrollbar-width: thin; }
+    .live-indicator { display: inline-flex; align-items: center; gap: 0.35rem; border: 1px solid rgba(113,113,122,0.55); padding: 0.08rem 0.42rem; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; font-size: 0.72rem; font-weight: 600; line-height: 1.2; vertical-align: middle; }
+    .live-indicator.live { border-color: rgba(52,211,153,0.7); color: #6ee7b7; }
+    .live-indicator.idle { color: #a1a1aa; }
+    .live-indicator.live .indicator-dot { animation: live-pulse 1.6s ease-in-out infinite; }
+    .step-ticker-row.is-new { animation: ticker-slide 620ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+    @keyframes live-pulse {
+      0%, 100% { opacity: 0.55; transform: scale(0.92); }
+      50% { opacity: 1; transform: scale(1.12); }
+    }
+    @keyframes ticker-slide {
+      0% { opacity: 0; transform: translateY(0.55rem); }
+      100% { opacity: 1; transform: translateY(0); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .live-indicator.live .indicator-dot,
+      .step-ticker-row.is-new { animation: none; }
+    }
     .light-mode { background: #f8fafc; color: #18181b; color-scheme: light; }
     .light-mode [data-surface] { background-color: rgba(255, 255, 255, 0.92) !important; border-color: #d4d4d8 !important; }
     .light-mode [data-muted-surface] { background-color: #f4f4f5 !important; border-color: #d4d4d8 !important; }
@@ -91,6 +168,18 @@
     </section>
   </main>
 
+  <dialog id="viz-lightbox" class="lightbox" aria-label="Visualization image viewer">
+    <div class="lightbox-shell">
+      <div class="lightbox-toolbar">
+        <button id="lightbox-close" class="lightbox-close" type="button" aria-label="Close visualization viewer">&times;</button>
+      </div>
+      <div id="lightbox-stage" class="lightbox-stage">
+        <img id="lightbox-image" class="lightbox-image" alt="">
+      </div>
+      <div id="lightbox-caption" class="lightbox-caption"></div>
+    </div>
+  </dialog>
+
 <script>
 "use strict";
 
@@ -109,6 +198,17 @@ let lastKnownData = null;
 let activeCharts = [];
 let pollTimer = null;
 let stampTimer = null;
+let lightboxItems = [];
+let lightboxIndex = 0;
+let lastActiveStep = null;
+let trainingPulseState = {
+  activeRunName: null,
+  advanced: false,
+  fresh: false,
+  live: false,
+  newStep: null,
+  pointFlashRunName: null,
+};
 
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (char) => ({
@@ -154,6 +254,75 @@ function xy(rows, key, ...aliases) {
     if (value === undefined || value === null) return null;
     return { x: Number(row.step || 0), y: Number(value) };
   }).filter(Boolean);
+}
+
+function latestMetricRows(run, limit = 3) {
+  return (run.loss_curve || []).slice(-limit).reverse();
+}
+
+function activeRunFrom(data) {
+  return (data.runs || []).find((run) => run.active) || (data.runs || [])[0] || null;
+}
+
+function updateTrainingPulseState(data, preserve = false) {
+  if (preserve) return;
+  const active = activeRunFrom(data);
+  const generatedTs = Date.parse(data.generated_at || "");
+  const ageSeconds = Number.isFinite(generatedTs) ? (Date.now() - generatedTs) / 1000 : Infinity;
+  const step = Number(active?.latest_step || 0);
+  const advanced = lastActiveStep !== null && step > lastActiveStep;
+  const fresh = ageSeconds < 60;
+  const live = Boolean(active && fresh && advanced);
+  trainingPulseState = {
+    activeRunName: active?.name || null,
+    advanced,
+    fresh,
+    live,
+    newStep: advanced ? step : null,
+    pointFlashRunName: live ? active.name : null,
+  };
+  lastActiveStep = step;
+  if (live) {
+    window.setTimeout(() => {
+      if (trainingPulseState.pointFlashRunName === active.name) {
+        trainingPulseState = { ...trainingPulseState, pointFlashRunName: null };
+        if (lastKnownData) renderDashboard(lastKnownData, { preserveTrainingState: true });
+      }
+    }, 1800);
+  }
+}
+
+function trainingIndicatorHtml(run) {
+  if (!run?.active) return "";
+  const live = trainingPulseState.activeRunName === run.name && trainingPulseState.live;
+  return `<span class="live-indicator ${live ? "live" : "idle"}" aria-label="${live ? "live training" : "idle training"}">
+    <span class="indicator-dot">${live ? "●" : "○"}</span>
+    <span>${live ? "live" : "idle"}</span>
+  </span>`;
+}
+
+function trainingTickerHtml(run) {
+  if (!run?.active) return "";
+  const rows = latestMetricRows(run, 3);
+  if (!rows.length) return "";
+  const body = rows.map((row, index) => {
+    const isNew = trainingPulseState.advanced && Number(row.step || 0) === trainingPulseState.newStep && index === 0;
+    return `<div class="step-ticker-row ${isNew ? "is-new" : ""} grid grid-cols-[auto_1fr_1fr_1fr] gap-3 border-t border-zinc-800 px-3 py-2 text-xs text-zinc-400 first:border-t-0" data-subtext>
+      <span class="font-mono text-zinc-200" data-text>${Number(row.step || 0).toLocaleString()}</span>
+      <span>total ${fmtNumber(row.loss_total ?? row.loss, 5)}</span>
+      <span>charb ${fmtNumber(row.loss_charbonnier ?? row.l1 ?? row.t_l1, 5)}</span>
+      <span>lpips ${fmtNumber(row.loss_lpips ?? row.lpips ?? row.t_lpips, 5)}</span>
+    </div>`;
+  }).join("");
+  return `<div class="overflow-hidden rounded border border-zinc-800 bg-zinc-950/35" data-muted-surface>
+    <div class="px-3 pt-2 text-xs uppercase text-zinc-500" data-dim>latest step tape</div>
+    <div class="mt-1">${body}</div>
+  </div>`;
+}
+
+function shouldHighlightLastPoint(run, rows, context) {
+  if (trainingPulseState.pointFlashRunName !== run.name) return false;
+  return context.dataIndex === rows.length - 1;
 }
 
 function headlineValue(run, item) {
@@ -210,7 +379,20 @@ function chartOptions({ yTitle = "loss", componentAxis = false } = {}) {
 function renderLossChart(canvas, run) {
   const rows = run.loss_curve || [];
   const datasets = [
-    { label: "loss_total", yAxisID: "y", data: xy(rows, "loss_total", "loss"), borderColor: colors.total, backgroundColor: colors.total, pointRadius: 0, borderWidth: 2, tension: 0 },
+    {
+      label: "loss_total",
+      yAxisID: "y",
+      data: xy(rows, "loss_total", "loss"),
+      borderColor: colors.total,
+      backgroundColor: colors.total,
+      pointRadius: (context) => shouldHighlightLastPoint(run, rows, context) ? 5 : 0,
+      pointBorderWidth: (context) => shouldHighlightLastPoint(run, rows, context) ? 2 : 0,
+      pointBorderColor: colors.total,
+      pointBackgroundColor: "#09090b",
+      pointHoverRadius: 5,
+      borderWidth: 2,
+      tension: 0,
+    },
     { label: "loss_charbonnier", yAxisID: "y1", data: xy(rows, "loss_charbonnier", "l1", "t_l1"), borderColor: colors.charbonnier, backgroundColor: colors.charbonnier, pointRadius: 0, borderWidth: 1.5, borderDash: [5, 3], tension: 0 },
     { label: "loss_lpips", yAxisID: "y1", data: xy(rows, "loss_lpips", "t_lpips"), borderColor: colors.lpips, backgroundColor: colors.lpips, pointRadius: 0, borderWidth: 1.5, tension: 0 },
   ].filter((dataset) => dataset.data.length);
@@ -234,6 +416,9 @@ function renderScoreTable(host, run) {
 
 function renderVizStrip(host, run, limit) {
   const files = (run && run.viz_pngs ? run.viz_pngs : []).slice(-limit).reverse();
+  const orderedFiles = (run && run.viz_pngs ? run.viz_pngs : [])
+    .slice()
+    .sort((a, b) => stepFromName(a) - stepFromName(b));
   host.replaceChildren();
   if (!files.length) {
     const empty = document.createElement("div");
@@ -245,17 +430,79 @@ function renderVizStrip(host, run, limit) {
   for (const file of files) {
     const frame = document.createElement("figure");
     frame.className = "viz-frame w-72 shrink-0";
+    const button = document.createElement("button");
+    button.className = "viz-button block w-full rounded text-left focus:outline-none focus:ring-2 focus:ring-cyan-400";
+    button.type = "button";
+    button.dataset.runName = run.name || "";
+    button.dataset.file = file;
+    button.setAttribute("aria-label", `Open ${run.label || run.name} ${file}`);
     const img = document.createElement("img");
     img.className = "aspect-video w-72 rounded border border-zinc-800 bg-black object-contain";
     img.loading = "lazy";
     img.alt = `${run.label} ${file}`;
     img.src = runUrl(run, file);
+    button.appendChild(img);
     const caption = document.createElement("figcaption");
     caption.className = "mt-2 text-center font-mono text-xs text-zinc-400";
     caption.textContent = `step ${stepFromName(file).toLocaleString()}`;
-    frame.append(img, caption);
+    frame.append(button, caption);
     host.appendChild(frame);
   }
+  host.querySelectorAll(".viz-button").forEach((button) => {
+    button.addEventListener("click", () => {
+      openLightbox(run, orderedFiles, button.dataset.file || orderedFiles[0]);
+    });
+  });
+}
+
+function lightboxCaption(item) {
+  if (!item) return "";
+  return `${item.runLabel} / step ${stepFromName(item.file).toLocaleString()}`;
+}
+
+function showLightboxItem(index) {
+  if (!lightboxItems.length) return;
+  lightboxIndex = (index + lightboxItems.length) % lightboxItems.length;
+  const item = lightboxItems[lightboxIndex];
+  const image = document.getElementById("lightbox-image");
+  image.src = item.src;
+  image.alt = `${item.runLabel} ${item.file}`;
+  document.getElementById("lightbox-caption").textContent = lightboxCaption(item);
+}
+
+function openLightbox(run, files, selectedFile) {
+  const dialog = document.getElementById("viz-lightbox");
+  lightboxItems = files.map((file) => ({
+    file,
+    src: runUrl(run, file),
+    runLabel: run.label || run.name,
+  }));
+  showLightboxItem(Math.max(0, files.indexOf(selectedFile)));
+  if (!dialog.open) dialog.showModal();
+}
+
+function closeLightbox() {
+  const dialog = document.getElementById("viz-lightbox");
+  if (dialog.open) dialog.close();
+}
+
+function initLightbox() {
+  const dialog = document.getElementById("viz-lightbox");
+  const stage = document.getElementById("lightbox-stage");
+  document.getElementById("lightbox-close").addEventListener("click", closeLightbox);
+  dialog.addEventListener("click", (event) => {
+    if (event.target === dialog || event.target === stage) closeLightbox();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (!dialog.open) return;
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      showLightboxItem(lightboxIndex - 1);
+    } else if (event.key === "ArrowRight") {
+      event.preventDefault();
+      showLightboxItem(lightboxIndex + 1);
+    }
+  });
 }
 
 function gpuPanelHtml(run) {
@@ -283,10 +530,10 @@ function gpuPanelHtml(run) {
 }
 
 function renderHero(data) {
-  const active = (data.runs || []).find((run) => run.active) || (data.runs || [])[0];
+  const active = activeRunFrom(data);
   if (!active) return;
   document.getElementById("hero-active-status").textContent = active.history?.status || "active run";
-  document.getElementById("hero-active-title").textContent = active.label || active.name;
+  document.getElementById("hero-active-title").innerHTML = `${escapeHtml(active.label || active.name)} ${trainingIndicatorHtml(active)}`;
   const latest = active.latest_metrics || {};
   document.getElementById("hero-active-meta").textContent = `step ${Number(active.latest_step || 0).toLocaleString()} / loss ${fmtNumber(latest.loss_total ?? latest.loss, 5)}`;
   document.getElementById("hero-gpu").innerHTML = gpuPanelHtml(active).replace("rounded-md border ", "");
@@ -305,6 +552,7 @@ function renderRun(run, index, openByRun = new Map()) {
     </div>`).join("");
   const note = history.note ? `<p class="rounded border border-amber-900/60 bg-amber-950/20 px-4 py-3 text-sm text-amber-100">${escapeHtml(history.note)}</p>` : "";
   const gpu = run.active ? gpuPanelHtml(run) : "";
+  const ticker = trainingTickerHtml(run);
   const chartId = `loss-chart-${index}`;
   const scoreId = `score-table-${index}`;
   const vizId = `viz-strip-${index}`;
@@ -316,10 +564,11 @@ function renderRun(run, index, openByRun = new Map()) {
     <summary class="flex cursor-pointer items-start gap-3 p-4">
       <span class="summary-chevron mt-1 text-zinc-500 transition-transform">›</span>
       <span class="min-w-0 flex-1">
-        <span class="flex flex-wrap items-center gap-2">
-          <span class="text-base font-semibold text-zinc-50" data-text>${escapeHtml(run.label || run.name)}</span>
-          <span class="rounded border ${run.active ? "border-emerald-700 text-emerald-300" : "border-zinc-700 text-zinc-300"} px-2 py-0.5 text-xs">${escapeHtml(history.status || "")}</span>
-        </span>
+          <span class="flex flex-wrap items-center gap-2">
+            <span class="text-base font-semibold text-zinc-50" data-text>${escapeHtml(run.label || run.name)}</span>
+            ${trainingIndicatorHtml(run)}
+            <span class="rounded border ${run.active ? "border-emerald-700 text-emerald-300" : "border-zinc-700 text-zinc-300"} px-2 py-0.5 text-xs">${escapeHtml(history.status || "")}</span>
+          </span>
         <span class="mt-1 block text-sm text-zinc-400" data-subtext>${escapeHtml(history.summary || run.name)}</span>
       </span>
       <span class="hidden text-right text-sm text-zinc-500 sm:block" data-dim>
@@ -330,6 +579,7 @@ function renderRun(run, index, openByRun = new Map()) {
     <div class="grid min-w-0 gap-4 border-t border-zinc-800 p-4 lg:grid-cols-[1.15fr_0.85fr]">
       <div class="flex min-w-0 flex-col gap-4">
         <div class="grid min-w-0 gap-3 sm:grid-cols-3">${headline}</div>
+        ${ticker}
         ${gpu}
         ${note}
         <article class="min-w-0 rounded-md border border-zinc-800 bg-zinc-950/25 p-4" data-muted-surface>
@@ -413,7 +663,8 @@ function setRetryingState(error, hasLastKnownData) {
   }
 }
 
-function renderDashboard(data) {
+function renderDashboard(data, options = {}) {
+  updateTrainingPulseState(data, Boolean(options.preserveTrainingState));
   latestGeneratedAt = data.generated_at;
   lastKnownData = data;
   updateStamp();
@@ -450,6 +701,7 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("theme-toggle").addEventListener("click", () => {
     setTheme(document.documentElement.classList.contains("dark"));
   });
+  initLightbox();
   pollDashboard();
   startLiveUpdates();
 });
