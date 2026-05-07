@@ -163,7 +163,7 @@ function setTheme(light) {
   document.getElementById("theme-toggle").textContent = light ? "Dark mode" : "Light mode";
 }
 
-function chartOptions({ yTitle = "loss", lpipsAxis = false } = {}) {
+function chartOptions({ yTitle = "loss", componentAxis = false } = {}) {
   const scales = {
     x: {
       type: "linear",
@@ -177,13 +177,13 @@ function chartOptions({ yTitle = "loss", lpipsAxis = false } = {}) {
       ticks: { color: "#a1a1aa", maxTicksLimit: 6 },
     },
   };
-  if (lpipsAxis) {
+  if (componentAxis) {
     scales.y1 = {
       type: "linear",
       position: "right",
       grid: { drawOnChartArea: false },
       ticks: { color: "#a1a1aa", maxTicksLimit: 6 },
-      title: { display: true, text: "LPIPS", color: "#a1a1aa" },
+      title: { display: true, text: "component loss", color: "#a1a1aa" },
     };
   }
   return {
@@ -200,12 +200,12 @@ function chartOptions({ yTitle = "loss", lpipsAxis = false } = {}) {
 function renderLossChart(canvas, run) {
   const rows = run.loss_curve || [];
   const datasets = [
-    { label: "loss_total", yAxisID: "y", data: xy(rows, "loss_total", "loss"), borderColor: colors.total, backgroundColor: colors.total, pointRadius: 0, tension: 0 },
-    { label: "loss_charbonnier", yAxisID: "y1", data: xy(rows, "loss_charbonnier", "l1", "t_l1"), borderColor: colors.charbonnier, backgroundColor: colors.charbonnier, pointRadius: 0, tension: 0 },
-    { label: "loss_lpips", yAxisID: "y1", data: xy(rows, "loss_lpips", "t_lpips"), borderColor: colors.lpips, backgroundColor: colors.lpips, pointRadius: 0, tension: 0 },
+    { label: "loss_total", yAxisID: "y", data: xy(rows, "loss_total", "loss"), borderColor: colors.total, backgroundColor: colors.total, pointRadius: 0, borderWidth: 2, tension: 0 },
+    { label: "loss_charbonnier", yAxisID: "y1", data: xy(rows, "loss_charbonnier", "l1", "t_l1"), borderColor: colors.charbonnier, backgroundColor: colors.charbonnier, pointRadius: 0, borderWidth: 1.5, borderDash: [5, 3], tension: 0 },
+    { label: "loss_lpips", yAxisID: "y1", data: xy(rows, "loss_lpips", "t_lpips"), borderColor: colors.lpips, backgroundColor: colors.lpips, pointRadius: 0, borderWidth: 1.5, tension: 0 },
   ].filter((dataset) => dataset.data.length);
   if (!datasets.length) return null;
-  return new Chart(canvas, { type: "line", data: { datasets }, options: chartOptions({ yTitle: "total loss", lpipsAxis: true }) });
+  return new Chart(canvas, { type: "line", data: { datasets }, options: chartOptions({ yTitle: "total loss", componentAxis: true }) });
 }
 
 function renderScoreTable(host, run) {
