@@ -1313,12 +1313,12 @@ async function refresh() {
     }).filter(p => p !== null);
 
     setChart(charts.psnr, [
-      { label: 'live train PSNR proxy', data: trainPsnrXY, borderColor: '#58a6ff', backgroundColor: '#58a6ff', tension: 0, pointRadius: 0 },
+      { label: 'live train PSNR (training crops — biased high vs held-out)', data: trainPsnrXY, borderColor: '#58a6ff', backgroundColor: '#58a6ff', tension: 0, pointRadius: 0, borderDash: [2, 3] },
       { label: 'held-out model (after closeout)', data: evalXY('model_psnr_mean'), borderColor: '#3fb950', backgroundColor: '#3fb950', tension: 0, pointRadius: 3 },
       { label: 'bicubic', data: evalXY('bicubic_psnr_mean'), borderColor: '#8b949e', backgroundColor: '#8b949e', tension: 0, pointRadius: 3, borderDash: [4, 4] },
     ]);
     setChart(charts.lpips, [
-      { label: 'live train LPIPS (Phase 2+)', data: trainLpipsXY, borderColor: '#58a6ff', backgroundColor: '#58a6ff', tension: 0, pointRadius: 0 },
+      { label: 'live train LPIPS (training crops — not held-out)', data: trainLpipsXY, borderColor: '#58a6ff', backgroundColor: '#58a6ff', tension: 0, pointRadius: 0, borderDash: [2, 3] },
       { label: 'held-out model (after closeout)', data: evalXY('model_lpips_mean'), borderColor: '#3fb950', backgroundColor: '#3fb950', tension: 0, pointRadius: 3 },
       { label: 'held-out bicubic (after closeout)', data: evalXY('bicubic_lpips_mean'), borderColor: '#8b949e', backgroundColor: '#8b949e', tension: 0, pointRadius: 3, borderDash: [4, 4] },
     ]);
