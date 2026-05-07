@@ -1,0 +1,100 @@
+[
+  {
+    "frame": "alley_1_frame_0010.png",
+    "method": "bicubic",
+    "psnr": 35.86,
+    "ssim": 0.9376,
+    "lpips": 0.1463
+  },
+  {
+    "frame": "alley_1_frame_0010.png",
+    "method": "gsasr",
+    "psnr": 31.574,
+    "ssim": 0.8909,
+    "lpips": 0.161
+  },
+  {
+    "frame": "ambush_2_frame_0010.png",
+    "method": "bicubic",
+    "psnr": 39.664,
+    "ssim": 0.9778,
+    "lpips": 0.092
+  },
+  {
+    "frame": "ambush_2_frame_0010.png",
+    "method": "gsasr",
+    "psnr": 35.284,
+    "ssim": 0.9543,
+    "lpips": 0.1157
+  },
+  {
+    "frame": "bandage_1_frame_0010.png",
+    "method": "bicubic",
+    "psnr": 35.836,
+    "ssim": 0.953,
+    "lpips": 0.1284
+  },
+  {
+    "frame": "bandage_1_frame_0010.png",
+    "method": "gsasr",
+    "psnr": 30.825,
+    "ssim": 0.9022,
+    "lpips": 0.1512
+  },
+  {
+    "frame": "cave_2_frame_0010.png",
+    "method": "bicubic",
+    "psnr": 31.979,
+    "ssim": 0.9487,
+    "lpips": 0.1596
+  },
+  {
+    "frame": "cave_2_frame_0010.png",
+    "method": "gsasr",
+    "psnr": 27.821,
+    "ssim": 0.9074,
+    "lpips": 0.1665
+  },
+  {
+    "frame": "market_5_frame_0010.png",
+    "method": "bicubic",
+    "psnr": 36.122,
+    "ssim": 0.9489,
+    "lpips": 0.1438
+  },
+  {
+    "frame": "market_5_frame_0010.png",
+    "method": "gsasr",
+    "psnr": 31.516,
+    "ssim": 0.901,
+    "lpips": 0.1443
+  },
+  {
+    "frame": "shaman_2_frame_0010.png",
+    "method": "bicubic",
+    "psnr": 35.334,
+    "ssim": 0.9452,
+    "lpips": 0.1469
+  },
+  {
+    "frame": "shaman_2_frame_0010.png",
+    "method": "gsasr",
+    "psnr": 30.803,
+    "ssim": 0.8927,
+    "lpips": 0.1622
+  },
+  {
+    "frame": "sleeping_1_frame_0010.png",
+    "method": "bicubic",
+    "psnr": 36.025,
+    "ssim": 0.9597,
+    "lpips": 0.1171
+  },
+  {
+    "frame": "sleeping_1_frame_0010.png",
+    "method": "gsasr",
+    "psnr": 31.41,
+    "ssim": 0.9227,
+    "lpips": 0.1373
+  }
+]

@@ -1,3 +1,4 @@
+# Python
 __pycache__/
 *.py[cod]
 *.pyo
@@ -8,6 +9,8 @@ dist/
 build/
 .eggs/
 *.egg
+
+# Virtualenvs
 .venv/
 venv/
 env/
@@ -16,6 +19,7 @@ venv-*/
 
 # Data and outputs (root-anchored — does NOT exclude oss/data/ source package)
 /data/
+/logs/
 results/
 !results/.gitkeep
 *.exr
@@ -39,7 +43,7 @@ wandb/
 lightning_logs/
 *.log
 
-# Cloud
+# Secrets — never commit
 .env
 .env.*
 *.key
@@ -49,10 +53,18 @@ lightning_logs/
 secrets/
 *api*key*
 *.api_key
+id_rsa*
+id_ed25519*
+*.txt
+!docs/**/*.txt
+!**/CMakeLists.txt
+!**/COMMIT.pin
+!**/.pin
 
 # IDE
 .idea/
 .vscode/
+*.code-workspace
 *.swp
 *.swo
 .DS_Store
@@ -61,30 +73,12 @@ secrets/
 .pytest_cache/
 .coverage
 
-# Secrets — do NOT commit
-*.txt
-!docs/**/*.txt
-id_rsa*
-id_ed25519*
+# Notebooks
+.ipynb_checkpoints/
 
-# Secrets — do NOT commit
-*.txt
-!docs/**/*.txt
-.lambda/
-.secrets/
-secrets/
-*api*key*
-*.api_key
-.env.*
-*.pem
-*.key
-id_rsa*
-id_ed25519*
-
+# Local agent / harness state
+.claude/
 .superpowers/
-2407.01866v2.pdf
 
-# Carve-out: CMakeLists.txt + spec text files must be tracked despite *.txt rule above.
-!**/CMakeLists.txt
-!**/COMMIT.pin
-!**/.pin
+# Misc local
+2407.01866v2.pdf

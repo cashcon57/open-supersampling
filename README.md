@@ -26,6 +26,28 @@ These are the first measured OSS results that establish the temporal-SR architec
 
 ---
 
+## Quick start
+
+```bash
+# clone
+git clone https://github.com/cashcon57/open-supersampling.git
+cd open-supersampling
+
+# python 3.11+, CUDA 12.x for GPU (CPU works for tests)
+python3.12 -m venv venv-py312
+source venv-py312/bin/activate
+pip install -e .
+
+# verify the code path works (239 v6 tests)
+pytest tests/sr/v6/ -q
+```
+
+To reproduce the v5 held-out numbers you need the 80K-step checkpoint and the frozen TartanAir `oldtown` manifest. Both are documented in [the eval memo](docs/superpowers/experiments/2026-05-06-v5-pixel-temporal-final-held-out-eval.md) (training script `scripts/sr_train_temporal.py`, eval script `scripts/sr_temporal_held_out.py`). Checkpoints aren't committed; the eval memo records the exact commands, hashes, and result JSON byte-for-byte.
+
+For a faster smoke test on your own machine: `python scripts/sr_train_v6.py --smoke` runs the v6 forward+backward path end-to-end on synthetic data in under a minute.
+
+---
+
 ## Where things stand
 
 ![v5-pixel-temporal in flight at training step 42K](docs/results/v5-pixel-temporal/in-flight/step-00042000.png)

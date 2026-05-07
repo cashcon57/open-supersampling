@@ -1,0 +1,30 @@
+OpenSuperSampling (OSS)
+Copyright 2026 Cash Conway and OSS contributors.
+
+This product is licensed under the Apache License, Version 2.0 (the "License").
+See the LICENSE file at the repository root, or
+http://www.apache.org/licenses/LICENSE-2.0 for the full license text.
+
+This product includes the following third-party components:
+
+- Image-GS (oss/gaussian/renderer/vendor/image_gs/)
+  Copyright (c) 2025 NYU Immersive Computing Lab.
+  Licensed under the MIT License. See the vendored LICENSE file in that
+  directory for full terms.
+
+- Microsoft Detours (oss/gaussian/interception/third_party/Detours/)
+  Copyright (c) Microsoft Corporation.
+  Licensed under the MIT License. See the LICENSE file in that directory.
+
+- tinyexr (oss/gaussian/interception/third_party/tinyexr/)
+  Copyright (c) Syoyo Fujita and tinyexr contributors.
+  Licensed under the BSD-3-Clause License. See the LICENSE file in that
+  directory.
+
+The HAT spatial backbone (oss/sr/v6/hat.py) is an independent reimplementation
+of Chen et al., "Activating More Pixels in Image Super-Resolution Transformer"
+(CVPR 2023). The original reference implementation is Apache-2.0 licensed.
+
+Other prior-art references (GSASR, AAA-Gaussians, AA-2DGS, vk_gaussian_splatting,
+GaussianVideo, etc.) are cited in BIBLIOGRAPHY.md and integrated as design
+inspiration only — no code from those projects is included verbatim.
