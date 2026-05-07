@@ -10,7 +10,7 @@
 >
 > **Status.** v5-pixel-temporal (the in-distribution validation step before v6) measures **PSNR 25.703 / LPIPS 0.1666 / temporal ratio 0.337×** on TartanAir `oldtown` held-out (single dataset; no cross-dataset eval yet). v6 — the canvas + covariance + cross-attention + spawner architecture — is in training; v6.1 (active) adds randomized spawner offsets and feathered overlapping rasterizer tiles to eliminate a structural 16-pixel grid artifact diagnosed at v6-Pico-001 step-20K. OSS-FX (the α<1 extrapolation path) is one rasterizer call away from the v6 forward, since the canvas + motion field it depends on are already wired; integration is the next sprint. Cross-vendor kernels (CUDA/HIP/Metal/Level Zero/Vulkan) and the DLL-shim integration path are designed but not built. Solo maintainer, AI-augmented development. Looking for compute, hardware loaners, contract or full-time engineering work to take v6 from "in training" to "shipped on real games." See [What I'm asking for](#what-im-asking-for) below.
 
-**Live training dashboard:** [https://opensupersampling.org](https://opensupersampling.org) — current run, loss curves, viz strips, and historical results, refreshed every ~30 seconds from the training host. Public, no login.
+**Live training dashboard:** [https://opensupersampling.com](https://opensupersampling.com) — current run, loss curves, viz strips, and historical results, refreshed every ~30 seconds from the training host. Public, no login.
 
 ## Why this architecture
 
