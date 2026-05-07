@@ -19,7 +19,7 @@
     details[open] .closed-hint { display: none; }
     .viz-strip { scrollbar-width: thin; }
     .accordion-body { max-height: 0; overflow: hidden; opacity: 0.65; transition: max-height 320ms ease, opacity 220ms ease; }
-    details[open] .accordion-body { max-height: 2600px; opacity: 1; }
+    details[open] .accordion-body { max-height: 5000px; opacity: 1; }
     .viz-button { position: relative; cursor: zoom-in; transition: transform 180ms ease, filter 180ms ease; }
     .viz-button:hover { transform: translateY(-3px); filter: saturate(1.08); }
     .viz-overlay { position: absolute; inset: auto 0 0 0; display: flex; justify-content: center; background: linear-gradient(to top, rgba(0,0,0,0.78), rgba(0,0,0,0)); padding: 1.3rem 0.5rem 0.45rem; color: #ecfeff; opacity: 0; transition: opacity 160ms ease; pointer-events: none; }
@@ -92,6 +92,7 @@
       align-items: center;
       justify-content: center;
       overflow: hidden;
+      touch-action: none;
     }
     .lightbox-image {
       display: block;
@@ -99,6 +100,7 @@
       max-height: calc(100dvh - 8rem);
       object-fit: contain;
       user-select: none;
+      transform-origin: center center;
     }
     .lightbox-image.magnifier-active { cursor: crosshair; }
     .lightbox-magnifier {
@@ -151,7 +153,7 @@
     .light-mode [data-text] { color: #18181b !important; }
     .light-mode [data-subtext] { color: #3f3f46 !important; }
     .light-mode [data-dim] { color: #71717a !important; }
-      @media (max-width: 640px) {
+    @media (max-width: 640px) {
       .chart-wrap { height: 15rem; }
       .viz-frame, .viz-frame img { width: 18rem; }
       .lightbox-tool { min-height: 3rem; }
@@ -252,6 +254,10 @@ let lightboxItems = [];
 let lightboxIndex = 0;
 let magnifierEnabled = true;
 let magnifierPointerFine = window.matchMedia("(pointer: fine)").matches;
+const gesturePointers = new Map();
+let imageTransform = { scale: 1, x: 0, y: 0 };
+let gestureStart = null;
+let lastTap = { time: 0, x: 0, y: 0 };
 let lastActiveStep = null;
 let trainingPulseState = {
   activeRunName: null,
@@ -601,6 +607,7 @@ function showLightboxItem(index) {
   lightboxIndex = (index + lightboxItems.length) % lightboxItems.length;
   const item = lightboxItems[lightboxIndex];
   const image = document.getElementById("lightbox-image");
+  resetImageTransform();
   image.src = item.src;
   image.alt = `${item.runLabel} ${item.file}`;
   document.getElementById("lightbox-caption").textContent = lightboxCaption(item);
@@ -638,6 +645,117 @@ function hideMagnifier() {
   const image = document.getElementById("lightbox-image");
   if (magnifier) magnifier.classList.remove("visible");
   if (image) image.classList.remove("magnifier-active");
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function applyImageTransform() {
+  const image = document.getElementById("lightbox-image");
+  image.style.transform = `translate(${imageTransform.x}px, ${imageTransform.y}px) scale(${imageTransform.scale})`;
+}
+
+function resetImageTransform() {
+  imageTransform = { scale: 1, x: 0, y: 0 };
+  gesturePointers.clear();
+  gestureStart = null;
+  const image = document.getElementById("lightbox-image");
+  if (image) image.style.transform = "";
+}
+
+function pointerDistance(a, b) {
+  return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+}
+
+function pointerCenter(a, b) {
+  return {
+    x: (a.clientX + b.clientX) / 2,
+    y: (a.clientY + b.clientY) / 2,
+  };
+}
+
+function setGestureStart() {
+  const points = Array.from(gesturePointers.values());
+  if (points.length === 1) {
+    gestureStart = {
+      mode: "pan",
+      pointer: { clientX: points[0].clientX, clientY: points[0].clientY },
+      transform: { ...imageTransform },
+    };
+  } else if (points.length >= 2) {
+    gestureStart = {
+      mode: "pinch",
+      distance: pointerDistance(points[0], points[1]) || 1,
+      center: pointerCenter(points[0], points[1]),
+      transform: { ...imageTransform },
+    };
+  }
+}
+
+function handleImagePointerDown(event) {
+  if (event.pointerType !== "touch") return;
+  event.preventDefault();
+  event.currentTarget.setPointerCapture(event.pointerId);
+  gesturePointers.set(event.pointerId, {
+    clientX: event.clientX,
+    clientY: event.clientY,
+    startX: event.clientX,
+    startY: event.clientY,
+    startedAt: Date.now(),
+  });
+  setGestureStart();
+}
+
+function handleImagePointerMove(event) {
+  if (event.pointerType !== "touch" || !gesturePointers.has(event.pointerId)) return;
+  event.preventDefault();
+  const point = gesturePointers.get(event.pointerId);
+  point.clientX = event.clientX;
+  point.clientY = event.clientY;
+  const points = Array.from(gesturePointers.values());
+  if (points.length >= 2 && gestureStart?.mode === "pinch") {
+    const center = pointerCenter(points[0], points[1]);
+    const nextScale = clamp(gestureStart.transform.scale * (pointerDistance(points[0], points[1]) / gestureStart.distance), 1, 8);
+    imageTransform = {
+      scale: nextScale,
+      x: gestureStart.transform.x + (center.x - gestureStart.center.x),
+      y: gestureStart.transform.y + (center.y - gestureStart.center.y),
+    };
+    applyImageTransform();
+  } else if (points.length === 1 && gestureStart?.mode === "pan" && imageTransform.scale > 1) {
+    imageTransform = {
+      scale: imageTransform.scale,
+      x: gestureStart.transform.x + (event.clientX - gestureStart.pointer.clientX),
+      y: gestureStart.transform.y + (event.clientY - gestureStart.pointer.clientY),
+    };
+    applyImageTransform();
+  }
+}
+
+function handleImagePointerUp(event) {
+  if (event.pointerType !== "touch" || !gesturePointers.has(event.pointerId)) return;
+  event.preventDefault();
+  const point = gesturePointers.get(event.pointerId);
+  const tapDistance = Math.hypot(event.clientX - point.startX, event.clientY - point.startY);
+  const tapDuration = Date.now() - point.startedAt;
+  gesturePointers.delete(event.pointerId);
+  if (imageTransform.scale < 1.02) {
+    imageTransform = { scale: 1, x: 0, y: 0 };
+    applyImageTransform();
+  }
+  if (!gesturePointers.size && tapDistance < 12 && tapDuration < 300) {
+    const now = Date.now();
+    const isDoubleTap = now - lastTap.time < 320 && Math.hypot(event.clientX - lastTap.x, event.clientY - lastTap.y) < 36;
+    if (isDoubleTap) {
+      imageTransform = imageTransform.scale > 1 ? { scale: 1, x: 0, y: 0 } : { scale: 2, x: 0, y: 0 };
+      applyImageTransform();
+      lastTap = { time: 0, x: 0, y: 0 };
+    } else {
+      lastTap = { time: now, x: event.clientX, y: event.clientY };
+    }
+  }
+  setGestureStart();
 }
 
 function showMagnifier(event) {
@@ -678,15 +796,21 @@ function initLightbox() {
   image.addEventListener("pointerenter", showMagnifier);
   image.addEventListener("pointermove", showMagnifier);
   image.addEventListener("pointerleave", hideMagnifier);
+  image.addEventListener("pointerdown", handleImagePointerDown);
+  image.addEventListener("pointermove", handleImagePointerMove);
+  image.addEventListener("pointerup", handleImagePointerUp);
+  image.addEventListener("pointercancel", handleImagePointerUp);
   image.addEventListener("load", hideMagnifier);
   window.matchMedia("(pointer: fine)").addEventListener("change", updateMagnifierToggle);
   dialog.addEventListener("close", () => {
     document.body.classList.remove("lightbox-open");
     hideMagnifier();
+    resetImageTransform();
   });
   dialog.addEventListener("cancel", () => {
     document.body.classList.remove("lightbox-open");
     hideMagnifier();
+    resetImageTransform();
   });
   dialog.addEventListener("click", (event) => {
     if (event.target === dialog || event.target === stage) closeLightbox();
@@ -828,9 +952,52 @@ function renderRuns(data) {
   });
   activeCharts = charts;
   host.querySelectorAll("details").forEach((details) => {
-    details.addEventListener("toggle", () => {
-      if (details.open) window.requestAnimationFrame(() => charts.forEach((chart) => chart.resize()));
-    });
+    bindAccordion(details, charts);
+  });
+}
+
+function initMetricCards() {
+  document.addEventListener("click", (event) => {
+    const card = event.target.closest("[data-metric-card]");
+    if (!card) return;
+    card.classList.toggle("expanded");
+  });
+}
+
+function bindAccordion(details, charts) {
+  const summary = details.querySelector("summary");
+  const body = details.querySelector(".accordion-body");
+  if (!summary || !body) return;
+  summary.addEventListener("click", (event) => {
+    event.preventDefault();
+    if (details.dataset.animating === "true") return;
+    details.dataset.animating = "true";
+    if (details.open) {
+      body.style.maxHeight = `${body.scrollHeight}px`;
+      window.requestAnimationFrame(() => {
+        body.style.maxHeight = "0px";
+        body.style.opacity = "0.65";
+      });
+      window.setTimeout(() => {
+        details.open = false;
+        body.style.maxHeight = "";
+        body.style.opacity = "";
+        delete details.dataset.animating;
+      }, 330);
+    } else {
+      details.open = true;
+      body.style.maxHeight = "0px";
+      window.requestAnimationFrame(() => {
+        body.style.maxHeight = `${body.scrollHeight}px`;
+        body.style.opacity = "1";
+        charts.forEach((chart) => chart.resize());
+      });
+      window.setTimeout(() => {
+        body.style.maxHeight = "";
+        body.style.opacity = "";
+        delete details.dataset.animating;
+      }, 340);
+    }
   });
 }
 
@@ -904,6 +1071,7 @@ document.addEventListener("DOMContentLoaded", () => {
     setTheme(document.documentElement.classList.contains("dark"));
   });
   initLightbox();
+  initMetricCards();
   pollDashboard();
   startLiveUpdates();
 });
