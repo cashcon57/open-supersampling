@@ -1,26 +1,27 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 330" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 450" role="img" aria-labelledby="title desc">
   <title id="title">Open Super Sampling</title>
   <desc id="desc">ASCII block-art Open Super Sampling logo.</desc>
-  <rect x="8" y="8" width="944" height="314" rx="14" fill="#0a0a0a" stroke="rgba(110,231,183,0.5)" stroke-width="2"/>
+  <rect x="8" y="8" width="944" height="434" rx="14" fill="#0a0a0a" stroke="rgba(110,231,183,0.5)" stroke-width="2"/>
   <style>
-    text { font-family: "JetBrains Mono", "Courier New", monospace; font-size: 26px; font-weight: 800; dominant-baseline: hanging; white-space: pre; }
+    text { font-family: "JetBrains Mono", "Courier New", monospace; font-size: 18px; font-weight: 800; dominant-baseline: hanging; white-space: pre; }
     .fg { fill: #f4f4f5; }
     .accent { fill: #6ee7b7; }
   </style>
   <text class="fg" x="34" y="28"> ██████╗ ██████╗ ███████╗███╗   ██╗</text>
-  <text class="fg" x="34" y="55">██╔═══██╗██╔══██╗██╔════╝████╗  ██║</text>
-  <text class="fg" x="34" y="82">██║   ██║██████╔╝█████╗  ██╔██╗ ██║</text>
-  <text class="fg" x="34" y="109">██║   ██║██╔═══╝ ██╔══╝  ██║╚██╗██║</text>
-  <text class="fg" x="34" y="136">╚██████╔╝██║     ███████╗██║ ╚████║</text>
-  <text class="fg" x="34" y="163"> ╚═════╝ ╚═╝     ╚══════╝╚═╝  ╚═══╝</text>
-  <text class="accent" x="34" y="196">███████╗██╗   ██╗██████╗ ███████╗██████╗</text>
-  <text class="accent" x="34" y="223">██╔════╝██║   ██║██╔══██╗██╔════╝██╔══██╗</text>
-  <text class="accent" x="34" y="250">███████╗██║   ██║██████╔╝█████╗  ██████╔╝</text>
-  <text class="accent" x="34" y="277">╚════██║██║   ██║██╔═══╝ ██╔══╝  ██╔══██╗</text>
-  <text class="accent" x="34" y="304">███████║╚██████╔╝██║     ███████╗██║  ██║</text>
-  <text class="fg" x="540" y="196">███████╗ █████╗ ███╗   ███╗</text>
-  <text class="fg" x="540" y="223">██╔════╝██╔══██╗████╗ ████║</text>
-  <text class="fg" x="540" y="250">███████╗███████║██╔████╔██║</text>
-  <text class="fg" x="540" y="277">╚════██║██╔══██║██║╚██╔╝██║</text>
-  <text class="fg" x="540" y="304">███████║██║  ██║██║ ╚═╝ ██║</text>
+  <text class="fg" x="34" y="50">██╔═══██╗██╔══██╗██╔════╝████╗  ██║</text>
+  <text class="fg" x="34" y="72">██║   ██║██████╔╝█████╗  ██╔██╗ ██║</text>
+  <text class="fg" x="34" y="94">██║   ██║██╔═══╝ ██╔══╝  ██║╚██╗██║</text>
+  <text class="fg" x="34" y="116">╚██████╔╝██║     ███████╗██║ ╚████║</text>
+  <text class="fg" x="34" y="138"> ╚═════╝ ╚═╝     ╚══════╝╚═╝  ╚═══╝</text>
+  <text class="accent" x="34" y="178">███████╗██╗   ██╗██████╗ ███████╗██████╗</text>
+  <text class="accent" x="34" y="200">██╔════╝██║   ██║██╔══██╗██╔════╝██╔══██╗</text>
+  <text class="accent" x="34" y="222">███████╗██║   ██║██████╔╝█████╗  ██████╔╝</text>
+  <text class="accent" x="34" y="244">╚════██║██║   ██║██╔═══╝ ██╔══╝  ██╔══██╗</text>
+  <text class="accent" x="34" y="266">███████║╚██████╔╝██║     ███████╗██║  ██║</text>
+  <text class="accent" x="34" y="288">╚══════╝ ╚═════╝ ╚═╝     ╚══════╝╚═╝  ╚═╝</text>
+  <text class="fg" x="34" y="328">███████╗ █████╗ ███╗   ███╗██████╗ ██╗     ██╗███╗   ██╗ ██████╗</text>
+  <text class="fg" x="34" y="350">██╔════╝██╔══██╗████╗ ████║██╔══██╗██║     ██║████╗  ██║██╔════╝</text>
+  <text class="fg" x="34" y="372">███████╗███████║██╔████╔██║██████╔╝██║     ██║██╔██╗ ██║██║  ███╗</text>
+  <text class="fg" x="34" y="394">╚════██║██╔══██║██║╚██╔╝██║██╔═══╝ ██║     ██║██║╚██╗██║██║   ██║</text>
+  <text class="fg" x="34" y="416">███████║██║  ██║██║ ╚═╝ ██║██║     ███████╗██║██║ ╚████║╚██████╔╝</text>
 </svg>
