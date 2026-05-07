@@ -60,12 +60,12 @@ RUN_CONFIG = {
         "default_open": False,
         "history_title": "v4",
         "status": "single-frame baseline",
-        "summary": "See v4 baseline: 30.1 dB / 0.30 LPIPS on SRGD plus TensorRT FP16 latency.",
-        "note": "SRGD reference: 30.1 dB / 0.30 LPIPS. TensorRT FP16 latency: 15.6 ms engine-only, 37.6 ms end-to-end.",
+        "summary": "See both v4 held-out contexts: 33.67 dB / 0.270 LPIPS on SRGD, but 11.718 dB / 0.6367 LPIPS after shifting to TartanAir oldtown.",
+        "note": "v4 has two held-out contexts: SRGD in-distribution at 33.67 dB / 0.270 LPIPS, and the same model distribution-shifted to TartanAir oldtown at 11.718 dB / 0.6367 LPIPS. TensorRT FP16 latency: 15.6 ms engine-only, 37.6 ms end-to-end.",
         "headline": [
-            {"label": "SRGD PSNR", "value": "30.1 dB", "caption": "single-frame baseline"},
-            {"label": "SRGD LPIPS", "value": "0.30", "caption": "lower is better"},
-            {"label": "TRT FP16", "value": "15.6 / 37.6 ms", "caption": "engine / end-to-end"},
+            {"label": "SRGD PSNR", "value": "33.67 dB", "caption": "in-distribution peak"},
+            {"label": "TartanAir PSNR", "value": "11.718 dB", "caption": "distribution-shifted"},
+            {"label": "TartanAir LPIPS", "value": "0.6367", "caption": "same batch as v5/v6.1"},
         ],
     },
     "srcnn-v6-pico-001": {
@@ -96,6 +96,28 @@ RUN_MAX_STEPS = {
     "srcnn-v5-pixel-temporal-validated": 80_000,
     "srcnn-prod-v4-lpips": 420_000,
 }
+V4_CROSS_VERSION_POINTS = [
+    {
+        "name": "v4 (SRGD)",
+        "label_full": "v4 single-frame on SRGD held-out (in-distribution)",
+        "psnr": 33.67,
+        "lpips": 0.270,
+        "step": 300000,
+        "manifest": "SRGD held-out, 8 frames",
+        "color_class": "v4",
+        "is_in_distribution": True,
+    },
+    {
+        "name": "v4 (TartanAir, distribution-shifted)",
+        "label_full": "v4 single-frame on TartanAir oldtown (NOT in v4's training distribution)",
+        "psnr": 11.718,
+        "lpips": 0.6367,
+        "step": 300000,
+        "manifest": "TartanAir oldtown, 64 frames (same as v5/v6.1)",
+        "color_class": "v4",
+        "is_in_distribution": False,
+    },
+]
 
 
 def utc_now_iso() -> str:
@@ -303,6 +325,7 @@ def build_run(name: str, previous: dict[str, Any] | None) -> dict[str, Any] | No
         cached["gpu_status"] = read_gpu_status(run_dir) or cached.get("gpu_status")
         cached["viz_columns"] = viz_columns_for_run(name) or cached.get("viz_columns", [])
         cached["max_target_steps"] = max_steps_for_run(name, [], cached)
+        cached["cross_version_points"] = cross_version_points_for_run(name)
         return cached
 
     if not metrics and not scores and not viz_pngs:
@@ -319,6 +342,7 @@ def build_run(name: str, previous: dict[str, Any] | None) -> dict[str, Any] | No
             "viz_columns": viz_columns_for_run(name),
             "max_target_steps": max_steps_for_run(name, [], previous),
             "gpu_status": read_gpu_status(run_dir),
+            "cross_version_points": cross_version_points_for_run(name),
         }
 
     metrics = sorted(metrics, key=step_value)
@@ -339,7 +363,14 @@ def build_run(name: str, previous: dict[str, Any] | None) -> dict[str, Any] | No
         "viz_columns": viz_columns,
         "max_target_steps": max_steps_for_run(name, metrics, previous),
         "gpu_status": read_gpu_status(run_dir),
+        "cross_version_points": cross_version_points_for_run(name),
     }
+
+
+def cross_version_points_for_run(name: str) -> list[dict[str, Any]]:
+    if name == "srcnn-prod-v4-lpips":
+        return [dict(point) for point in V4_CROSS_VERSION_POINTS]
+    return []
 
 
 def history_for_run(name: str, config: dict[str, Any]) -> dict[str, Any]:

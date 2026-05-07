@@ -1,8 +1,9 @@
 {
-  "generated_at": "2026-05-07T19:57:03Z",
+  "generated_at": "2026-05-07T20:29:09Z",
   "runs": [
     {
       "active": true,
+      "cross_version_points": [],
       "gpu_status": {
         "captured_at": "2026-05-07T17:30:00Z",
         "gpu_name": "NVIDIA GeForce RTX 3080 Ti",
@@ -17090,6 +17091,7 @@
     },
     {
       "active": false,
+      "cross_version_points": [],
       "gpu_status": null,
       "history": {
         "default_open": false,
@@ -29198,29 +29200,51 @@
     },
     {
       "active": false,
+      "cross_version_points": [
+        {
+          "color_class": "v4",
+          "is_in_distribution": true,
+          "label_full": "v4 single-frame on SRGD held-out (in-distribution)",
+          "lpips": 0.27,
+          "manifest": "SRGD held-out, 8 frames",
+          "name": "v4 (SRGD)",
+          "psnr": 33.67,
+          "step": 300000
+        },
+        {
+          "color_class": "v4",
+          "is_in_distribution": false,
+          "label_full": "v4 single-frame on TartanAir oldtown (NOT in v4's training distribution)",
+          "lpips": 0.6367,
+          "manifest": "TartanAir oldtown, 64 frames (same as v5/v6.1)",
+          "name": "v4 (TartanAir, distribution-shifted)",
+          "psnr": 11.718,
+          "step": 300000
+        }
+      ],
       "gpu_status": null,
       "history": {
         "default_open": false,
         "headline": [
           {
-            "caption": "single-frame baseline",
+            "caption": "in-distribution peak",
             "label": "SRGD PSNR",
-            "value": "30.1 dB"
+            "value": "33.67 dB"
           },
           {
-            "caption": "lower is better",
-            "label": "SRGD LPIPS",
-            "value": "0.30"
+            "caption": "distribution-shifted",
+            "label": "TartanAir PSNR",
+            "value": "11.718 dB"
           },
           {
-            "caption": "engine / end-to-end",
-            "label": "TRT FP16",
-            "value": "15.6 / 37.6 ms"
+            "caption": "same batch as v5/v6.1",
+            "label": "TartanAir LPIPS",
+            "value": "0.6367"
           }
         ],
-        "note": "SRGD reference: 30.1 dB / 0.30 LPIPS. TensorRT FP16 latency: 15.6 ms engine-only, 37.6 ms end-to-end.",
+        "note": "v4 has two held-out contexts: SRGD in-distribution at 33.67 dB / 0.270 LPIPS, and the same model distribution-shifted to TartanAir oldtown at 11.718 dB / 0.6367 LPIPS. TensorRT FP16 latency: 15.6 ms engine-only, 37.6 ms end-to-end.",
         "status": "single-frame baseline",
-        "summary": "See v4 baseline: 30.1 dB / 0.30 LPIPS on SRGD plus TensorRT FP16 latency.",
+        "summary": "See both v4 held-out contexts: 33.67 dB / 0.270 LPIPS on SRGD, but 11.718 dB / 0.6367 LPIPS after shifting to TartanAir oldtown.",
         "title": "v4"
       },
       "label": "v4 (single-frame baseline)",
@@ -40569,6 +40593,7 @@
     },
     {
       "active": false,
+      "cross_version_points": [],
       "gpu_status": null,
       "history": {
         "default_open": false,

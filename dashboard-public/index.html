@@ -534,7 +534,7 @@
           <div class="chart-wrap comparison-chart-wrap"><canvas id="cross-version-lpips-chart"></canvas></div>
         </div>
       </div>
-      <p class="mt-3 text-xs leading-5 text-zinc-500" data-dim>Reference lines are from competitor-published or third-party-benchmarked values on heterogeneous content (Cyberpunk 2077, Death Stranding, Hitman 3, etc.) — not direct head-to-head on the TartanAir oldtown batch OSS uses. They establish ROM order-of-magnitude context, not apples-to-apples comparison. OSS aims to publish head-to-head numbers on game-engine footage as the v6 cross-game-engine eval matures.</p>
+      <p class="mt-3 text-xs leading-5 text-zinc-500" data-dim>Reference lines are from competitor-published or third-party-benchmarked values on heterogeneous content (Cyberpunk 2077, Death Stranding, Hitman 3, etc.) — not direct head-to-head on the TartanAir oldtown batch OSS uses. They establish ROM order-of-magnitude context, not apples-to-apples comparison. OSS aims to publish head-to-head numbers on game-engine footage as the v6 cross-game-engine eval matures. <strong class="text-zinc-300">v4 has TWO data points</strong> because it was evaluated on different content than v5/v6.1. The 33.67 dB number is v4 on SRGD (its training distribution), where it looks fine. The 11.718 dB number is the SAME v4 model evaluated on the TartanAir oldtown batch v5+v6.1 use — the "rainbow mess" failure mode that motivated the v5+v6 architectural redesign. v6 is built to NOT distribution-shift like this; v6.1 cross-game-engine eval (UE5 / Unity / Source 2) is the ongoing test of whether that architectural design actually generalizes.</p>
       <p class="mt-2 text-xs leading-5 text-zinc-500" data-dim>Sources: bicubic is measured on the OSS TartanAir oldtown batch; FSR references use AMD GPUOpen/FidelityFX documentation plus Digital Foundry/Insider Gaming comparisons; XeSS references use Intel XeSS paper and game-benchmark coverage; DLSS references use NVIDIA DLSS publications plus Digital Foundry/TechPowerUp comparisons. Values are favorable competitor-side reference anchors, not OSS-measured head-to-head scores.</p>
     </section>
 
@@ -602,6 +602,7 @@ const colors = {
   psnr: "#d6f4cc",
   bicubic: "#4f6a64",
   gold: "#c8a960",
+  v4: "#f0b56f",
   nvidia: "#8cffc1",
   amd: "#ff7b7b",
   intel: "#7dd3fc",
@@ -1137,31 +1138,89 @@ function bestScoreRow(run) {
   }, null);
 }
 
-function versionPointForRun(run, x) {
+const v4FallbackCrossVersionPoints = [
+  {
+    name: "v4 (SRGD)",
+    label_full: "v4 single-frame on SRGD held-out (in-distribution)",
+    psnr: 33.67,
+    lpips: 0.270,
+    step: 300000,
+    manifest: "SRGD held-out, 8 frames",
+    color_class: "v4",
+    is_in_distribution: true,
+  },
+  {
+    name: "v4 (TartanAir, distribution-shifted)",
+    label_full: "v4 single-frame on TartanAir oldtown (NOT in v4's training distribution)",
+    psnr: 11.718,
+    lpips: 0.6367,
+    step: 300000,
+    manifest: "TartanAir oldtown, 64 frames (same as v5/v6.1)",
+    color_class: "v4",
+    is_in_distribution: false,
+  },
+];
+
+function colorForComparisonPoint(point, metric) {
+  if (point?.color_class === "v4") return colors.v4;
+  return metric === "psnr" ? colors.ossPoint : colors.gold;
+}
+
+function versionPointForRun(run, x, options = {}) {
   const row = bestScoreRow(run);
   if (!row) return null;
   const psnr = Number(row.model_psnr_mean);
   const lpips = Number(row.model_lpips_mean);
   if (!Number.isFinite(psnr) || !Number.isFinite(lpips)) return null;
+  const runLabel = run.history?.title || run.label || run.name;
   return {
     x,
     psnr,
     lpips,
     step: Number(row.step || run.latest_step || 0),
-    run: run.history?.title || run.label || run.name,
+    run: runLabel,
+    name: options.name || runLabel,
+    label_full: options.label_full || runLabel,
+    manifest: options.manifest || row.manifest || "TartanAir oldtown, 64 frames",
+    color_class: options.color_class || "oss",
+    is_in_distribution: options.is_in_distribution ?? true,
   };
+}
+
+function v4ComparisonPoints(run) {
+  const source = (run?.cross_version_points || []).length ? run.cross_version_points : v4FallbackCrossVersionPoints;
+  return source.map((point, index) => ({
+    ...point,
+    x: index === 0 ? 0 : 0.42,
+    run: point.name,
+    marker: "rect",
+  })).filter((point) => Number.isFinite(Number(point.psnr)) && Number.isFinite(Number(point.lpips)));
 }
 
 function crossVersionPoints(data) {
   const runs = data?.runs || [];
   const byName = new Map(runs.map((run) => [run.name, run]));
-  const v4 = versionPointForRun(byName.get("srcnn-prod-v4-lpips"), 0);
-  const v5 = versionPointForRun(byName.get("srcnn-v5-pixel-temporal-validated"), 1);
-  const v61 = versionPointForRun(byName.get("srcnn-v6.1-pico-001"), 3);
+  const v4 = v4ComparisonPoints(byName.get("srcnn-prod-v4-lpips"));
+  const v5 = versionPointForRun(byName.get("srcnn-v5-pixel-temporal-validated"), 1.35, {
+    name: "v5",
+    label_full: "v5-pixel-temporal on TartanAir oldtown",
+    manifest: "TartanAir oldtown, 64 frames",
+  });
+  const v61 = versionPointForRun(byName.get("srcnn-v6.1-pico-001"), 3.25, {
+    name: "v6.1",
+    label_full: "v6.1 Pico on TartanAir oldtown",
+    manifest: "TartanAir oldtown, 64 frames",
+  });
   return {
-    labels: ["v4", "v5", "v6", "v6.1"],
-    points: [v4, v5, v61].filter(Boolean),
-    missing: [{ x: 2, label: "v6 not measured" }],
+    labels: [
+      { x: 0, label: ["v4", "SRGD"] },
+      { x: 0.42, label: ["v4", "Tartan"] },
+      { x: 1.35, label: "v5" },
+      { x: 2.25, label: "v6" },
+      { x: 3.25, label: "v6.1" },
+    ],
+    points: [...v4, v5, v61].filter(Boolean),
+    missing: [{ x: 2.25, label: "v6 not measured" }],
   };
 }
 
@@ -1214,9 +1273,34 @@ const crossVersionLabelPlugin = {
       const x = scales.x.getPixelForValue(item.x);
       ctx.fillText(item.label, x, chartArea.top + 18);
     });
-    versionLabels.forEach((label, index) => {
-      const x = scales.x.getPixelForValue(index);
-      ctx.fillText(label, x, chartArea.bottom - 8);
+    versionLabels.forEach((item, index) => {
+      const label = typeof item === "string" ? item : item.label;
+      const value = typeof item === "string" ? index : item.x;
+      const x = scales.x.getPixelForValue(value);
+      const lines = Array.isArray(label) ? label : [label];
+      const startY = lines.length > 1 ? chartArea.bottom - 17 : chartArea.bottom - 8;
+      lines.forEach((line, lineIndex) => {
+        ctx.fillText(line, x, startY + lineIndex * 10);
+      });
+    });
+    const connectors = chart.options.plugins?.crossVersionConnectors || [];
+    connectors.forEach((item) => {
+      const scale = scales[item.yAxisID || "y"];
+      if (!scale) return;
+      const x1 = scales.x.getPixelForValue(item.from.x);
+      const y1 = scale.getPixelForValue(item.from.y);
+      const x2 = scales.x.getPixelForValue(item.to.x);
+      const y2 = scale.getPixelForValue(item.to.y);
+      ctx.strokeStyle = item.color;
+      ctx.fillStyle = item.color;
+      ctx.globalAlpha = 0.9;
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+      ctx.textAlign = "left";
+      ctx.fillText(item.label, Math.min(x1, x2) + 8, Math.min(y1, y2) + 12);
+      ctx.globalAlpha = 1;
     });
     ctx.restore();
   },
@@ -1251,6 +1335,16 @@ function renderSingleMetricComparison(data, metric, opts) {
     : Math.ceil((Math.max(...values, opts.autoMax) + padding) * precision) / precision;
   const yMin = comparisonFullRange ? opts.fullMin : Math.max(opts.fullMin, autoMin);
   const yMax = comparisonFullRange ? opts.fullMax : Math.min(opts.fullMax, autoMax);
+  const v4Points = points.filter((point) => point.color_class === "v4");
+  const v4Connector = isPsnr && v4Points.length >= 2
+    ? [{
+        from: { x: v4Points[0].x, y: v4Points[0][metric] },
+        to: { x: v4Points[1].x, y: v4Points[1][metric] },
+        yAxisID: "y",
+        color: colors.v4,
+        label: "↓ on TartanAir, v4 falls off cliff",
+      }]
+    : [];
   const datasets = [
     {
       label: `OSS ${isPsnr ? "PSNR" : "LPIPS"} measured`,
@@ -1258,13 +1352,31 @@ function renderSingleMetricComparison(data, metric, opts) {
       data: points.map((point) => ({ x: point.x, y: point[metric], point })),
       borderColor: isPsnr ? colors.ossPoint : colors.gold,
       backgroundColor: isPsnr ? colors.ossPoint : colors.gold,
-      pointBorderColor: isPsnr ? colors.ossPoint : colors.gold,
-      pointBackgroundColor: "#06110f",
-      pointStyle: isPsnr ? "circle" : "rectRot",
-      pointRadius: 5,
-      pointHoverRadius: 7,
+      pointBorderColor(context) {
+        return colorForComparisonPoint(context.raw?.point, metric);
+      },
+      pointBackgroundColor(context) {
+        const point = context.raw?.point;
+        if (point?.color_class === "v4" && point.is_in_distribution === false) return "#06110f";
+        return colorForComparisonPoint(point, metric);
+      },
+      pointStyle(context) {
+        const point = context.raw?.point;
+        if (point?.marker) return point.marker;
+        return isPsnr ? "circle" : "rectRot";
+      },
+      pointRadius(context) {
+        return context.raw?.point?.color_class === "v4" ? 6 : 5;
+      },
+      pointHoverRadius(context) {
+        return context.raw?.point?.color_class === "v4" ? 8 : 7;
+      },
       showLine: false,
       borderWidth: 3,
+      pointBorderWidth(context) {
+        const point = context.raw?.point;
+        return point?.color_class === "v4" && point.is_in_distribution === false ? 3 : 2;
+      },
     },
     ...comparisonReferenceLines.map((ref) => {
       const hidden = !comparisonShowAll && !ref.latest;
@@ -1322,10 +1434,13 @@ function renderSingleMetricComparison(data, metric, opts) {
         },
       },
       tooltip: {
+        filter(item) {
+          return !item.dataset?.connectorLine;
+        },
         callbacks: {
           title(items) {
             const raw = items[0]?.raw;
-            if (raw?.point) return `${raw.point.run} step ${raw.point.step.toLocaleString()}`;
+            if (raw?.point) return raw.point.label_full || raw.point.run;
             return items[0]?.dataset?.refName || items[0]?.dataset?.label || "";
           },
           label(item) {
@@ -1333,12 +1448,21 @@ function renderSingleMetricComparison(data, metric, opts) {
             if (dataset.refLine) {
               return `${isPsnr ? "PSNR" : "LPIPS"}: ${fmtNumber(item.parsed.y, isPsnr ? 2 : 4)} • ${dataset.refSource}`;
             }
+            const point = item.raw?.point;
+            if (point) {
+              return [
+                `${isPsnr ? "PSNR" : "LPIPS"}: ${fmtNumber(item.parsed.y, isPsnr ? 3 : 4)}`,
+                `Held-out batch: ${point.manifest || "unknown"}`,
+                `Step: ${Number(point.step || 0).toLocaleString()}`,
+              ];
+            }
             return `${isPsnr ? "PSNR" : "LPIPS"}: ${fmtNumber(item.parsed.y, isPsnr ? 3 : 4)}`;
           },
         },
       },
       crossVersionMissing: missing,
       crossVersionLabels: labels,
+      crossVersionConnectors: v4Connector,
     },
   };
   return new Chart(canvas, { type: "line", data: { datasets }, options, plugins: [crossVersionLabelPlugin] });
@@ -1491,6 +1615,19 @@ function renderHeldoutChart(canvas, run) {
 }
 
 function renderScoreTable(host, run) {
+  const comparisonRows = run.cross_version_points || [];
+  if (comparisonRows.length) {
+    const body = comparisonRows.map((row) => `
+      <tr class="border-t border-zinc-800">
+        <td class="px-3 py-2">${escapeHtml(row.label_full || row.name)}</td>
+        <td class="px-3 py-2 font-mono">${escapeHtml(fmtNumber(row.psnr, 3))}</td>
+        <td class="px-3 py-2 font-mono">${escapeHtml(fmtNumber(row.lpips, 4))}</td>
+        <td class="px-3 py-2">${escapeHtml(row.manifest || "")}</td>
+        <td class="px-3 py-2 font-mono">${Number(row.step || 0).toLocaleString()}</td>
+      </tr>`).join("");
+    host.innerHTML = `<div class="score-scroll overflow-x-auto rounded border border-zinc-800"><table class="min-w-full text-sm text-zinc-300"><thead class="bg-zinc-950/50 text-xs uppercase text-zinc-500"><tr><th class="px-3 py-2 text-left font-medium">held-out evaluation</th><th class="px-3 py-2 text-left font-medium">PSNR</th><th class="px-3 py-2 text-left font-medium">LPIPS</th><th class="px-3 py-2 text-left font-medium">held-out batch</th><th class="px-3 py-2 text-left font-medium">step</th></tr></thead><tbody>${body}</tbody></table></div>`;
+    return;
+  }
   const rows = (run.score_log || []).slice(-6).reverse();
   if (!rows.length) {
     host.innerHTML = `<p class="rounded border border-zinc-800 bg-zinc-950/40 px-4 py-5 text-sm text-zinc-400" data-muted-surface data-subtext>No held-out score_log.json rows published for this run.</p>`;
