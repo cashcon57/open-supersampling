@@ -11,8 +11,30 @@ import argparse
 from pathlib import Path
 
 import torch
+import torch.nn.functional as F
 
 from oss.model.oss_pico import OSSPico
+
+
+def _make_export_inputs(
+    batch: int,
+    h_lr: int,
+    w_lr: int,
+    h_hr: int,
+    w_hr: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Build deterministic, physically plausible inputs for tracing/parity."""
+
+    gen = torch.Generator(device="cpu").manual_seed(20260507)
+    color_lr = torch.rand(batch, 3, h_lr, w_lr, generator=gen)
+    depth_lr = torch.rand(batch, 1, h_lr, w_lr, generator=gen)
+    motion_lr = (torch.rand(batch, 2, h_lr, w_lr, generator=gen) - 0.5) * 2.0
+    normals_lr = torch.rand(batch, 3, h_lr, w_lr, generator=gen) * 2.0 - 1.0
+    normals_lr = F.normalize(normals_lr, dim=1, eps=1e-6)
+    albedo_lr = torch.rand(batch, 3, h_lr, w_lr, generator=gen) * 0.95 + 0.05
+    history_hr = torch.rand(batch, 3, h_hr, w_hr, generator=gen)
+    hidden_zero = torch.zeros(batch, 24, h_lr // 4, w_lr // 4)
+    return color_lr, depth_lr, motion_lr, normals_lr, albedo_lr, history_hr, hidden_zero
 
 
 def export(ckpt_path: Path, out_path: Path, validate: bool = True):
@@ -25,24 +47,24 @@ def export(ckpt_path: Path, out_path: Path, validate: bool = True):
     """
     # Load checkpoint
     state = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-    model = OSSPico().train(False)
+    scale = state.get("config", {}).get("scale_factor", 2.0)
+    model = OSSPico(scale_factor=float(scale)).eval()
     model.load_state_dict(state["model"])
 
     # Dummy inputs for tracing
     B = 1
     H_lr, W_lr = 64, 64  # canonical export shape; runtime can use dynamic axes
-    scale = state.get("config", {}).get("scale_factor", 2.0)
     H_hr = int(H_lr * scale)
     W_hr = int(W_lr * scale)
 
-    color_lr = torch.randn(B, 3, H_lr, W_lr)
-    depth_lr = torch.randn(B, 1, H_lr, W_lr)
-    motion_lr = torch.randn(B, 2, H_lr, W_lr)
-    normals_lr = torch.randn(B, 3, H_lr, W_lr)
-    albedo_lr = torch.randn(B, 3, H_lr, W_lr)
-    history_hr = torch.randn(B, 3, H_hr, W_hr)
     # hidden_state: None at sequence start; we trace the explicit-zeros path for ONNX.
-    hidden_zero = torch.zeros(B, 24, H_lr // 4, W_lr // 4)
+    color_lr, depth_lr, motion_lr, normals_lr, albedo_lr, history_hr, hidden_zero = _make_export_inputs(
+        B,
+        H_lr,
+        W_lr,
+        H_hr,
+        W_hr,
+    )
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
