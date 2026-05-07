@@ -122,94 +122,66 @@ class V6Rasterizer(nn.Module):
             dtype=torch.float32,
         )
         weight_accum = torch.zeros((1, h, w), device=device, dtype=torch.float32)
-
-        radius = 3.0 * gaussians.scale.to(dtype=torch.float32).amax(dim=-1)
         overlap = int(self.overlap)
-        tile = int(self.tile_size)
-        for y0 in range(0, h, tile):
-            y1 = min(y0 + tile, h)
-            crop_y0 = max(0, y0 - overlap)
-            crop_y1 = min(h, y1 + overlap)
-            for x0 in range(0, w, tile):
-                x1 = min(x0 + tile, w)
-                crop_x0 = max(0, x0 - overlap)
-                crop_x1 = min(w, x1 + overlap)
 
-                keep = (
-                    (gaussians.xy[:, 0].to(dtype=torch.float32) + radius >= float(crop_x0))
-                    & (gaussians.xy[:, 0].to(dtype=torch.float32) - radius < float(crop_x1))
-                    & (gaussians.xy[:, 1].to(dtype=torch.float32) + radius >= float(crop_y0))
-                    & (gaussians.xy[:, 1].to(dtype=torch.float32) - radius < float(crop_y1))
-                )
-                if not bool(keep.any().item()):
-                    continue
-
-                local_xy = gaussians.xy[keep].clone()
-                local_xy[:, 0] = local_xy[:, 0] - float(crop_x0)
-                local_xy[:, 1] = local_xy[:, 1] - float(crop_y0)
-                local = GaussianBatch(
-                    xy=local_xy,
-                    scale=gaussians.scale[keep],
-                    rot=gaussians.rot[keep],
-                    feat=gaussians.feat[keep],
-                )
-                crop_h = crop_y1 - crop_y0
-                crop_w = crop_x1 - crop_x0
-                rendered = self.renderer(local, output_hw=(crop_h, crop_w)).to(
-                    dtype=torch.float32
-                )
-                weight = self._feather_mask(
-                    crop_hw=(crop_h, crop_w),
-                    crop_origin=(crop_y0, crop_x0),
-                    owner_box=(y0, y1, x0, x1),
-                    image_hw=(h, w),
-                    device=device,
-                )
-                accum[:, crop_y0:crop_y1, crop_x0:crop_x1] += rendered * weight
-                weight_accum[:, crop_y0:crop_y1, crop_x0:crop_x1] += weight
+        # Rendering every owner tile independently is prohibitively expensive
+        # once the CUDA backend chunks token_dim>12 into multiple kernel calls.
+        # Instead, render a small set of full-frame crops whose 16px tile
+        # origins are phase-shifted by the overlap width, then blend each crop
+        # down near its own tile boundaries. This keeps the C++ kernel intact
+        # while breaking the fixed renderer-grid phase in O(4) renders.
+        origins = ((0, 0), (-overlap, 0), (0, -overlap), (-overlap, -overlap))
+        for origin_y, origin_x in origins:
+            crop_h = h - min(origin_y, 0)
+            crop_w = w - min(origin_x, 0)
+            local_xy = gaussians.xy.clone()
+            local_xy[:, 0] = local_xy[:, 0] - float(origin_x)
+            local_xy[:, 1] = local_xy[:, 1] - float(origin_y)
+            local = GaussianBatch(
+                xy=local_xy,
+                scale=gaussians.scale,
+                rot=gaussians.rot,
+                feat=gaussians.feat,
+            )
+            rendered = self.renderer(local, output_hw=(crop_h, crop_w)).to(
+                dtype=torch.float32
+            )
+            y_start = -min(origin_y, 0)
+            x_start = -min(origin_x, 0)
+            rendered = rendered[:, y_start:y_start + h, x_start:x_start + w]
+            weight = self._phase_feather_mask(
+                image_hw=(h, w),
+                origin=(origin_y, origin_x),
+                device=device,
+            )
+            accum += rendered * weight
+            weight_accum += weight
 
         return (accum / weight_accum.clamp_min(1.0e-6)).to(dtype=dtype)
 
-    def _feather_mask(
+    def _phase_feather_mask(
         self,
         *,
-        crop_hw: tuple[int, int],
-        crop_origin: tuple[int, int],
-        owner_box: tuple[int, int, int, int],
         image_hw: tuple[int, int],
+        origin: tuple[int, int],
         device: torch.device,
     ) -> torch.Tensor:
-        crop_h, crop_w = int(crop_hw[0]), int(crop_hw[1])
-        crop_y0, crop_x0 = int(crop_origin[0]), int(crop_origin[1])
-        y0, y1, x0, x1 = (int(v) for v in owner_box)
         h, w = int(image_hw[0]), int(image_hw[1])
+        origin_y, origin_x = int(origin[0]), int(origin[1])
         overlap = float(self.overlap)
         if overlap <= 0:
-            return torch.ones((1, crop_h, crop_w), device=device, dtype=torch.float32)
+            return torch.ones((1, h, w), device=device, dtype=torch.float32)
 
-        ys = torch.arange(crop_y0, crop_y0 + crop_h, device=device, dtype=torch.float32) + 0.5
-        xs = torch.arange(crop_x0, crop_x0 + crop_w, device=device, dtype=torch.float32) + 0.5
-        wy = torch.ones_like(ys)
-        wx = torch.ones_like(xs)
-
-        if y0 > 0:
-            left = ys < float(y0)
-            t = ((ys - float(y0 - self.overlap)) / overlap).clamp(0.0, 1.0)
-            wy = torch.where(left, self._cosine_ramp(t), wy)
-        if y1 < h:
-            right = ys >= float(y1)
-            t = ((float(y1 + self.overlap) - ys) / overlap).clamp(0.0, 1.0)
-            wy = torch.where(right, self._cosine_ramp(t), wy)
-        if x0 > 0:
-            left = xs < float(x0)
-            t = ((xs - float(x0 - self.overlap)) / overlap).clamp(0.0, 1.0)
-            wx = torch.where(left, self._cosine_ramp(t), wx)
-        if x1 < w:
-            right = xs >= float(x1)
-            t = ((float(x1 + self.overlap) - xs) / overlap).clamp(0.0, 1.0)
-            wx = torch.where(right, self._cosine_ramp(t), wx)
-
-        return (wy.view(1, crop_h, 1) * wx.view(1, 1, crop_w)).to(dtype=torch.float32)
+        tile = float(self.tile_size)
+        ys = torch.arange(h, device=device, dtype=torch.float32) + 0.5 - float(origin_y)
+        xs = torch.arange(w, device=device, dtype=torch.float32) + 0.5 - float(origin_x)
+        phase_y = torch.remainder(ys, tile)
+        phase_x = torch.remainder(xs, tile)
+        dist_y = torch.minimum(phase_y, tile - phase_y)
+        dist_x = torch.minimum(phase_x, tile - phase_x)
+        wy = self._cosine_ramp((dist_y / overlap).clamp(0.0, 1.0))
+        wx = self._cosine_ramp((dist_x / overlap).clamp(0.0, 1.0))
+        return (wy.view(1, h, 1) * wx.view(1, 1, w)).to(dtype=torch.float32)
 
     @staticmethod
     def _cosine_ramp(t: torch.Tensor) -> torch.Tensor:
