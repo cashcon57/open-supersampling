@@ -387,7 +387,7 @@ HTML_TEMPLATE = r"""<!doctype html>
       </div>
     </header>
 
-    <section class="grid gap-4 lg:grid-cols-[1.4fr_1fr_1fr]" aria-label="At a glance">
+    <section class="grid items-start gap-4 lg:grid-cols-[1.4fr_1fr_1fr]" aria-label="At a glance">
       <article class="rounded-md border border-cyan-900/70 bg-cyan-950/20 p-4" data-surface>
         <div class="flex items-center gap-2 text-sm font-medium text-cyan-200">
           <span class="h-2.5 w-2.5 rounded-full bg-emerald-400"></span>
