@@ -79,9 +79,8 @@
     .terminal-divider .td-corner { flex: 0 0 auto; }
     .terminal-divider .td-rule {
       flex: 1 1 auto;
-      height: 1px;
-      background: currentColor;
-      align-self: center;
+      white-space: nowrap;
+      overflow: hidden;
     }
     .oss-logo { display: block; width: min(100%, 600px); height: auto; filter: drop-shadow(0 0 16px rgba(110, 231, 183, 0.16)); }
     .oss-mark {
@@ -2553,6 +2552,28 @@ function startLiveUpdates() {
   }
 }
 
+function fillTerminalRules() {
+  const rules = document.querySelectorAll(".terminal-divider .td-rule");
+  rules.forEach((rule) => {
+    const parent = rule.closest(".terminal-divider");
+    if (!parent) return;
+
+    rule.textContent = "";
+    const ruleWidth = rule.getBoundingClientRect().width;
+    if (ruleWidth <= 0) return;
+
+    const probe = document.createElement("span");
+    probe.style.cssText = "visibility: hidden; white-space: pre;";
+    probe.textContent = "─";
+    rule.appendChild(probe);
+    const charWidth = probe.getBoundingClientRect().width || 8;
+    rule.removeChild(probe);
+
+    const count = Math.max(0, Math.floor(ruleWidth / charWidth));
+    rule.textContent = "─".repeat(count);
+  });
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   setTheme(localStorage.getItem("oss-dashboard-theme") === "light");
   document.getElementById("theme-toggle").addEventListener("click", () => {
@@ -2563,9 +2584,19 @@ document.addEventListener("DOMContentLoaded", () => {
   initComparisonControls();
   setupInfoTooltips();
   startAsciiSpinner();
+  fillTerminalRules();
   pollDashboard();
   startLiveUpdates();
 });
+
+window.addEventListener("resize", () => {
+  clearTimeout(fillTerminalRules._t);
+  fillTerminalRules._t = setTimeout(fillTerminalRules, 100);
+});
+
+if (document.fonts && document.fonts.ready) {
+  document.fonts.ready.then(fillTerminalRules);
+}
 </script>
 <script type="module">
   // CRT shader overlay — WebGPU primary, WebGL2 fallback. HDR-ready.
