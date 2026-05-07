@@ -47,7 +47,7 @@ RUN_CONFIG = {
         "default_open": False,
         "history_title": "v5-pixel-temporal",
         "status": "measured, in-distribution",
-        "summary": "validated temporal SR reference result on the held-out oldtown split",
+        "summary": "See measured v5 result: 25.703 dB, 0.1666 LPIPS, 0.337x temporal ratio, and viz strips.",
         "note": "",
         "headline": [
             {"label": "PSNR", "value": "25.703", "caption": "dB, higher is better"},
@@ -60,7 +60,7 @@ RUN_CONFIG = {
         "default_open": False,
         "history_title": "v4",
         "status": "single-frame baseline",
-        "summary": "production v4 LPIPS-tuned single-frame baseline",
+        "summary": "See v4 baseline: 30.1 dB / 0.30 LPIPS on SRGD plus TensorRT FP16 latency.",
         "note": "SRGD reference: 30.1 dB / 0.30 LPIPS. TensorRT FP16 latency: 15.6 ms engine-only, 37.6 ms end-to-end.",
         "headline": [
             {"label": "SRGD PSNR", "value": "30.1 dB", "caption": "single-frame baseline"},
@@ -73,7 +73,7 @@ RUN_CONFIG = {
         "default_open": False,
         "history_title": "v6 Pico",
         "status": "superseded by v6.1, 2026-05-07",
-        "summary": "stopped v6 Pico run retained to show the diagnosed grid artifact",
+        "summary": "Review the stopped v6 run: loss through step 20K and the documented 16-pixel grid artifact.",
         "note": "Stopped after the structural 16-pixel grid artifact was diagnosed; v6.1 supersedes.",
         "headline": [
             {"label": "Status", "value": "superseded", "caption": "v6.1 replaced this run"},
@@ -353,6 +353,7 @@ HTML_TEMPLATE = r"""<!doctype html>
     details > summary { list-style: none; }
     details > summary::-webkit-details-marker { display: none; }
     details[open] .summary-chevron { transform: rotate(90deg); }
+    details[open] .closed-hint { display: none; }
     .viz-strip { scrollbar-width: thin; }
     .chart-wrap { height: 18rem; min-height: 16rem; max-width: 100%; overflow: hidden; }
     .chart-wrap canvas { max-width: 100% !important; }
@@ -648,7 +649,10 @@ function renderRun(run, index) {
         </span>
         <span class="mt-1 block text-sm text-zinc-400" data-subtext>${escapeHtml(history.summary || run.name)}</span>
       </span>
-      <span class="hidden font-mono text-sm text-zinc-500 sm:block" data-dim>step ${Number(run.latest_step || 0).toLocaleString()}</span>
+      <span class="hidden text-right text-sm text-zinc-500 sm:block" data-dim>
+        <span class="closed-hint">Open details</span>
+        <span class="block font-mono">step ${Number(run.latest_step || 0).toLocaleString()}</span>
+      </span>
     </summary>
     <div class="grid min-w-0 gap-4 border-t border-zinc-800 p-4 lg:grid-cols-[1.15fr_0.85fr]">
       <div class="flex min-w-0 flex-col gap-4">

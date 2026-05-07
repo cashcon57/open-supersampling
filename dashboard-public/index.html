@@ -16,6 +16,7 @@
     details > summary { list-style: none; }
     details > summary::-webkit-details-marker { display: none; }
     details[open] .summary-chevron { transform: rotate(90deg); }
+    details[open] .closed-hint { display: none; }
     .viz-strip { scrollbar-width: thin; }
     .chart-wrap { height: 18rem; min-height: 16rem; max-width: 100%; overflow: hidden; }
     .chart-wrap canvas { max-width: 100% !important; }
@@ -311,7 +312,10 @@ function renderRun(run, index) {
         </span>
         <span class="mt-1 block text-sm text-zinc-400" data-subtext>${escapeHtml(history.summary || run.name)}</span>
       </span>
-      <span class="hidden font-mono text-sm text-zinc-500 sm:block" data-dim>step ${Number(run.latest_step || 0).toLocaleString()}</span>
+      <span class="hidden text-right text-sm text-zinc-500 sm:block" data-dim>
+        <span class="closed-hint">Open details</span>
+        <span class="block font-mono">step ${Number(run.latest_step || 0).toLocaleString()}</span>
+      </span>
     </summary>
     <div class="grid min-w-0 gap-4 border-t border-zinc-800 p-4 lg:grid-cols-[1.15fr_0.85fr]">
       <div class="flex min-w-0 flex-col gap-4">
