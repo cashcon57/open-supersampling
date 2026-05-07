@@ -165,6 +165,15 @@
       padding: max(0.75rem, env(safe-area-inset-top)) max(0.75rem, env(safe-area-inset-right)) max(0.75rem, env(safe-area-inset-bottom)) max(0.75rem, env(safe-area-inset-left));
       background: rgba(0, 0, 0, 0.85);
     }
+    /* Viz strip imagery sits ABOVE the CRT shader overlay so pixels render
+       cleanly during peeping. The CRT canvas (#oss-crt-overlay) is at z-index 1. */
+    .viz-frame img,
+    .viz-frame canvas,
+    .lightbox img,
+    .lightbox canvas {
+      position: relative;
+      z-index: 50;
+    }
     .lightbox-toolbar {
       display: flex;
       align-items: center;
@@ -344,7 +353,11 @@
           </div>
           <div id="connection-line" class="mt-2 hidden text-sm text-amber-200">Connection lost — retrying</div>
         </div>
-        <button id="theme-toggle" class="inline-flex h-9 w-fit items-center justify-center rounded-md border border-zinc-700 px-3 text-sm text-zinc-200 hover:border-cyan-500 hover:text-white" type="button">Light mode</button>
+        <div class="flex flex-wrap items-center gap-2">
+          <button id="crt-toggle" class="inline-flex h-9 w-fit items-center justify-center rounded-md border border-zinc-700 px-3 text-xs font-mono text-zinc-300 hover:border-emerald-500 hover:text-white" type="button" aria-pressed="false" title="CRT shader overlay">CRT [OFF]</button>
+          <button id="crt-hdr-toggle" class="inline-flex h-9 w-fit items-center justify-center rounded-md border border-zinc-700 px-3 text-xs font-mono text-zinc-300 hover:border-emerald-500 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed" type="button" aria-pressed="false" title="HDR canvas (WebGPU only)">HDR [—]</button>
+          <button id="theme-toggle" class="inline-flex h-9 w-fit items-center justify-center rounded-md border border-zinc-700 px-3 text-sm text-zinc-200 hover:border-cyan-500 hover:text-white" type="button">Light mode</button>
+        </div>
       </div>
     </header>
 
@@ -1915,6 +1928,43 @@ document.addEventListener("DOMContentLoaded", () => {
   pollDashboard();
   startLiveUpdates();
 });
+</script>
+<script type="module">
+  // CRT shader overlay — WebGPU primary, WebGL2 fallback. HDR-ready.
+  import { mountCRT } from './crt-shader.js';
+
+  const crt = await mountCRT(document.body, { defaultEnabled: false, defaultHDR: true });
+  const btn  = document.getElementById('crt-toggle');
+  const hdr  = document.getElementById('crt-hdr-toggle');
+
+  function refreshLabels() {
+    const on  = crt.isEnabled();
+    btn.textContent  = `CRT [${on ? 'ON ' : 'OFF'}]`;
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    btn.classList.toggle('text-emerald-300', on);
+    btn.classList.toggle('border-emerald-700', on);
+
+    if (!crt.isHDRSupported()) {
+      hdr.textContent = 'HDR [—]';
+      hdr.disabled = true;
+      hdr.title = 'HDR requires WebGPU. Falling back to SDR.';
+      return;
+    }
+    const hdrOn = crt.isHDR();
+    hdr.disabled = !on;
+    hdr.textContent = `HDR [${hdrOn ? 'ON ' : 'OFF'}]`;
+    hdr.setAttribute('aria-pressed', hdrOn ? 'true' : 'false');
+    hdr.classList.toggle('text-emerald-300', hdrOn);
+    hdr.classList.toggle('border-emerald-700', hdrOn);
+  }
+
+  btn.addEventListener('click', () => { crt.setEnabled(!crt.isEnabled()); refreshLabels(); });
+  hdr.addEventListener('click', async () => {
+    if (hdr.disabled) return;
+    await crt.setHDR(!crt.isHDR());
+    refreshLabels();
+  });
+  refreshLabels();
 </script>
 </body>
 </html>
