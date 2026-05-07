@@ -28,18 +28,21 @@ This is the pitch. The rest of the README is the evidence and counter-evidence �
 
 ## Status at a glance
 
+State vocabulary (used in the column below): **Measured** = code shipped, training run, numbers published. **Training now** = code shipped, model consuming GPU as you read this. **Wired** = code runs end-to-end on synthetic input, no notable training result yet. **In implementation** = code being written, not runnable end-to-end. **Designed only** = memo + spec exist, zero code. **Parked / Superseded** = explicitly stopped or replaced by a successor.
+
 | Component | State | Evidence |
-|---|---|---|
-| v4 single-frame upscaler | trained, exported, latency-measured | ~30.1 dB / 0.30 LPIPS on SRGD held-out; 720p→1440p 15.6 ms / 1080p→4K 37.6 ms on RTX 3080 Ti TRT FP16 |
-| v5-pixel-temporal | trained on TartanAir Easy only; evaluated in-distribution on the held-out TartanAir `oldtown` env | 25.703 dB / 0.1666 LPIPS / 0.337× temporal ratio (no cross-dataset eval yet); [eval memo](docs/superpowers/experiments/2026-05-06-v5-pixel-temporal-final-held-out-eval.md) |
-| v5-Gaussian-temporal | scaffolded, no convergence numbers | parked after Option A (2026-05-06) |
-| v6 architecture | forward + trajectory training loop wired | 253 v6 tests pass; canvas warp + spawner + cross-attention + rasterizer all in the forward path |
-| v6.1 architecture revision (active) | randomized spawner tile offsets + overlapping rasterizer tiles with feathering | in implementation; v6.1-Pico-001 launches once the two fixes land. Background: [grid-artifact memo](docs/superpowers/experiments/2026-05-07-v6.1-pico-grid-artifact-architectural-fix.md) |
-| Cross-game-engine eval (UE5/Unity/Source 2) | not yet run | v6 training objective |
-| OSS-FX frame extrapolation | designed, not wired (one rasterizer call away — reuses the v6 canvas + motion field) | next implementation step |
-| Per-vendor kernels (CUDA/HIP/Metal/Level Zero/Vulkan) | designed, none built | 6–12 month engineering |
-| DLL-shim runtime | designed, not built | Sprint 7 |
-| OSS Capture Tool | designed, in implementation | nothing validated yet |
+| --- | --- | --- |
+| v4 single-frame upscaler | **Measured** | ~30.1 dB PSNR / 0.30 LPIPS on the SRGD held-out batch (single dataset); 720p→1440p 15.6 ms, 1080p→4K 37.6 ms on RTX 3080 Ti TRT FP16. Distribution-shifts hard onto TartanAir (11.7 dB) — that gap is what v5/v6 are built to close. |
+| v5-pixel-temporal | **Measured (in-distribution only)** | PSNR 25.703 dB / LPIPS 0.1666 / temporal-stability ratio 0.337× on TartanAir `oldtown` held-out (64 frames, 2× SR). Beats bicubic on 64/64 frames. Trained on TartanAir Easy with `oldtown` excluded — no cross-dataset eval. [eval memo](docs/superpowers/experiments/2026-05-06-v5-pixel-temporal-final-held-out-eval.md) |
+| v5-Gaussian-temporal | **Parked** | Scaffolded but never converged. Superseded by the v6 architecture jump (2026-05-06). |
+| v6 architecture (baseline) | **Superseded by v6.1** | Forward + trajectory training loop wired (253 v6 tests pass). v6-Pico-001 trained to step-20K then stopped after a structural 16-pixel grid artifact was diagnosed across HAT window-attention + rasterizer tile + spawner tile (2026-05-07). The code path remains in tree behind config flags. |
+| **v6.1 architecture (active)** | **Training now — Pico tier, started 2026-05-07** | Adds randomized per-frame spawner tile offsets + overlapping rasterizer tiles with cosine feathering; both eliminate the v6 grid period structurally. v6.1-Pico-001 running on 3080 Ti since 2026-05-07 12:00 with dense cold-start checkpoints (step 100 / 500 / 1K / 1.5K / … / 5K, then every 5K). Background: [v6.1 memo](docs/superpowers/experiments/2026-05-07-v6.1-pico-grid-artifact-architectural-fix.md) |
+| v6 held-out eval pipeline | **Wired** | `scripts/sr_v6_held_out.py` mirrors the v5 eval flow on the same TartanAir `oldtown` 64-frame batch and writes apples-to-apples score_log.json rows (2026-05-07). Will populate v6.1 numbers as Pico-001 checkpoints land. |
+| OSS-FX frame extrapolation (α<1 path) | **Designed only — but one rasterizer call away** | Reuses the v6 canvas + motion field already wired in the v6 forward path. No new network. Implementation is the sprint immediately after v6.1-Pico converges. |
+| Cross-game-engine eval (UE5 / Unity HDRP / Source 2) | **Not started** | Gating step before any cross-engine claim is allowed in this README. Targeted as the v6.1-Standard / v6.1-Heavy training objective once Pico converges and Net2Net expansion lands. |
+| OSS Capture Tool | **In implementation** | Installer + uploader shipped (commits f67ba8c, 96b380a) with capture mode flags (trickle / lite / regular / INSANE). No real game footage captured + validated end-to-end yet. |
+| Per-vendor kernels (CUDA / HIP / Metal / Level Zero / Vulkan) | **Designed only** | CUDA path uses gsplat today. Native HIP, Metal, Level Zero, and Vulkan compute are zero lines of code. 6–12 months of engineering across the four backends. |
+| DLL-shim runtime | **Designed only** | Sprint 7. A per-title DLL hooks the engine's DLSS / FSR / XeSS input slots and routes LR + G-buffers through OSS instead. |
 
 Open-source super-resolution **and** frame extrapolation for games, sharing one Gaussian-canvas architecture (rendered at α=1 for SR, α∈(0,1) for FG — same canvas, same motion field, no second network). Designed cross-vendor (NVIDIA today; AMD, Apple, Intel, Steam Deck targeted via per-vendor kernels in v6 — none of those backends are yet implemented or measured). No SDK contract, no vendor lock-in. The planned integration path is a DLL shim for titles already exposing DLSS, FSR, or XeSS inputs (designed, not yet built).
 
