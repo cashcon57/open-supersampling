@@ -107,6 +107,11 @@ def _infer_primary_version(output_dir: Path, explicit: str | None) -> str:
     name = output_dir.name.lower()
     if name.startswith("srcnn-v6-") or name == "srcnn-v6":
         return "v6"
+    # v6.1 runs are excluded from the comparison strip until a `.viz_validated`
+    # marker is present in the run dir. See
+    # docs/superpowers/experiments/2026-05-07-v6.1-pico-grid-artifact-architectural-fix.md.
+    if name.startswith("srcnn-v6.1") and (output_dir / ".viz_validated").exists():
+        return "v6"
     if name.startswith("srcnn-v5-pixel-temporal"):
         return "v5-pixel"
     if name.startswith("srcnn-v5-gaussian"):
@@ -114,6 +119,17 @@ def _infer_primary_version(output_dir: Path, explicit: str | None) -> str:
     if name.startswith("srcnn-v4") or "v4" in name:
         return "v4"
     return "v5-pixel"
+
+
+def _v6_column_allowed(ckpt_path: Path | None) -> bool:
+    """v6.1 run-dirs gate the v6 column behind a `.viz_validated` marker."""
+    if ckpt_path is None:
+        return False
+    run_dir = ckpt_path.parent
+    name = run_dir.name.lower()
+    if name.startswith("srcnn-v6.1"):
+        return (run_dir / ".viz_validated").exists()
+    return True
 
 
 def _step_from_ckpt_name(ckpt_path: Path) -> int:
@@ -373,6 +389,8 @@ def _render_iteration(
     else:
         v5_ckpt = ckpt_path
         v6_ckpt = ckpt_v6 if ckpt_v6 is not None and ckpt_v6.exists() else None
+        if not _v6_column_allowed(v6_ckpt):
+            v6_ckpt = None
 
     model = _load_v5_pixel_model(v5_ckpt, device)
 
