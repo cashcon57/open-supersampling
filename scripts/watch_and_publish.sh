@@ -171,6 +171,14 @@ while :; do
       --out "${STAGING_DIR}" >/dev/null 2>&1 || \
       echo "[watch_and_publish] build_public_dashboard.py failed, continuing"
   fi
+  # Canonical index.html lives in dashboard-public/ (edited by codex/hand).
+  # build_public_dashboard.py only regenerates it when __PITCH_HTML__ marker
+  # is still present, which means once the staging copy has been substituted
+  # it freezes. Force-rsync the canonical file every cycle so codex edits to
+  # dashboard-public/index.html actually land on R2.
+  if [[ -f "${REPO_ROOT}/dashboard-public/index.html" ]]; then
+    rsync -au "${REPO_ROOT}/dashboard-public/index.html" "${STAGING_DIR}/index.html" 2>/dev/null || true
+  fi
   publish_changed
   sleep "$INTERVAL"
 done
