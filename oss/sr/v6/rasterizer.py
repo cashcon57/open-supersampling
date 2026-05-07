@@ -132,8 +132,10 @@ class V6Rasterizer(nn.Module):
         # while breaking the fixed renderer-grid phase in O(4) renders.
         origins = ((0, 0), (-overlap, 0), (0, -overlap), (-overlap, -overlap))
         for origin_y, origin_x in origins:
-            crop_h = h - min(origin_y, 0)
-            crop_w = w - min(origin_x, 0)
+            min_crop_h = h - min(origin_y, 0)
+            min_crop_w = w - min(origin_x, 0)
+            crop_h = self._round_up_to_tile(min_crop_h)
+            crop_w = self._round_up_to_tile(min_crop_w)
             local_xy = gaussians.xy.clone()
             local_xy[:, 0] = local_xy[:, 0] - float(origin_x)
             local_xy[:, 1] = local_xy[:, 1] - float(origin_y)
@@ -186,6 +188,10 @@ class V6Rasterizer(nn.Module):
     @staticmethod
     def _cosine_ramp(t: torch.Tensor) -> torch.Tensor:
         return 0.5 - 0.5 * torch.cos(t * math.pi)
+
+    def _round_up_to_tile(self, value: int) -> int:
+        tile = int(self.tile_size)
+        return ((int(value) + tile - 1) // tile) * tile
 
     def _sanitize_active_gaussians(
         self,
