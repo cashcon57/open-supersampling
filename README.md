@@ -1,10 +1,10 @@
 # OpenSuperSampling (OSS)
 
-Open-source real-time super-resolution and frame extrapolation for games. Cross-vendor (NVIDIA, AMD, Apple, Intel, Steam Deck), no SDK contract, no vendor lock-in. The planned integration path is a DLL shim for titles already exposing DLSS, FSR, or XeSS inputs.
+Open-source super-resolution for games, with frame extrapolation planned via the same architecture. Designed cross-vendor (NVIDIA today; AMD, Apple, Intel, Steam Deck targeted via per-vendor kernels in v6 — none of those backends are yet implemented or measured). No SDK contract, no vendor lock-in. The planned integration path is a DLL shim for titles already exposing DLSS, FSR, or XeSS inputs (designed, not yet built).
 
 Pre-alpha. Active research. Apache 2.0 licensed — use it freely in commercial games.
 
-Maintained by Cash Conway (<cashcon57@gmail.com>). Available for studios + GPU vendors needing OSS integration consulting, custom per-vendor kernel work, training-recipe tuning, or full-time engineering. Reach out if you want to ship vendor-neutral SR in your title.
+Maintained by Cash Conway (<cashcon57@gmail.com>), solo maintainer with AI-augmented development. Available for studios and GPU vendors interested in vendor-neutral SR work — consulting, integration help, training-recipe tuning, or full-time engineering.
 
 ---
 
@@ -20,7 +20,7 @@ Maintained by Cash Conway (<cashcon57@gmail.com>). Available for studios + GPU v
 
 v5-pixel-temporal **beat bicubic on 64/64 held-out frames** (100% — spec target ≥95%) and improved temporal stability over v4 by ~3× (spec target ≥2×). Every quality gate of the validation memo passed. Full eval, methodology, and reproduction commands: [`docs/superpowers/experiments/2026-05-06-v5-pixel-temporal-final-held-out-eval.md`](docs/superpowers/experiments/2026-05-06-v5-pixel-temporal-final-held-out-eval.md).
 
-These are the first measured OSS results that establish the temporal-SR architecture works end-to-end on photoreal game-engine input. v6 is the production-target architecture currently in training (see below).
+These are the first measured OSS results that establish the temporal-SR architecture works end-to-end on photoreal synthetic flight-sim input (TartanAir). The architecture has not yet been evaluated on actual game-engine footage (UE5, Unity, Source 2); cross-distribution generalization is the explicit v6 training objective. v6 is the production-target architecture currently in training (see below).
 
 (v4's 11.718 dB on TartanAir is the SRGD-trained-model-on-TartanAir distribution-shift failure mode. v4 measured ~30.1 dB / 0.30 LPIPS on its native SRGD held-out batch.)
 
@@ -65,7 +65,7 @@ v6 is the architecture intended to ship. As of commit `732166a`, the model + tra
 
 239 v6 tests pass (`./venv-py312/bin/python -m pytest tests/sr/v6/ -q`). OSS-FX (α<1 canvas rendering) is the next thing on top of the wired forward. The full diagram below is the target architecture; the wired forward path matches it modulo the OSS-FX α path.
 
-The target design uses a persistent 2D Gaussian canvas, warped by exact engine motion vectors with covariance resampling at the rasterizer, fused with a HAT spatial backbone via cross-attention, with score-based active pruning to keep per-frame cost bounded. Three tiers share one architecture: Pico for handhelds, Standard for mainstream desktop, Heavy for enthusiast. Custom kernels per GPU vendor (CUDA, HIP, Metal, Level Zero, Vulkan compute) target real-time latency. Frame extrapolation (OSS-FX) is the same canvas rendered at fractional time positions instead of α=1; it does not require a separate ML network the way DLSS Frame Generation does.
+The target design uses a persistent 2D Gaussian canvas, warped by exact engine motion vectors with covariance resampling at the rasterizer, fused with a HAT spatial backbone via cross-attention, with score-based active pruning to keep per-frame cost bounded. Three tiers share one architecture: Pico for handhelds, Standard for mainstream desktop, Heavy for enthusiast. Custom kernels per GPU vendor (CUDA, HIP, Metal, Level Zero, Vulkan compute) are the planned path to vendor-stack-competitive latency; none are implemented yet. Frame extrapolation (OSS-FX) is designed as the same canvas rendered at fractional time positions instead of α=1, which would not require a separate ML network the way DLSS Frame Generation does. The α path is not yet wired; it is the next implementation step on top of the current forward.
 
 The canonical v6 design lives in [experiments/2026-05-05-v6-architecture-canonical.md](docs/superpowers/experiments/2026-05-05-v6-architecture-canonical.md). The implementation roadmap, derived from deep-reads of GSASR, AAA-Gaussians, AA-2DGS, vk_gaussian_splatting, and GaussianVideo, is in [research/2026-05-05-v6-external-baselines-integration-plan.md](docs/research/2026-05-05-v6-external-baselines-integration-plan.md).
 
@@ -125,7 +125,7 @@ v5-pixel-temporal final held-out result: PSNR 25.703 / LPIPS 0.1666 / temporal r
 
 ## Known limits
 
-HDR support is partial. The output activation has been changed from sigmoid to softplus, so HDR linear-light values above 1.0 flow through architecturally without clipping. The training corpus (TartanAir, Hypersim, SRGD) is 8-bit sRGB, so HDR-specific patterns like sun discs, neon, specular highlights, and BT.2020 wide gamut are under-represented. Expected quality on HDR content is roughly 70 to 80% of SDR quality on the same content class. Full HDR competence is v6.1 work, scheduled to retrain on HDR-encoded data captured via INSANE-mode contributors and Hypersim re-rendered in linear scRGB.
+HDR support is partial. The output activation has been changed from sigmoid to softplus, so HDR linear-light values above 1.0 flow through architecturally without clipping. The training corpus (TartanAir, Hypersim, SRGD) is 8-bit sRGB, so HDR-specific patterns like sun discs, neon, specular highlights, and BT.2020 wide gamut are under-represented. Quality on HDR-specific content has not been measured and is expected to be lower than on SDR until a v6.1 retrain on HDR-encoded data.
 
 No game integration has shipped. The DXGI hook and NGX shim that let OSS substitute for DLSS, FSR, or XeSS at runtime are designed but not built. That work is Sprint 7. Inference engines run in isolation; the runtime plumbing is missing.
 
@@ -151,7 +151,9 @@ The custom-kernel work runs in parallel to S6 and S7. NVIDIA gets CUDA + CUTLASS
 
 ## OSS Capture Tool
 
-OSS improves when it trains on real games. The Capture Tool is the data-collection path.
+**Status: designed, not yet shipped.** The bandwidth modes, privacy guarantees, and storage layout below describe the intended design. The client side is in implementation; nothing below has been independently validated.
+
+OSS improves when it trains on real games. The Capture Tool is the planned data-collection path.
 
 You drop a per-game DLL in. You play. Frames upload, then delete from disk. You set the bandwidth budget at install time. You can pause uploads or uninstall whenever.
 
@@ -194,7 +196,7 @@ TartanAir: roughly 600 GB extracted across 18 environments, with real depth and 
 
 Hypersim: photoreal indoor scenes from Blender, with real depth and normals. Not yet integrated.
 
-Sintel: cinema-quality with real depth and flow. Used for validation and fine-tuning.
+Sintel: cinema-quality with real depth and flow. A Sintel held-out manifest is frozen for validation; a Sintel fine-tune was scheduled per runbook but has not yet produced a recorded eval result.
 
 Vimeo-90K: planned for OSS-FX, real-world motion diversity.
 
@@ -206,11 +208,11 @@ Public datasets are the default. Custom captures are a last resort.
 
 ## Why this exists
 
-DLSS-class quality is locked to NVIDIA RTX hardware through the proprietary NGX runtime. FSR is cross-vendor and open but bounded above by what hand-tuned shaders without learned components can express. XeSS XMX is Intel-only at peak quality. There is no open, cross-vendor, ML-based real-time SR with comparable quality to DLSS.
+DLSS-class quality is locked to NVIDIA RTX hardware through the proprietary NGX runtime. FSR is cross-vendor and open but bounded above by what hand-tuned shaders without learned components can express. XeSS XMX is Intel-only at peak quality. There is no open, cross-vendor, ML-based real-time SR that matches DLSS on RTX hardware.
 
-OSS is the attempt to fill that gap. It also unifies frame extrapolation and super-resolution under a single architecture: render the same canvas at α=1 for the current frame, render at α<1 for an intermediate frame. DLSS solves frame extrapolation with a separate ML network that has its own latency and known artifacts. The Gaussian-canvas approach gets it as one in-place add to the position tensor.
+OSS is an attempt at that gap. The architecture is also designed to unify frame extrapolation and super-resolution under one path: rasterize the persistent canvas at α=1 for the current frame, at α<1 for an intermediate frame. DLSS solves frame extrapolation with a separate ML network that has its own latency and known artifacts. The Gaussian-canvas approach is intended to do it as one in-place add to the position tensor; OSS-FX is not yet implemented, so this design property is unmeasured.
 
-Cross-vendor, open, and unified with frame extrapolation is the bet.
+Cross-vendor, open, and unified with frame extrapolation is the bet — not the current state.
 
 ---
 
@@ -267,7 +269,7 @@ Top-level project paper drafts and citation:
 
 ## License
 
-SDK and shaders: Apache-2.0. Plugins: MIT. Model weights: CC-BY-4.0.
+The repository is Apache 2.0. See [LICENSE](LICENSE) for the canonical text and [NOTICE](NOTICE) for third-party components vendored under MIT and BSD-3-Clause. When trained model weights are released, the intended distribution license is CC-BY-4.0; no weights have been published yet.
 
 ## What I won't use
 
