@@ -138,6 +138,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     p.add_argument("--backbone", choices=("hat-tiny", "hat-small", "hat-l"),
                    default=None)
+    p.add_argument("--spawn-offset-random", action=argparse.BooleanOptionalAction,
+                   default=None,
+                   help="Randomize v6 spawner tile offsets during training. "
+                        "Defaults on for output dirs containing v6.1.")
+    p.add_argument("--rasterizer-overlap", type=int, default=None,
+                   help="HR-pixel overlap for v6 rasterizer feathering. "
+                        "Defaults to 8 for output dirs containing v6.1, else 0.")
     p.add_argument("--warm-start", type=Path, default=None,
                    help="HAT-L SA1B warm-start ckpt (from GSASR) — optional.")
     p.add_argument("--v5-teacher-ckpt", type=Path, default=None,
@@ -173,10 +180,17 @@ def normalize_args(args: argparse.Namespace) -> argparse.Namespace:
         args.grad_accum = 1 if args.smoke else 4
     if args.trajectory_length is None:
         args.trajectory_length = 2 if args.smoke else 4
+    is_v6_1 = "v6.1" in args.output_dir.name
+    if args.spawn_offset_random is None:
+        args.spawn_offset_random = bool(is_v6_1)
+    if args.rasterizer_overlap is None:
+        args.rasterizer_overlap = 8 if is_v6_1 else 0
     if args.grad_accum < 1:
         raise ValueError("--grad-accum must be >= 1")
     if args.trajectory_length < 1:
         raise ValueError("--trajectory-length must be >= 1")
+    if args.rasterizer_overlap < 0:
+        raise ValueError("--rasterizer-overlap must be >= 0")
     if args.patch_size < 32:
         raise ValueError("--patch-size must be >= 32 so VGG relu5_1 remains valid")
     return args
@@ -1259,17 +1273,23 @@ def main(argv: list[str] | None = None) -> int:
     if is_main:
         log.info(
             "v6 trainer starting | device=%s rank=%d world=%d steps=%d smoke=%s "
-            "backbone=%s patch=%d batch=%d accum=%d traj=%d lr=%.2e",
+            "backbone=%s patch=%d batch=%d accum=%d traj=%d lr=%.2e "
+            "spawn_offset_random=%s rasterizer_overlap=%d",
             device, rank, world_size, args.max_steps, args.smoke, args.backbone,
             args.patch_size, args.batch_size, args.grad_accum,
             args.trajectory_length, args.base_lr,
+            args.spawn_offset_random, args.rasterizer_overlap,
         )
         log.info("output_dir=%s", args.output_dir)
 
     try:
         from oss.sr.v6.model import V6Config, V6Model
 
-        cfg = V6Config(backbone=args.backbone)
+        cfg = V6Config(
+            backbone=args.backbone,
+            spawn_offset_random=bool(args.spawn_offset_random),
+            rasterizer_overlap=int(args.rasterizer_overlap),
+        )
         generator = V6Model(cfg).to(device)
         discriminator = UNetDiscriminator().to(device)
         loss_fn = V6CompositeLoss(gan_warmup_until_step=args.warmup_steps).to(device)

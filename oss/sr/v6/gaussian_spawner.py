@@ -75,6 +75,9 @@ class GaussianSpawner(nn.Module):
                 scale = int(getattr(config, "scale"))
             if tile_size_lr is None:
                 tile_size_lr = int(getattr(config, "tile_size_lr", 8))
+        self.spawn_offset_random = bool(
+            getattr(config, "spawn_offset_random", False)
+        ) if config is not None else False
         if token_dim is None:
             token_dim = 64
         if scale is None:
@@ -117,7 +120,11 @@ class GaussianSpawner(nn.Module):
             self.conv.bias[3:5].fill_(scale_bias)
             self.conv.bias[6:].fill_(0.01)
 
-    def forward(self, features: torch.Tensor) -> GaussianSpawnState:
+    def forward(
+        self,
+        features: torch.Tensor,
+        spawn_offset_xy: torch.Tensor | None = None,
+    ) -> GaussianSpawnState:
         """Return one Gaussian proposal per LR tile.
 
         Args:
@@ -167,8 +174,24 @@ class GaussianSpawner(nn.Module):
                 device=pooled_f.device,
                 dtype=torch.float32,
             )
+            if spawn_offset_xy is not None:
+                spawn_offset_xy = spawn_offset_xy.to(
+                    device=pooled_f.device,
+                    dtype=torch.float32,
+                )
+                if spawn_offset_xy.shape == (2,):
+                    centers_b = centers.unsqueeze(0) + spawn_offset_xy.view(1, 1, 2)
+                elif spawn_offset_xy.shape == (features.shape[0], 2):
+                    centers_b = centers.unsqueeze(0) + spawn_offset_xy.view(-1, 1, 2)
+                else:
+                    raise ValueError(
+                        "spawn_offset_xy must be (2,) or (B, 2); got "
+                        f"{tuple(spawn_offset_xy.shape)}"
+                    )
+            else:
+                centers_b = centers.unsqueeze(0)
             offset_bound = pooled_f.new_tensor(0.5 * float(self.tile_size_hr))
-            positions = centers.unsqueeze(0) + torch.tanh(offset_raw) * offset_bound
+            positions = centers_b + torch.tanh(offset_raw) * offset_bound
             max_xy = pooled_f.new_tensor([float(w * self.scale), float(h * self.scale)])
             positions = torch.minimum(positions.clamp_min(0.0), max_xy.view(1, 1, 2))
 

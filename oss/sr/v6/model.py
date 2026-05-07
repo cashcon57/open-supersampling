@@ -113,6 +113,8 @@ class V6Config:
     color_activation: str = "hdr"
     tile_size_lr: int = 8
     tile_size_hr: int = 16
+    spawn_offset_random: bool = False
+    rasterizer_overlap: int = 0
     keyframe_interval: int = 10
     prune_every: int = 200
     prune_fraction: float = 0.7
@@ -166,12 +168,14 @@ class V6Model(nn.Module):
             token_dim=self.cfg.token_dim,
             scale=self.scale,
             tile_size_lr=self.cfg.tile_size_lr,
+            config=self.cfg,
         )
         from oss.sr.v6.rasterizer import V6Rasterizer
 
         self.rasterizer = V6Rasterizer(
             token_dim=self.cfg.token_dim,
             tile_size=self.cfg.tile_size_hr,
+            overlap=self.cfg.rasterizer_overlap,
         )
         hidden = max(16, self.feat_dim // 2)
         self.composite_head = nn.Sequential(
@@ -187,6 +191,7 @@ class V6Model(nn.Module):
         # doesn't try to sync them; they reset at trajectory boundaries.
         self._canvas_state: Optional[CanvasState] = None
         self._st_state: Optional[STVScoreState] = None
+        self._spawn_offset_xy: Optional[torch.Tensor] = None
         self.keyframe_mask = KeyframeActiveMaskCache(
             keyframe_interval=self.cfg.keyframe_interval,
         )
@@ -213,6 +218,7 @@ class V6Model(nn.Module):
         canvas state across calls)."""
         self._canvas_state = None
         self._st_state = None
+        self._spawn_offset_xy = None
         self.keyframe_mask.reset()
         self._step_count.zero_()
 
@@ -280,7 +286,10 @@ class V6Model(nn.Module):
 
         refined = self.fusion(feats, tokens)
         debug_check("refined", refined)
-        spawned = self.gaussian_spawner(refined)
+        spawned = self.gaussian_spawner(
+            refined,
+            spawn_offset_xy=self._spawn_offset_for(refined),
+        )
         debug_check("spawned.positions", spawned.positions)
         debug_check("spawned.scales", spawned.scales)
         debug_check("spawned.rotations", spawned.rotations)
@@ -522,6 +531,25 @@ class V6Model(nn.Module):
             colors=spawned.colors.reshape(count, spawned.colors.shape[-1]).contiguous(),
             count=count,
         )
+
+    def _spawn_offset_for(self, features: torch.Tensor) -> Optional[torch.Tensor]:
+        if not bool(self.cfg.spawn_offset_random) or not self.training:
+            return None
+        b = int(features.shape[0])
+        device = features.device
+        if (
+            self._spawn_offset_xy is None
+            or self._spawn_offset_xy.shape != (b, 2)
+            or self._spawn_offset_xy.device != device
+        ):
+            self._spawn_offset_xy = torch.randint(
+                low=0,
+                high=int(self.cfg.tile_size_hr),
+                size=(b, 2),
+                device=device,
+                dtype=torch.int64,
+            ).to(dtype=torch.float32)
+        return self._spawn_offset_xy
 
     def _concat_canvas(
         self,
