@@ -76,47 +76,22 @@
       line-height: 1.05;
       text-shadow: 0 0 18px rgba(110,231,183,0.38);
     }
-    .loader {
-      animation: loader-rotate 1s infinite;
+    .ascii-spinner {
       display: inline-block;
-      height: 50px;
-      width: 50px;
+      min-width: 5ch;
+      color: var(--oss-accent);
+      font-family: "JetBrains Mono", ui-monospace, monospace;
+      font-variant-ligatures: none;
+      text-align: left;
+      text-shadow: 0 0 10px rgba(140, 255, 193, 0.28);
     }
-    .loader::before,
-    .loader::after {
-      border-radius: 50%;
-      content: "";
-      display: block;
-      height: 20px;
-      width: 20px;
+    .ascii-spinner[data-static="true"] {
+      color: var(--oss-dim);
+      text-shadow: none;
     }
-    .loader::before {
-      animation: loader-ball1 1s infinite;
-      background-color: var(--neutral);
-      box-shadow: 30px 0 0 var(--accent);
-      margin-bottom: 10px;
-    }
-    .loader::after {
-      animation: loader-ball2 1s infinite;
-      background-color: var(--accent);
-      box-shadow: 30px 0 0 var(--neutral);
-    }
-    .loader.inline-loader {
-      height: 18px;
-      width: 18px;
-      flex: 0 0 auto;
-    }
-    .loader.inline-loader::before,
-    .loader.inline-loader::after {
-      height: 7px;
-      width: 7px;
-    }
-    .loader.inline-loader::before {
-      box-shadow: 11px 0 0 var(--accent);
-      margin-bottom: 4px;
-    }
-    .loader.inline-loader::after {
-      box-shadow: 11px 0 0 var(--neutral);
+    .cursor-blink {
+      animation: step-blink 1s steps(1, end) infinite;
+      color: var(--oss-accent);
     }
     .initial-loader {
       display: flex;
@@ -127,21 +102,6 @@
       color: var(--oss-subtext);
     }
     .initial-loader.hidden { display: none; }
-    @keyframes loader-rotate {
-      0% { transform: rotate(0deg) scale(0.8); }
-      50% { transform: rotate(360deg) scale(1.2); }
-      100% { transform: rotate(720deg) scale(0.8); }
-    }
-    @keyframes loader-ball1 {
-      0% { box-shadow: 30px 0 0 var(--accent); }
-      50% { box-shadow: 0 0 0 var(--accent); margin-bottom: 0; transform: translate(15px, 15px); }
-      100% { box-shadow: 30px 0 0 var(--accent); margin-bottom: 10px; }
-    }
-    @keyframes loader-ball2 {
-      0% { box-shadow: 30px 0 0 var(--neutral); }
-      50% { box-shadow: 0 0 0 var(--neutral); margin-top: -20px; transform: translate(15px, 15px); }
-      100% { box-shadow: 30px 0 0 var(--neutral); margin-top: 0; }
-    }
     details > summary { list-style: none; }
     details > summary::-webkit-details-marker { display: none; }
     details[open] .summary-chevron { transform: rotate(90deg); }
@@ -333,7 +293,7 @@
       50%, 100% { opacity: 0; }
     }
     @media (prefers-reduced-motion: reduce) {
-      .live-indicator.live .indicator-dot,
+      .cursor-blink,
       .step-ticker-row.is-new { animation: none; }
       .accordion-body,
       .metric-card,
@@ -408,7 +368,7 @@
         </div>
       </div>
       <div id="initial-loader" class="initial-loader">
-        <span class="loader" aria-hidden="true"></span>
+        <span class="ascii-spinner" aria-hidden="true">[░░░]</span><span class="cursor-blink" aria-hidden="true">▋</span>
         <span class="font-mono text-sm">loading dashboard data...</span>
       </div>
       <div id="run-history" class="flex flex-col gap-3"></div>
@@ -507,6 +467,8 @@ let trainingPulseState = {
   stagnantPolls: 0,
 };
 let stagnantActivePolls = 0;
+const asciiSpinnerFrames = ["[░░░]", "[█░░]", "[██░]", "[███]", "[▓██]", "[░██]", "[░░█]", "[░░░]"];
+let asciiSpinnerIndex = 0;
 
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (char) => ({
@@ -641,8 +603,18 @@ function trainingIndicatorHtml(run) {
   if (!run?.active) return "";
   const live = trainingPulseState.activeRunName === run.name && trainingPulseState.live;
   return `<span class="live-indicator ${live ? "live" : "idle"}" aria-label="${live ? "live training" : "idle training"}">
-    ${live ? `<span class="loader inline-loader" aria-hidden="true"></span><span>live</span><span class="terminal-cursor" aria-hidden="true">▋</span>` : `<span class="indicator-dot">○</span><span>idle</span>`}
+    ${live ? `<span class="ascii-spinner" aria-hidden="true">[░░░]</span><span>live</span><span class="cursor-blink" aria-hidden="true">▋</span>` : `<span class="ascii-spinner" data-static="true" aria-hidden="true">[___]</span><span>idle</span>`}
   </span>`;
+}
+
+function startAsciiSpinner() {
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  window.setInterval(() => {
+    asciiSpinnerIndex += 1;
+    document.querySelectorAll(".ascii-spinner:not([data-static='true'])").forEach((el) => {
+      el.textContent = asciiSpinnerFrames[asciiSpinnerIndex % asciiSpinnerFrames.length];
+    });
+  }, 333);
 }
 
 function trainingTickerHtml(run) {
@@ -1638,6 +1610,7 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   initLightbox();
   initMetricCards();
+  startAsciiSpinner();
   pollDashboard();
   startLiveUpdates();
 });
