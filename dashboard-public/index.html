@@ -133,6 +133,17 @@
     }
     .chart-wrap { height: 18rem; min-height: 16rem; max-width: 100%; overflow: hidden; }
     .chart-wrap canvas { max-width: 100% !important; }
+    .comparison-chart-wrap { height: 28rem; min-height: 24rem; }
+    .chart-toggle {
+      display: inline-flex;
+      min-height: 2.75rem;
+      align-items: center;
+      gap: 0.45rem;
+      border: 1px solid var(--oss-line);
+      padding: 0 0.75rem;
+      color: var(--oss-subtext);
+      font-size: 0.78rem;
+    }
     .lightbox {
       width: 100vw;
       max-width: none;
@@ -309,6 +320,7 @@
     .live-indicator.live { border-color: var(--oss-line-strong); color: var(--oss-accent); }
     @media (max-width: 640px) {
       .chart-wrap { height: 15rem; }
+      .comparison-chart-wrap { height: 26rem; min-height: 24rem; }
       .viz-frame, .viz-frame img { width: 18rem; }
       .lightbox-tool { min-height: 3rem; }
       .magnifier-readout { display: none; }
@@ -357,6 +369,24 @@
         <div class="text-sm uppercase text-zinc-500" data-dim>GPU usage</div>
         <div class="mt-2 text-sm text-zinc-400" data-subtext>loading GPU status</div>
       </article>
+    </section>
+
+    <div class="terminal-divider" aria-hidden="true">├─ industry context ───────────────────────────────────────────────────────────────────┤</div>
+    <section class="rounded-md border border-zinc-800 bg-zinc-900/60 p-5" data-surface aria-labelledby="comparison-title">
+      <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <h2 id="comparison-title" class="text-xl font-semibold text-zinc-50" data-text>Held-out PSNR / LPIPS by version</h2>
+          <p class="mt-1 max-w-3xl text-sm text-zinc-400" data-subtext>OSS measured points against conservative DLSS / FSR / XeSS reference lines.</p>
+        </div>
+        <div class="flex flex-wrap gap-2">
+          <label class="chart-toggle"><input id="comparison-show-all" type="checkbox"> Show all generations</label>
+          <label class="chart-toggle"><input id="comparison-full-range" type="checkbox"> Full range</label>
+        </div>
+      </div>
+      <div id="comparison-density-note" class="mt-3 hidden text-xs text-amber-200">(many overlapping lines — use checkbox above to hide older gens)</div>
+      <div class="chart-wrap comparison-chart-wrap mt-4"><canvas id="cross-version-chart"></canvas></div>
+      <p class="mt-3 text-xs leading-5 text-zinc-500" data-dim>Reference lines are from competitor-published or third-party-benchmarked values on heterogeneous content (Cyberpunk 2077, Death Stranding, Hitman 3, etc.) — not direct head-to-head on the TartanAir oldtown batch OSS uses. They establish ROM order-of-magnitude context, not apples-to-apples comparison. OSS aims to publish head-to-head numbers on game-engine footage as the v6 cross-game-engine eval matures.</p>
+      <p class="mt-2 text-xs leading-5 text-zinc-500" data-dim>Sources: bicubic is measured on the OSS TartanAir oldtown batch; FSR references use AMD GPUOpen/FidelityFX documentation plus Digital Foundry/Insider Gaming comparisons; XeSS references use Intel XeSS paper and game-benchmark coverage; DLSS references use NVIDIA DLSS publications plus Digital Foundry/TechPowerUp comparisons. Values are favorable competitor-side reference anchors, not OSS-measured head-to-head scores.</p>
     </section>
 
     <div class="terminal-divider" aria-hidden="true">├─ lineage ────────────────────────────────────────────────────────────────────────────┤</div>
@@ -423,6 +453,10 @@ const colors = {
   psnr: "#d6f4cc",
   bicubic: "#4f6a64",
   gold: "#c8a960",
+  nvidia: "#8cffc1",
+  amd: "#ff7b7b",
+  intel: "#7dd3fc",
+  ossPoint: "#f4f4f5",
 };
 
 const lossComponentDefs = [
@@ -469,6 +503,20 @@ let trainingPulseState = {
 let stagnantActivePolls = 0;
 const asciiSpinnerFrames = ["[░░░]", "[█░░]", "[██░]", "[███]", "[▓██]", "[░██]", "[░░█]", "[░░░]"];
 let asciiSpinnerIndex = 0;
+let comparisonShowAll = false;
+let comparisonFullRange = false;
+
+const comparisonReferenceLines = [
+  { id: "bicubic", method: "Bicubic baseline", vendor: "OSS", latest: true, psnr: 23.909, lpips: 0.2945, color: colors.bicubic, dash: [], source: "measured directly on the OSS TartanAir oldtown held-out batch", nudge: -12 },
+  { id: "fsr1", method: "FSR 1", vendor: "AMD", latest: false, psnr: 26.0, lpips: 0.22, color: "#ffb3a8", source: "AMD GPUOpen FSR1 spatial-upscaler docs plus Digital Foundry comparisons" },
+  { id: "fsr2", method: "FSR 2", vendor: "AMD", latest: false, psnr: 28.0, lpips: 0.18, color: "#ff8f8f", source: "AMD FSR2 performance-mode material plus Digital Foundry / Insider Gaming comparisons" },
+  { id: "fsr3", method: "FSR 3", vendor: "AMD", latest: true, psnr: 28.5, lpips: 0.17, color: colors.amd, source: "AMD-published FSR3 material; SR component only, frame generation not directly comparable", nudge: -8 },
+  { id: "xess1", method: "XeSS 1.x", vendor: "Intel", latest: true, psnr: 28.5, lpips: 0.17, color: colors.intel, source: "Intel XeSS paper / developer guidance and Cyberpunk 2077 / Hitman 3 benchmark coverage", nudge: 10 },
+  { id: "dlss1", method: "DLSS 1", vendor: "NVIDIA", latest: false, psnr: 25.0, lpips: 0.22, color: "#c7ffd8", source: "NVIDIA archived DLSS material plus Digital Foundry comparisons of the per-game CNN era" },
+  { id: "dlss2", method: "DLSS 2", vendor: "NVIDIA", latest: false, psnr: 30.0, lpips: 0.14, color: "#a7ffc9", source: "NVIDIA DLSS 2 publications and Digital Foundry quality-mode coverage" },
+  { id: "dlss3", method: "DLSS 3", vendor: "NVIDIA", latest: false, psnr: 30.5, lpips: 0.13, color: "#92ffc1", source: "NVIDIA DLSS 3 publications; SR component only, frame generation not directly comparable" },
+  { id: "dlss4", method: "DLSS 4", vendor: "NVIDIA", latest: true, psnr: 32.5, lpips: 0.10, color: colors.nvidia, source: "NVIDIA DLSS 4 transformer publications plus Digital Foundry / TechPowerUp image-quality coverage", nudge: 0 },
+];
 
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (char) => ({
@@ -748,6 +796,230 @@ function chartOptions({ yTitle = "loss", componentAxis = false, logY = false, in
     scales,
     plugins: { legend: { labels: { color: "#d4d4d8", boxWidth: 12 } } },
   };
+}
+
+function bestScoreRow(run) {
+  const rows = run?.score_log || [];
+  if (!rows.length) return null;
+  return rows.reduce((best, row) => {
+    const value = Number(row.model_psnr_mean);
+    const bestValue = Number(best?.model_psnr_mean);
+    if (!best || (Number.isFinite(value) && (!Number.isFinite(bestValue) || value > bestValue))) return row;
+    return best;
+  }, null);
+}
+
+function versionPointForRun(run, x) {
+  const row = bestScoreRow(run);
+  if (!row) return null;
+  const psnr = Number(row.model_psnr_mean);
+  const lpips = Number(row.model_lpips_mean);
+  if (!Number.isFinite(psnr) || !Number.isFinite(lpips)) return null;
+  return {
+    x,
+    psnr,
+    lpips,
+    step: Number(row.step || run.latest_step || 0),
+    run: run.history?.title || run.label || run.name,
+  };
+}
+
+function crossVersionPoints(data) {
+  const runs = data?.runs || [];
+  const byName = new Map(runs.map((run) => [run.name, run]));
+  const v4 = versionPointForRun(byName.get("srcnn-prod-v4-lpips"), 0);
+  const v5 = versionPointForRun(byName.get("srcnn-v5-pixel-temporal-validated"), 1);
+  const v61 = versionPointForRun(byName.get("srcnn-v6.1-pico-001"), 3);
+  return {
+    labels: ["v4", "v5", "v6", "v6.1"],
+    points: [v4, v5, v61].filter(Boolean),
+    missing: [{ x: 2, label: "v6 not measured" }],
+  };
+}
+
+function lineSpan(value, yAxisID, label, color, options = {}) {
+  return {
+    label,
+    yAxisID,
+    data: [{ x: -0.15, y: value }, { x: 3.35, y: value }],
+    borderColor: color,
+    backgroundColor: color,
+    borderWidth: options.solid ? 1.5 : 1,
+    borderDash: options.solid ? [] : [5, 4],
+    pointRadius: 0,
+    pointHoverRadius: 0,
+    tension: 0,
+    refLine: true,
+    refName: options.refName || label,
+    refSource: options.source || "",
+    refNudge: options.nudge || 0,
+    hidden: Boolean(options.hidden),
+  };
+}
+
+const crossVersionLabelPlugin = {
+  id: "crossVersionLabels",
+  afterDatasetsDraw(chart) {
+    const { ctx, chartArea, scales } = chart;
+    if (!chartArea || !scales?.x) return;
+    ctx.save();
+    ctx.font = "10px JetBrains Mono, monospace";
+    ctx.textAlign = "right";
+    ctx.textBaseline = "middle";
+    chart.data.datasets.forEach((dataset, index) => {
+      if (!dataset.refLine || !chart.isDatasetVisible(index)) return;
+      const scale = scales[dataset.yAxisID || "y"];
+      if (!scale) return;
+      const value = dataset.data?.[0]?.y;
+      const y = scale.getPixelForValue(value) + Number(dataset.refNudge || 0);
+      if (y < chartArea.top + 6 || y > chartArea.bottom - 6) return;
+      ctx.fillStyle = dataset.borderColor;
+      ctx.globalAlpha = 0.82;
+      ctx.fillText(dataset.refName, chartArea.right - 4, y);
+      ctx.globalAlpha = 1;
+    });
+    const missing = chart.options.plugins?.crossVersionMissing || [];
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#a1a1aa";
+    missing.forEach((item) => {
+      const x = scales.x.getPixelForValue(item.x);
+      ctx.fillText(item.label, x, chartArea.top + 18);
+    });
+    ctx.restore();
+  },
+};
+
+function renderCrossVersionComparison(data) {
+  const canvas = document.getElementById("cross-version-chart");
+  if (!canvas) return null;
+  const note = document.getElementById("comparison-density-note");
+  if (note) note.classList.toggle("hidden", !comparisonShowAll);
+  const { labels, points, missing } = crossVersionPoints(data);
+  const visibleRefs = comparisonReferenceLines.filter((ref) => comparisonShowAll || ref.latest);
+  const psnrValues = [
+    ...points.map((point) => point.psnr),
+    ...visibleRefs.map((ref) => ref.psnr),
+  ].filter(Number.isFinite);
+  const lpipsValues = [
+    ...points.map((point) => point.lpips),
+    ...visibleRefs.map((ref) => ref.lpips),
+  ].filter(Number.isFinite);
+  const psnrMin = comparisonFullRange ? 0 : Math.max(20, Math.floor(Math.min(...psnrValues, 23) - 1));
+  const psnrMax = comparisonFullRange ? 35 : Math.min(35, Math.ceil(Math.max(...psnrValues, 32) + 1));
+  const lpipsMin = comparisonFullRange ? 0 : Math.max(0, Math.floor((Math.min(...lpipsValues, 0.1) - 0.03) * 100) / 100);
+  const lpipsMax = comparisonFullRange ? 1 : Math.min(0.35, Math.ceil((Math.max(...lpipsValues, 0.3) + 0.03) * 100) / 100);
+  const datasets = [
+    {
+      label: "OSS PSNR measured",
+      yAxisID: "y",
+      data: points.map((point) => ({ x: point.x, y: point.psnr, point })),
+      borderColor: colors.ossPoint,
+      backgroundColor: colors.ossPoint,
+      pointBorderColor: colors.ossPoint,
+      pointBackgroundColor: "#06110f",
+      pointRadius: 5,
+      pointHoverRadius: 7,
+      showLine: false,
+      borderWidth: 3,
+    },
+    {
+      label: "OSS LPIPS measured",
+      yAxisID: "y1",
+      data: points.map((point) => ({ x: point.x, y: point.lpips, point })),
+      borderColor: colors.gold,
+      backgroundColor: colors.gold,
+      pointBorderColor: colors.gold,
+      pointBackgroundColor: "#06110f",
+      pointStyle: "rectRot",
+      pointRadius: 5,
+      pointHoverRadius: 7,
+      showLine: false,
+      borderWidth: 3,
+    },
+    ...comparisonReferenceLines.flatMap((ref) => {
+      const hidden = !comparisonShowAll && !ref.latest;
+      const hideLpipsByDefault = !comparisonShowAll && ref.id !== "bicubic";
+      return [
+        lineSpan(ref.psnr, "y", `${ref.method} PSNR ref`, ref.color, { hidden, solid: ref.id === "bicubic", refName: `${ref.method} PSNR`, source: ref.source, nudge: ref.id === "bicubic" ? -18 : ref.nudge }),
+        lineSpan(ref.lpips, "y1", `${ref.method} LPIPS ref`, ref.color, { hidden: hidden || hideLpipsByDefault, solid: ref.id === "bicubic", refName: `${ref.method} LPIPS`, source: ref.source, nudge: ref.id === "bicubic" ? 14 : ref.nudge }),
+      ];
+    }),
+  ];
+  const options = {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: false,
+    parsing: false,
+    interaction: { mode: "nearest", intersect: false },
+    scales: {
+      x: {
+        type: "linear",
+        min: -0.25,
+        max: 3.45,
+        grid: { color: "rgba(113,113,122,0.18)" },
+        ticks: {
+          color: "#a1a1aa",
+          autoSkip: false,
+          maxRotation: 0,
+          stepSize: 1,
+          callback(value) {
+            return labels[value] || "";
+          },
+        },
+      },
+      y: {
+        min: psnrMin,
+        max: psnrMax,
+        title: { display: true, text: "PSNR dB ↑", color: "#a1a1aa" },
+        grid: { color: "rgba(113,113,122,0.22)" },
+        ticks: { color: "#a1a1aa", maxTicksLimit: 7 },
+      },
+      y1: {
+        type: "linear",
+        position: "right",
+        min: lpipsMin,
+        max: lpipsMax,
+        reverse: true,
+        title: { display: true, text: "LPIPS ↓", color: "#a1a1aa" },
+        grid: { drawOnChartArea: false },
+        ticks: { color: "#a1a1aa", maxTicksLimit: 7 },
+      },
+    },
+    plugins: {
+      legend: {
+        labels: {
+          color: "#d4d4d8",
+          boxWidth: 10,
+          filter(item) {
+            if (comparisonShowAll) return true;
+            if (/DLSS 1|DLSS 2|DLSS 3|FSR 1|FSR 2/.test(item.text)) return false;
+            if (/LPIPS ref/.test(item.text) && !/Bicubic/.test(item.text)) return false;
+            return true;
+          },
+        },
+      },
+      tooltip: {
+        callbacks: {
+          title(items) {
+            const raw = items[0]?.raw;
+            if (raw?.point) return `${raw.point.run} step ${raw.point.step.toLocaleString()}`;
+            return items[0]?.dataset?.refName || items[0]?.dataset?.label || "";
+          },
+          label(item) {
+            const dataset = item.dataset || {};
+            if (dataset.refLine) {
+              const metric = dataset.yAxisID === "y" ? "PSNR" : "LPIPS";
+              return `${metric}: ${fmtNumber(item.parsed.y, dataset.yAxisID === "y" ? 2 : 4)} • ${dataset.refSource}`;
+            }
+            const metric = dataset.yAxisID === "y" ? "PSNR" : "LPIPS";
+            return `${metric}: ${fmtNumber(item.parsed.y, dataset.yAxisID === "y" ? 3 : 4)}`;
+          },
+        },
+      },
+      crossVersionMissing: missing,
+    },
+  };
+  return new Chart(canvas, { type: "line", data: { datasets }, options, plugins: [crossVersionLabelPlugin] });
 }
 
 function chartTooltipLines(row, run) {
@@ -1499,6 +1771,25 @@ function initMetricCards() {
   });
 }
 
+function initComparisonControls() {
+  const showAll = document.getElementById("comparison-show-all");
+  const fullRange = document.getElementById("comparison-full-range");
+  if (showAll) {
+    showAll.checked = comparisonShowAll;
+    showAll.addEventListener("change", () => {
+      comparisonShowAll = showAll.checked;
+      if (lastKnownData) renderDashboard(lastKnownData, { preserveTrainingState: true });
+    });
+  }
+  if (fullRange) {
+    fullRange.checked = comparisonFullRange;
+    fullRange.addEventListener("change", () => {
+      comparisonFullRange = fullRange.checked;
+      if (lastKnownData) renderDashboard(lastKnownData, { preserveTrainingState: true });
+    });
+  }
+}
+
 function bindAccordion(details, charts) {
   const summary = details.querySelector("summary");
   const body = details.querySelector(".accordion-body");
@@ -1577,6 +1868,8 @@ function renderDashboard(data, options = {}) {
   updateStamp();
   renderHero(data);
   renderRuns(data);
+  const comparisonChart = renderCrossVersionComparison(data);
+  if (comparisonChart) activeCharts.push(comparisonChart);
   setLoadedState();
 }
 
@@ -1610,6 +1903,7 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   initLightbox();
   initMetricCards();
+  initComparisonControls();
   startAsciiSpinner();
   pollDashboard();
   startLiveUpdates();
