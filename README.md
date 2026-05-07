@@ -222,7 +222,7 @@ Vimeo-90K: planned for OSS-FX, real-world motion diversity.
 
 NoiseBase: planned for OSS-RG (denoiser track). Download is currently blocked on bandwidth allocation on the remote host.
 
-Public datasets are the default. Custom captures are a last resort.
+Public datasets are for now. Custom captures are a necessary pain that I will have to work through, but it gives me exaclty what I need, exactly how I need it, in actual games.
 
 ---
 
