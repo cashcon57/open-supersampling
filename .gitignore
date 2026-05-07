@@ -80,5 +80,9 @@ id_ed25519*
 .claude/
 .superpowers/
 
+# Pre-rewrite git backups (created by `git filter-repo` workflows)
+.git.backup-*/
+.git.backup-*
+
 # Misc local
 2407.01866v2.pdf

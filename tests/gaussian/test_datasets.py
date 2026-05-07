@@ -258,7 +258,7 @@ def test_tartanair_loader_smoke(tartanair_root: Path) -> None:
     assert e.metadata["source"] == "tartanair"
 
 
-def test_tartanair_loader_reports_corrupt_flow_path(tartanair_root: Path) -> None:
+def test_tartanair_loader_skips_corrupt_flow(tartanair_root: Path, caplog) -> None:
     bad_flow = (
         tartanair_root
         / "abandonedfactory"
@@ -269,8 +269,16 @@ def test_tartanair_loader_reports_corrupt_flow_path(tartanair_root: Path) -> Non
     )
     bad_flow.write_bytes(b"not a valid npy")
     ds = TartanAirGaussianDataset(root=tartanair_root, scale=SCALE)
-    with pytest.raises(ValueError, match="000000_000001_flow.npy"):
-        ds[0]
+    # New policy (commit d483833): skip corrupt flow files instead of raising,
+    # so a single bad sample doesn't kill long training runs. The skip should
+    # be logged at WARNING level mentioning the bad file path.
+    with caplog.at_level("WARNING"):
+        try:
+            ds[0]
+        except (IndexError, StopIteration):
+            pass
+    assert any("000000_000001_flow.npy" in rec.message for rec in caplog.records), \
+        "expected a WARNING log mentioning the corrupt flow file"
 
 
 def test_hypersim_loader_smoke(hypersim_root: Path) -> None:

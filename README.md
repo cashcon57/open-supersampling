@@ -1,5 +1,25 @@
 # OpenSuperSampling (OSS)
 
+[![CI](https://github.com/cashcon57/open-supersampling/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/cashcon57/open-supersampling/actions/workflows/ci.yml)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![Status](https://img.shields.io/badge/status-pre--alpha-orange.svg)](#status-at-a-glance)
+
+> **TL;DR for reviewers.** Open-source ML super-resolution for games, Apache 2.0, solo maintainer (AI-augmented dev). v5-pixel-temporal measures **PSNR 25.703 / LPIPS 0.1666** on the TartanAir `oldtown` held-out batch (2× SR, 64 frames, beats bicubic on 64/64). v6 is the production-target architecture and is currently in training. Cross-game-engine generalization, OSS-FX frame extrapolation, the cross-vendor kernel stack, and the DLL-shim integration path are designed and partially implemented but **not yet measured on game-engine footage**. Looking for compute, hardware loaners, contract or full-time engineering work to take v6 from "in training" to "shipped on real games." See [What I'm asking for](#what-im-asking-for) below.
+
+## Status at a glance
+
+| Component | State | Evidence |
+|---|---|---|
+| v4 single-frame upscaler | trained, exported, latency-measured | ~30.1 dB / 0.30 LPIPS on SRGD held-out; 720p→1440p 15.6 ms / 1080p→4K 37.6 ms on RTX 3080 Ti TRT FP16 |
+| v5-pixel-temporal | trained, evaluated in-distribution | 25.703 dB / 0.1666 LPIPS / 0.337× temporal ratio on TartanAir oldtown; [eval memo](docs/superpowers/experiments/2026-05-06-v5-pixel-temporal-final-held-out-eval.md) |
+| v5-Gaussian-temporal | scaffolded, no convergence numbers | parked after Option A (2026-05-06) |
+| v6 architecture | forward + trajectory training loop wired | 253 v6 tests pass; canvas warp + spawner + cross-attention + rasterizer all in the forward path |
+| Cross-game-engine eval (UE5/Unity/Source 2) | not yet run | v6 training objective |
+| OSS-FX frame extrapolation | designed, not wired | next implementation step |
+| Per-vendor kernels (CUDA/HIP/Metal/Level Zero/Vulkan) | designed, none built | 6–12 month engineering |
+| DLL-shim runtime | designed, not built | Sprint 7 |
+| OSS Capture Tool | designed, in implementation | nothing validated yet |
+
 Open-source super-resolution for games, with frame extrapolation planned via the same architecture. Designed cross-vendor (NVIDIA today; AMD, Apple, Intel, Steam Deck targeted via per-vendor kernels in v6 — none of those backends are yet implemented or measured). No SDK contract, no vendor lock-in. The planned integration path is a DLL shim for titles already exposing DLSS, FSR, or XeSS inputs (designed, not yet built).
 
 Pre-alpha. Active research. Apache 2.0 licensed — use it freely in commercial games.
@@ -38,7 +58,7 @@ python3.12 -m venv venv-py312
 source venv-py312/bin/activate
 pip install -e .
 
-# verify the code path works (239 v6 tests)
+# verify the code path works (253 v6 tests)
 pytest tests/sr/v6/ -q
 ```
 
@@ -63,7 +83,7 @@ v6 is the architecture intended to ship. As of commit `732166a`, the model + tra
 - `V6Model.forward()` (`fd8965f`): HAT backbone → motion-vector + GS-STVSR covariance canvas warp → keyframe active mask → cross-attention pixel↔Gaussian fusion → V6Rasterizer renders the active canvas subset to HR → composite head emits 3-channel RGB → softplus / sigmoid → spawner writes fresh Gaussians from refined features back into the persistent per-rank canvas → ST score state updates.
 - `scripts/sr_train_v6.py` (`732166a`): per-step samples a trajectory of T consecutive frames (default 4); resets canvas at the trajectory start, threads engine motion vectors between frames, accumulates per-frame loss, runs backward once. The canonical-memo §5 motion-aware temporal-consistency term `||warp(pred_t, motion_t→t+1) − pred_{t+1}||₁` (weight 0.5) keeps adjacent predictions in the graph. `--first-ckpt-step` writes the first non-smoke checkpoint at step 100 by default, so issues surface within minutes of training start.
 
-239 v6 tests pass (`./venv-py312/bin/python -m pytest tests/sr/v6/ -q`). OSS-FX (α<1 canvas rendering) is the next thing on top of the wired forward. The full diagram below is the target architecture; the wired forward path matches it modulo the OSS-FX α path.
+253 v6 tests pass (`./venv-py312/bin/python -m pytest tests/sr/v6/ -q`). OSS-FX (α<1 canvas rendering) is the next thing on top of the wired forward. The full diagram below is the target architecture; the wired forward path matches it modulo the OSS-FX α path.
 
 The target design uses a persistent 2D Gaussian canvas, warped by exact engine motion vectors with covariance resampling at the rasterizer, fused with a HAT spatial backbone via cross-attention, with score-based active pruning to keep per-frame cost bounded. Three tiers share one architecture: Pico for handhelds, Standard for mainstream desktop, Heavy for enthusiast. Custom kernels per GPU vendor (CUDA, HIP, Metal, Level Zero, Vulkan compute) are the planned path to vendor-stack-competitive latency; none are implemented yet. Frame extrapolation (OSS-FX) is designed as the same canvas rendered at fractional time positions instead of α=1, which would not require a separate ML network the way DLSS Frame Generation does. The α path is not yet wired; it is the next implementation step on top of the current forward.
 
@@ -139,7 +159,7 @@ The supported-games list is editorial. Anti-cheat titles using kernel-level syst
 
 S5 is closed for the baseline decision: v5-pixel-temporal produced the carried-forward result on 2026-05-06, and v5-Gaussian-temporal is parked unless staged smoke tests justify reopening it.
 
-S6 is v6: the covariance-resampled Gaussian-temporal architecture summarized above. Modules, orchestrator, Stage 2 wire-up of `V6Model.forward()` putting canvas in the HR critical path (commit `fd8965f`), and the trajectory training loop with canvas continuity + motion-aware temporal-consistency loss + early checkpoint at step 100 (commit `732166a`) have landed. 239 v6 tests passing. OSS-FX integration is next on the roadmap. Three tiers (Pico, Standard, Heavy), custom per-vendor kernels, and DLL-shim integration remain target work.
+S6 is v6: the covariance-resampled Gaussian-temporal architecture summarized above. Modules, orchestrator, Stage 2 wire-up of `V6Model.forward()` putting canvas in the HR critical path (commit `fd8965f`), and the trajectory training loop with canvas continuity + motion-aware temporal-consistency loss + early checkpoint at step 100 (commit `732166a`) have landed. 253 v6 tests passing. OSS-FX integration is next on the roadmap. Three tiers (Pico, Standard, Heavy), custom per-vendor kernels, and DLL-shim integration remain target work.
 
 S7 is the planned DLL-shim runtime that lets OSS replace DLSS, FSR, or XeSS in already-shipping games without developer cooperation. No game integration has shipped yet. Game requirements: must already use one of the three (which is how OSS receives depth, motion vectors, and jitter), and must not use kernel-level anti-cheat. Candidate validation targets include Cyberpunk 2077, Alan Wake 2, Hogwarts Legacy, Starfield, Baldur's Gate 3, Returnal, Hellblade II, Forza Horizon 5, and Black Myth: Wukong.
 
@@ -166,7 +186,7 @@ What does not get captured: audio, keyboard, mouse, controller input, any other 
 | regular | ~2 GB/h | adds material channels, higher network bill |
 | INSANE | ~20–50 GB/h | full PBR plus 256-frame supersample ground truth on settled cameras; brief stutters disclosed at install |
 
-Identity is a one-time opaque token. No account, no email, no PII. Frames are written to R2 under `<game_id>/<YYYY-MM>/<capture_mode>/<session_uuid>/<frame_uuid>.exr`. Per-mode contribution counts are public so you can see what your bytes did. Trained model weights derived from contributed data ship under CC-BY-4.0.
+Identity is designed as a one-time opaque token: no account, no email, no PII. Frames would be written to R2 under `<game_id>/<YYYY-MM>/<capture_mode>/<session_uuid>/<frame_uuid>.exr`, with public per-mode contribution counts. Trained model weights derived from contributed data are intended to ship under CC-BY-4.0; no weights have been published yet, and no contributor data has been collected.
 
 Cyberpunk 2077 is the initial validation target. Full design: [oss-capture-tool-design](docs/superpowers/specs/2026-05-04-oss-capture-tool-design.md).
 
@@ -222,6 +242,19 @@ Every training run, ablation, and benchmark gets a memo in `docs/superpowers/exp
 
 ---
 
+## What I'm asking for
+
+OSS is at the inflection where v5 has measured in-distribution results, v6 is wired and training, and the next step is **cross-game-engine generalization plus the per-vendor kernel work that closes the latency gap to DLSS/FSR/XeSS**. That is not a one-person job in any reasonable timeframe. In rough order of preference:
+
+1. **A job, contract, or paid consulting role on vendor-neutral SR.** Available full-time, remote (US-based), comfortable with open-source as the deliverable. Equally interested in research-engineer, applied-research, or kernel-engineer work; cross-vendor SR is the throughline.
+2. **Hardware loaners.** A v6 cross-game-engine training run wants a sustained MI300X, B200, or H100 cluster footprint. Equivalent value: an Intel Battlemage Arc card or a Tenstorrent Wormhole/Blackhole node for the cross-vendor kernel work; an M-series Mac Studio for the MLX Pico-tier port; a Snapdragon dev kit for the handheld Pico target.
+3. **Free GPU compute hours.** Concrete need: ~5,000–10,000 H100-hours for v6 cross-game-engine training (UE5 City Sample, Unity HDRP demos, Source 2 captures), plus burst capacity for ablations and per-vendor kernel benchmarking. Lambda Research Grant, NSF ACCESS, NAIRR, Oracle for Research, NVIDIA Inception, HF community grants, and Modal OSS credits are the fits.
+4. **Cash grants.** Lower priority for a solo pre-alpha project, but Apache 2.0 + a measured v5 result + v6 wired-in-code is enough surface area for some compute-flavored grants. AI Grant and Epic MegaGrants likely become realistic only once v6 ships and runs in a real engine.
+
+If any of these fits something you can offer, please reach out: <cashcon57@gmail.com>.
+
+---
+
 ## Reference docs
 
 v5 (current sprint), specs and runbooks:
@@ -230,11 +263,11 @@ v5 (current sprint), specs and runbooks:
 - [v5-gaussian-temporal design](docs/superpowers/specs/2026-05-04-v5-gaussian-temporal-design.md)
 - [Gaussian temporal canvas design](docs/superpowers/specs/2026-05-01-gaussian-temporal-canvas-design.md)
 - [v5 pixel-temporal runbook](docs/superpowers/notes/2026-05-04-v5-pixel-temporal-runbook.md)
-- [v5 pixel launch status](docs/superpowers/notes/2026-05-04-v5-pixel-launch-status-r2.md)
 - [v5 Sintel fine-tune runbook](docs/superpowers/notes/2026-05-04-v5-pixel-sintel-finetune-runbook.md)
 - [v5 Gaussian temporal runbook](docs/superpowers/notes/2026-05-04-v5-gaussian-temporal-runbook.md)
 - [v5 pixel temporal ONNX export design](docs/superpowers/notes/2026-05-04-v5-pixel-temporal-onnx-export-design.md)
-- [v5 rolling review](docs/superpowers/notes/2026-05-04-v5-rolling-review.md)
+
+Point-in-time status snapshots, codex coordination notes, and superseded sprint plans live under [docs/archive/](docs/archive/) for historical reference.
 
 v6 architecture (locked 2026-05-05):
 

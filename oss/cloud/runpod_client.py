@@ -106,7 +106,7 @@ DEFAULT_IMAGE = "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04"
 
 @dataclass
 class RunPodInstance:
-    """Field-compatible with `ors.cloud.protocol.CloudInstance`."""
+    """Field-compatible with `oss.cloud.protocol.CloudInstance`."""
     instance_id: str
     instance_type: str
     region: str
@@ -328,7 +328,7 @@ class RunPodClient:
             pre_existing_ids = set()
 
         kwargs = dict(
-            name=name or "ors-training",
+            name=name or "oss-training",
             image_name=image,
             gpu_type_id=instance_type_name,
             cloud_type=self._cloud_type,

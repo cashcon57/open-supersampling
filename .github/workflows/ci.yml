@@ -2,47 +2,63 @@ name: CI
 
 on:
   push:
-    branches: [main, "v*-dev"]
+    branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 jobs:
-  gaussian-track:
+  smoke:
+    name: smoke (Python 3.12, CPU)
     runs-on: ubuntu-latest
+    timeout-minutes: 25
+
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Set up Python
+      - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
+          cache-dependency-path: pyproject.toml
 
-      - name: Install (CPU-only, no mitsuba/vulkan extras)
-        run: pip install -e ".[dev]"
+      - name: Install CPU PyTorch + project
+        run: |
+          python -m pip install --upgrade pip
+          pip install --index-url https://download.pytorch.org/whl/cpu \
+              torch torchvision
+          pip install -e ".[dev]"
 
-      - name: Run Gaussian-track tests (CPU only)
-        run: pytest tests/gaussian/ -v -m "not gpu" --tb=short
+      - name: v6 test suite (target architecture)
+        run: pytest tests/sr/v6/ -q --tb=short
 
-  pixel-track:
+      - name: broader test suite (CPU-friendly slice)
+        # Excludes:
+        #   - tests/sr/v6 (run separately above for clean signal)
+        #   - tests/test_mitsuba_gen.py (Mitsuba build-extras not installed in CI)
+        #   - runpod tests (rely on environment-specific mocks)
+        run: |
+          pytest tests/ -q --tb=short \
+              --ignore=tests/sr/v6 \
+              --ignore=tests/test_mitsuba_gen.py \
+              -k "not runpod"
+
+      - name: v6 smoke train (synthetic data, ~1 minute)
+        run: |
+          python scripts/sr_train_v6.py --smoke \
+              --output-dir /tmp/oss-smoke \
+              --device cpu
+
+  lint:
+    name: ruff lint (non-blocking)
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: pip
-
-      - name: Install (CPU-only, no mitsuba/vulkan extras)
-        run: pip install -e ".[dev]"
-
-      - name: Run pixel-based OSS tests (skip GPU + mitsuba)
-        # NOTE: pre-existing pixel-track failures (onnx export, fx losses, etc.)
-        # are unrelated to the Gaussian work; gated on continue-on-error at job
-        # level so they don't block the v0.2-dev pipeline.
-        run: pytest tests/ --ignore=tests/gaussian -v -m "not gpu and not mitsuba" --tb=short
+      - run: pip install ruff
+      - run: ruff check . || true

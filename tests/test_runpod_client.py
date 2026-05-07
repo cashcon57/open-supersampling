@@ -212,7 +212,7 @@ def test_launch_no_orphan_raises(monkeypatch):
     sdk.get_pods.return_value = []
     sdk.create_pod.side_effect = RuntimeError("real failure")
     # Patch sleep so the 6 retry attempts don't actually wait 60s.
-    with patch("ors.cloud.runpod_client.time.sleep", return_value=None):
+    with patch("oss.cloud.runpod_client.time.sleep", return_value=None):
         with pytest.raises(RuntimeError, match="real failure"):
             c.launch(
                 instance_type_name="NVIDIA H100 PCIe",
@@ -230,7 +230,7 @@ def test_launch_empty_response_attempts_orphan_recovery(monkeypatch):
           "machine": {"gpuDisplayName": "H100 PCIe"}, "runtime": None}],
     ]
     sdk.create_pod.return_value = {}  # no id
-    with patch("ors.cloud.runpod_client.time.sleep", return_value=None):
+    with patch("oss.cloud.runpod_client.time.sleep", return_value=None):
         ids = c.launch(
             instance_type_name="NVIDIA H100 PCIe",
             region_name="",
