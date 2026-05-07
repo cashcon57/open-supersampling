@@ -4,7 +4,27 @@
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Status](https://img.shields.io/badge/status-pre--alpha-orange.svg)](#status-at-a-glance)
 
-> **TL;DR for reviewers.** Open-source ML super-resolution for games, Apache 2.0, solo maintainer (AI-augmented dev). v5-pixel-temporal was **trained on a single dataset (TartanAir Easy, with the `oldtown` environment held out) and evaluated only on that held-out environment** — that is in-distribution generalization, not cross-dataset. On that held-out batch it measures **PSNR 25.703 / LPIPS 0.1666 / temporal ratio 0.337×** (2× SR, 64 frames, beats bicubic on 64/64). v6 is the production-target architecture and is currently in training; cross-game-engine generalization is its explicit objective. OSS-FX frame extrapolation, the cross-vendor kernel stack, and the DLL-shim integration path are designed and partially implemented but **not yet measured on game-engine footage**. Looking for compute, hardware loaners, contract or full-time engineering work to take v6 from "in training" to "shipped on real games." See [What I'm asking for](#what-im-asking-for) below.
+> **TL;DR for reviewers.** Vendor-neutral, Apache-2.0 game **super-resolution + frame extrapolation built on one architecture**: a persistent 2D Gaussian canvas warped frame-to-frame by exact engine motion vectors, with covariance resampling (GS-STVSR) at the rasterizer. The same canvas, rendered at α=1, is the upscaled current frame; rendered at α∈(0,1) along the motion field, it is an extrapolated future frame **at near-zero marginal cost** — no separate frame-generation network. DLSS, FSR, and XeSS each ship two networks (SR + FG) trained and tuned separately; OSS targets the same surface area with one. The covariance step is anti-aliased *by construction*, which is something pixel-grid SR fundamentally cannot match.
+>
+> **Goal of the project, in three lines:** better SR quality at the same compute, better frame extrapolation at lower compute (because it reuses the SR canvas), and better generalization across game engines (because the canvas is engine-agnostic — it accumulates whatever the renderer feeds it, rasterized or ray-traced).
+>
+> **Status.** v5-pixel-temporal (the in-distribution validation step before v6) measures **PSNR 25.703 / LPIPS 0.1666 / temporal ratio 0.337×** on TartanAir `oldtown` held-out (single dataset; no cross-dataset eval yet). v6 — the canvas + covariance + cross-attention + spawner architecture — is in training; v6.1 (active) adds randomized spawner offsets and feathered overlapping rasterizer tiles to eliminate a structural 16-pixel grid artifact diagnosed at v6-Pico-001 step-20K. OSS-FX (the α<1 extrapolation path) is one rasterizer call away from the v6 forward, since the canvas + motion field it depends on are already wired; integration is the next sprint. Cross-vendor kernels (CUDA/HIP/Metal/Level Zero/Vulkan) and the DLL-shim integration path are designed but not built. Solo maintainer, AI-augmented development. Looking for compute, hardware loaners, contract or full-time engineering work to take v6 from "in training" to "shipped on real games." See [What I'm asking for](#what-im-asking-for) below.
+
+## Why this architecture
+
+DLSS, FSR, XeSS, and every other game upscaler treats super-resolution and frame generation as two separate problems. Two networks. Two latency budgets. Two training pipelines. DLSS Frame Generation is a separate large network bolted on top of DLSS Super Resolution.
+
+OSS treats SR and FG as one problem with one primitive. A persistent 2D Gaussian canvas is accumulated and warped frame-to-frame using exact engine motion vectors, with covariance resampling (GS-STVSR) handling anti-aliasing at the rasterizer. To upscale the current frame: render the canvas at **α=1**. To extrapolate a future frame: render the same canvas at **α∈(0,1)** along the motion field. One rasterizer call either way; no additional network is invoked for the extrapolation case.
+
+Three concrete consequences this is built to deliver:
+
+1. **Frame extrapolation at near-zero marginal cost.** No second network. The compute surface for SR + FG combined is roughly that of DLSS-SR alone, not DLSS-SR + DLSS-FG. The α<1 path is unwired today (next implementation step) but reuses the canvas and motion field that v6 already maintains.
+2. **A higher SR quality ceiling than pixel-grid methods.** Pixel-grid SR is bounded by Nyquist of the output grid plus whatever post-hoc filtering you stack on top. Gaussian-canvas SR sets the reconstruction-kernel covariance directly — anti-aliasing happens at the rasterizer (EWA filter in covariance space) rather than as a post-process. Sharper edges and fewer shimmer artifacts on the same input, by construction rather than by training trick.
+3. **Cross-engine generalization as a property, not a port.** The canvas is engine-agnostic — it accumulates whatever the renderer produces, regardless of whether the upstream is rasterized, ray-traced, Lumen-lit, or hand-written shader output. Cross-engine generalization (UE5, Unity, Source 2) becomes a v6 *training* objective rather than a per-engine integration problem.
+
+This is the pitch. The rest of the README is the evidence and counter-evidence — what is wired, what is measured, and what is honestly still aspirational.
+
+---
 
 ## Status at a glance
 
@@ -14,13 +34,14 @@
 | v5-pixel-temporal | trained on TartanAir Easy only; evaluated in-distribution on the held-out TartanAir `oldtown` env | 25.703 dB / 0.1666 LPIPS / 0.337× temporal ratio (no cross-dataset eval yet); [eval memo](docs/superpowers/experiments/2026-05-06-v5-pixel-temporal-final-held-out-eval.md) |
 | v5-Gaussian-temporal | scaffolded, no convergence numbers | parked after Option A (2026-05-06) |
 | v6 architecture | forward + trajectory training loop wired | 253 v6 tests pass; canvas warp + spawner + cross-attention + rasterizer all in the forward path |
+| v6.1 architecture revision (active) | randomized spawner tile offsets + overlapping rasterizer tiles with feathering | in implementation; v6.1-Pico-001 launches once the two fixes land. Background: [grid-artifact memo](docs/superpowers/experiments/2026-05-07-v6.1-pico-grid-artifact-architectural-fix.md) |
 | Cross-game-engine eval (UE5/Unity/Source 2) | not yet run | v6 training objective |
-| OSS-FX frame extrapolation | designed, not wired | next implementation step |
+| OSS-FX frame extrapolation | designed, not wired (one rasterizer call away — reuses the v6 canvas + motion field) | next implementation step |
 | Per-vendor kernels (CUDA/HIP/Metal/Level Zero/Vulkan) | designed, none built | 6–12 month engineering |
 | DLL-shim runtime | designed, not built | Sprint 7 |
 | OSS Capture Tool | designed, in implementation | nothing validated yet |
 
-Open-source super-resolution for games, with frame extrapolation planned via the same architecture. Designed cross-vendor (NVIDIA today; AMD, Apple, Intel, Steam Deck targeted via per-vendor kernels in v6 — none of those backends are yet implemented or measured). No SDK contract, no vendor lock-in. The planned integration path is a DLL shim for titles already exposing DLSS, FSR, or XeSS inputs (designed, not yet built).
+Open-source super-resolution **and** frame extrapolation for games, sharing one Gaussian-canvas architecture (rendered at α=1 for SR, α∈(0,1) for FG — same canvas, same motion field, no second network). Designed cross-vendor (NVIDIA today; AMD, Apple, Intel, Steam Deck targeted via per-vendor kernels in v6 — none of those backends are yet implemented or measured). No SDK contract, no vendor lock-in. The planned integration path is a DLL shim for titles already exposing DLSS, FSR, or XeSS inputs (designed, not yet built).
 
 Pre-alpha. Active research. Apache 2.0 licensed — use it freely in commercial games.
 
