@@ -171,13 +171,25 @@ def test_drain_once_deletes_orphan_frame_without_metadata(tmp_path: Path) -> Non
 
 def test_enforce_pending_cap_deletes_oldest_pair(tmp_path: Path) -> None:
     pending = tmp_path / "pending"
-    oldest = make_synthetic_capture(pending, session_uuid="z-session", frame_uuid="oldest", payload_bytes=256)
-    newest = make_synthetic_capture(pending, session_uuid="a-session", frame_uuid="newest", payload_bytes=256)
+    oldest = make_synthetic_capture(
+        pending,
+        session_uuid="z-session",
+        frame_uuid="oldest",
+        payload_bytes=256,
+        captured_at_unix=100,
+    )
+    newest = make_synthetic_capture(
+        pending,
+        session_uuid="a-session",
+        frame_uuid="newest",
+        payload_bytes=256,
+        captured_at_unix=200,
+    )
     base_ns = 1_778_000_000_000_000_000
     os.utime(oldest.frame_path, ns=(base_ns, base_ns))
     os.utime(oldest.meta_path, ns=(base_ns, base_ns))
-    os.utime(newest.frame_path, ns=(base_ns + 100, base_ns + 100))
-    os.utime(newest.meta_path, ns=(base_ns + 100, base_ns + 100))
+    os.utime(newest.frame_path, ns=(base_ns, base_ns))
+    os.utime(newest.meta_path, ns=(base_ns, base_ns))
     newest_total = newest.frame_path.stat().st_size + newest.meta_path.stat().st_size
 
     deleted = enforce_pending_cap(pending, max_bytes=newest_total + 1)
