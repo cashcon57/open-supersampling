@@ -54,7 +54,14 @@
     details > summary::-webkit-details-marker { display: none; }
     details[open] .summary-chevron { transform: rotate(90deg); }
     details[open] .closed-hint { display: none; }
-    .viz-strip { scrollbar-width: thin; }
+    .viz-strip {
+      overscroll-behavior-x: contain;
+      scroll-snap-type: x proximity;
+      scrollbar-width: thin;
+      touch-action: pan-x;
+      -webkit-overflow-scrolling: touch;
+    }
+    .viz-frame { scroll-snap-align: start; }
     .accordion-body { max-height: 0; overflow: hidden; opacity: 0.65; transition: max-height 320ms ease, opacity 220ms ease; }
     details[open] .accordion-body { max-height: 5000px; opacity: 1; }
     .viz-button { position: relative; cursor: zoom-in; transition: transform 180ms ease, filter 180ms ease; }
