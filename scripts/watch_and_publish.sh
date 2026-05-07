@@ -34,7 +34,21 @@ fi
 source "$CREDS"
 
 INTERVAL="${INTERVAL:-30}"
-SOURCE_DIR="${SOURCE_DIR:-/tmp/oss-runs}"
+# SOURCE_DIR auto-detect:
+#   - WSL2 (3080ti)            → /mnt/e/checkpoints
+#   - Git Bash MSYS (Windows)  → /e/checkpoints
+#   - Mac mirror               → /tmp/oss-runs
+if [[ -z "${SOURCE_DIR:-}" ]]; then
+  if [[ -d /mnt/e/checkpoints ]]; then
+    SOURCE_DIR="/mnt/e/checkpoints"
+  elif [[ -d /e/checkpoints ]]; then
+    SOURCE_DIR="/e/checkpoints"
+  elif [[ -d "E:/checkpoints" ]]; then
+    SOURCE_DIR="E:/checkpoints"
+  else
+    SOURCE_DIR="/tmp/oss-runs"
+  fi
+fi
 STAGING_DIR="${STAGING_DIR:-/tmp/dashboard-public-staging}"
 HASH_FILE="${STAGING_DIR}/.last-hashes"
 
@@ -69,29 +83,49 @@ upload_one() {
 stage_run_files() {
   # Mirror the curated allow-list of run dirs into the staging tree
   # the build script expects. Skip if nothing changed.
-  local allow_list=(srcnn-v6.1-pico-001 srcnn-v6-pico-001 srcnn-v5-pixel-temporal-validated srcnn-prod-v4-lpips)
+  local allow_list=(
+    srcnn-v6.1-pico-001
+    srcnn-v6-pico-001
+    srcnn-v6-heavy-001
+    srcnn-v5-pixel-temporal-validated
+    srcnn-v5-pixel-temporal-clean-restart-override
+    srcnn-prod-v4-lpips
+  )
   for run in "${allow_list[@]}"; do
     local src_run="${SOURCE_DIR}/${run}"
     local dst_run="${STAGING_DIR}/runs/${run}"
     [[ -d "$src_run" ]] || continue
     mkdir -p "$dst_run/viz"
-    cp -f "$src_run/metrics.json" "$dst_run/" 2>/dev/null || true
-    cp -f "$src_run/score_log.json" "$dst_run/" 2>/dev/null || true
-    cp -f "$src_run/gpu_status.json" "$dst_run/" 2>/dev/null || true
+    # rsync (portable Mac + WSL + Linux); -a archive, -u update-only-newer
+    rsync -au "$src_run/metrics.json" "$dst_run/" 2>/dev/null || true
+    rsync -au "$src_run/score_log.json" "$dst_run/" 2>/dev/null || true
+    rsync -au "$src_run/gpu_status.json" "$dst_run/" 2>/dev/null || true
     if [[ -d "$src_run/viz" ]]; then
-      cp -fu "$src_run/viz/"*.png "$dst_run/viz/" 2>/dev/null || true
+      rsync -au --include='*.png' --exclude='*' "$src_run/viz/" "$dst_run/viz/" 2>/dev/null || true
     fi
   done
 }
 
-# Optional: capture a fresh GPU snapshot for the active run.
+# Capture a fresh GPU snapshot for the active run. Tries local nvidia-smi
+# first (when running on the training host), then falls back to SSHing the
+# tailnet-aliased training host (when running on the maintainer's macbook).
+GPU_REMOTE_HOST="${GPU_REMOTE_HOST:-3080ti-windows}"
+GPU_SSH_OPTS="${GPU_SSH_OPTS:--o BatchMode=yes -o ConnectTimeout=5}"
+
 capture_gpu_status() {
-  command -v nvidia-smi >/dev/null 2>&1 || return 0
   local active="srcnn-v6.1-pico-001"
   local dst="${STAGING_DIR}/runs/${active}"
   [[ -d "$dst" ]] || return 0
-  local csv tmp_json captured_at
-  csv="$(nvidia-smi --query-gpu=name,memory.used,memory.total,utilization.gpu --format=csv,noheader,nounits 2>/dev/null)" || return 0
+  local csv=""
+  if command -v nvidia-smi >/dev/null 2>&1; then
+    csv="$(nvidia-smi --query-gpu=name,memory.used,memory.total,utilization.gpu --format=csv,noheader,nounits 2>/dev/null)" || csv=""
+  fi
+  if [[ -z "$csv" && -n "$GPU_REMOTE_HOST" ]]; then
+    # SSH fallback — works from macbook against 3080ti-windows tailnet alias.
+    csv="$(ssh ${GPU_SSH_OPTS} "${GPU_REMOTE_HOST}" 'nvidia-smi --query-gpu=name,memory.used,memory.total,utilization.gpu --format=csv,noheader,nounits' 2>/dev/null)" || csv=""
+  fi
+  [[ -n "$csv" ]] || return 0
+  local captured_at tmp_json
   captured_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   tmp_json="$dst/gpu_status.json.tmp"
   python3 -c "
@@ -103,7 +137,7 @@ name, used, total, util = parts[0], int(float(parts[1])), int(float(parts[2])), 
 payload = dict(captured_at='$captured_at', gpu_name=name, memory_used_mib=used, memory_total_mib=total,
                memory_used_pct=round(used*100/total, 1) if total else 0.0, utilization_pct=util)
 print(json.dumps(payload, indent=2, sort_keys=True))
-" > "$tmp_json" && mv "$tmp_json" "$dst/gpu_status.json"
+" > "$tmp_json" 2>/dev/null && mv "$tmp_json" "$dst/gpu_status.json"
 }
 
 publish_changed() {

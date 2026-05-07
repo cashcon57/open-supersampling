@@ -56,6 +56,19 @@ RUN_CONFIG = {
             {"label": "Temporal ratio", "value": "0.337x", "caption": "versus v4 baseline"},
         ],
     },
+    "srcnn-v5-pixel-temporal-clean-restart-override": {
+        "active": False,
+        "default_open": False,
+        "history_title": "v5 first try",
+        "status": "superseded by validated v5",
+        "summary": "Earlier v5 pixel-temporal attempt before the validated restart; kept for comparison with its first three viz strips.",
+        "note": "Superseded by srcnn-v5-pixel-temporal-validated after the clean restart produced the canonical v5 measurements.",
+        "headline": [
+            {"label": "Status", "value": "superseded", "caption": "replaced by validated v5"},
+            {"label": "Final step", "value_from": "latest_step", "caption": "from metrics.json"},
+            {"label": "Viz", "value": "3 strips", "caption": "steps 2K, 4K, 6K"},
+        ],
+    },
     "srcnn-prod-v4-lpips": {
         "active": False,
         "default_open": False,
@@ -82,9 +95,29 @@ RUN_CONFIG = {
             {"label": "Artifact", "value": "16 px grid", "caption": "documented in viz strip"},
         ],
     },
+    "srcnn-v6-heavy-001": {
+        "active": False,
+        "default_open": False,
+        "history_title": "v6 Heavy",
+        "status": "parked",
+        "summary": "Heavy HAT v6 attempt that started on 2026-05-06 and was parked after the v6 grid-artifact diagnosis.",
+        "note": "Only the first 68 training metric rows are present in the mirror; no public score or viz strips were produced before it was parked.",
+        "headline": [
+            {"label": "Status", "value": "parked", "caption": "pre-v6.1 heavy run"},
+            {"label": "Final step", "value_from": "latest_step", "caption": "short startup trace"},
+            {"label": "Backbone", "value": "HAT-L", "caption": "heavy v6 configuration"},
+        ],
+    },
 }
 
-RUN_ORDER = list(RUN_CONFIG)
+RUN_ORDER = [
+    "srcnn-v6.1-pico-001",
+    "srcnn-v6-pico-001",
+    "srcnn-v6-heavy-001",
+    "srcnn-v5-pixel-temporal-validated",
+    "srcnn-v5-pixel-temporal-clean-restart-override",
+    "srcnn-prod-v4-lpips",
+]
 DENY_RE = re.compile(
     r"(aborted|smoke|sanity|test|leak|preflight|paramprobe|init-fix|diag)",
     re.IGNORECASE,
@@ -94,7 +127,9 @@ V6_RUN_RE = re.compile(r"srcnn-v(6(?:\.\d+)?)-", re.IGNORECASE)
 RUN_MAX_STEPS = {
     "srcnn-v6.1-pico-001": 300_000,
     "srcnn-v6-pico-001": 300_000,
+    "srcnn-v6-heavy-001": 300_000,
     "srcnn-v5-pixel-temporal-validated": 80_000,
+    "srcnn-v5-pixel-temporal-clean-restart-override": 80_000,
     "srcnn-prod-v4-lpips": 420_000,
 }
 V4_CROSS_VERSION_POINTS = [
@@ -141,11 +176,15 @@ def v6_revision_from_run_name(name: str) -> str | None:
 def label_for_run(name: str, config: dict[str, Any]) -> str:
     v6_revision = v6_revision_from_run_name(name)
     if v6_revision:
+        if "heavy" in name.lower():
+            return f"{v6_revision} Heavy (parked)"
         if config.get("active"):
             return f"{v6_revision} Pico (active)"
         return f"{v6_revision} Pico (superseded)"
     if name == "srcnn-v5-pixel-temporal-validated":
         return "v5-pixel-temporal (measured)"
+    if name == "srcnn-v5-pixel-temporal-clean-restart-override":
+        return "v5 first try (superseded)"
     if name.startswith("srcnn-prod-v4") or name.startswith("srcnn-v4"):
         return "v4 (single-frame baseline)"
     return str(config.get("history_title") or name)
@@ -258,7 +297,10 @@ def viz_columns_for_run(name: str) -> list[str]:
             "|err v5|",
             f"|err {revision}|",
         ]
-    if name == "srcnn-v5-pixel-temporal-validated":
+    if name in {
+        "srcnn-v5-pixel-temporal-validated",
+        "srcnn-v5-pixel-temporal-clean-restart-override",
+    }:
         return ["LR-bilinear", "bicubic", "v4-baseline", "v5-pixel-temporal", "GT", "|err|"]
     if name.startswith("srcnn-prod-v4") or name.startswith("srcnn-v4"):
         return ["LR-bilinear", "bicubic", "v4", "GT", "|err|"]
