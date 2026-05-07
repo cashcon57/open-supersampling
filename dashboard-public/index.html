@@ -9,7 +9,14 @@
   <script>
     tailwind.config = { darkMode: "class" };
   </script>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
+  <script>
+    if (window.Chart && window.ChartZoom) {
+      Chart.register(window.ChartZoom);
+    }
+  </script>
   <style>
     @import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&display=swap");
     :root {
@@ -168,7 +175,7 @@
       line-height: 1.25;
     }
     .chart-wrap { height: 18rem; min-height: 16rem; max-width: 100%; overflow: hidden; }
-    .chart-wrap canvas { max-width: 100% !important; }
+    .chart-wrap canvas { max-width: 100% !important; touch-action: none; }
     .comparison-chart-wrap { height: 20rem; min-height: 18rem; }
     .title-with-info {
       display: inline-flex;
@@ -246,6 +253,59 @@
       padding: 0 0.75rem;
       color: var(--oss-subtext);
       font-size: 0.78rem;
+    }
+    .chart-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 0.4rem;
+    }
+    .chart-action {
+      min-height: 1.85rem;
+      padding: 0 0.5rem;
+      font-size: 0.68rem;
+      line-height: 1;
+      background: rgba(4, 8, 5, 0.48);
+      cursor: pointer;
+    }
+    .chart-action:hover,
+    .chart-action:focus-visible {
+      border-color: var(--oss-line-strong);
+      color: var(--oss-accent);
+      outline: none;
+    }
+    .chart-card.fullscreen {
+      position: fixed;
+      inset: 1rem;
+      z-index: 9000;
+      background: var(--surface, var(--oss-panel));
+      border: 1px solid #404040;
+      border-radius: 8px !important;
+      display: flex;
+      flex-direction: column;
+      overflow: auto;
+      padding: 1rem;
+    }
+    .chart-card.fullscreen .chart-wrap {
+      flex: 1;
+      height: 100% !important;
+      max-height: none;
+      min-height: 0;
+    }
+    .chart-card.fullscreen .fullscreen-dismiss {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      z-index: 1;
+    }
+    body.has-fullscreen-chart { overflow: hidden; }
+    .fullscreen-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 8999;
+      background: rgba(0,0,0,0.75);
+      backdrop-filter: blur(4px);
     }
     .lightbox {
       width: 100vw;
@@ -440,6 +500,8 @@
     .live-indicator.live { border-color: var(--oss-line-strong); color: var(--oss-accent); }
     @media (max-width: 480px) {
       .info-tooltip { max-width: 90vw; }
+      .chart-action .chart-action-label { display: none; }
+      .chart-action { width: 2rem; justify-content: center; padding: 0; }
     }
     @media (max-width: 640px) {
       .chart-wrap { height: 15rem; }
@@ -1121,6 +1183,153 @@ function setTheme(light) {
   document.getElementById("theme-toggle").textContent = light ? "Dark mode" : "Light mode";
 }
 
+const chartInputEvents = ["mousemove", "mouseout", "click", "mousedown", "mouseup", "wheel", "touchstart", "touchmove", "touchend"];
+
+function chartZoomOptions() {
+  return {
+    pan: {
+      enabled: true,
+      mode: "xy",
+      modifierKey: "shift",
+    },
+    zoom: {
+      wheel: { enabled: true, modifierKey: null },
+      pinch: { enabled: true },
+      drag: {
+        enabled: true,
+        backgroundColor: "rgba(56, 189, 248, 0.15)",
+        borderColor: "rgba(56, 189, 248, 0.6)",
+        borderWidth: 1,
+        threshold: 6,
+      },
+      mode: "xy",
+    },
+    limits: {
+      x: { min: "original", max: "original" },
+      y: { min: "original", max: "original" },
+      y1: { min: "original", max: "original" },
+    },
+  };
+}
+
+function chartActionIcon(kind) {
+  if (kind === "reset") {
+    return `<svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M2 2v4h4M14 14v-4h-4M2 14h4v-4M14 2h-4v4" stroke="currentColor" stroke-width="1.5" fill="none"/>
+    </svg>`;
+  }
+  return `<svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true">
+    <path d="M2 5V2h3M14 5V2h-3M2 11v3h3M14 11v3h-3" stroke="currentColor" stroke-width="1.5" fill="none"/>
+  </svg>`;
+}
+
+function chartActionButton(kind, chartId, label) {
+  const button = document.createElement("button");
+  button.className = `chart-toggle chart-action ${kind === "reset" ? "reset-zoom" : "fullscreen-toggle"}`;
+  button.type = "button";
+  button.dataset.chartId = chartId;
+  button.setAttribute(kind === "reset" ? "data-reset-zoom" : "data-fullscreen", "");
+  button.setAttribute("aria-label", `${label} chart`);
+  button.innerHTML = `${chartActionIcon(kind)}<span class="chart-action-label">${label}</span>`;
+  return button;
+}
+
+function chartCardForCanvas(canvas) {
+  const card = canvas.closest(".chart-card") || canvas.closest("article") || canvas.parentElement?.parentElement;
+  if (!card) return null;
+  card.classList.add("chart-card");
+  return card;
+}
+
+function ensureChartToolbar(card, canvas, chartId) {
+  let toolbar = card.querySelector(`[data-chart-toolbar="${chartId}"]`);
+  if (toolbar) return toolbar;
+
+  toolbar = document.createElement("div");
+  toolbar.className = "chart-toolbar";
+  toolbar.dataset.chartToolbar = chartId;
+  toolbar.appendChild(chartActionButton("reset", chartId, "Reset"));
+  toolbar.appendChild(chartActionButton("fullscreen", chartId, "Fullscreen"));
+
+  const header = Array.from(card.children).find((child) => child.classList?.contains("flex") && child.querySelector("h3"));
+  if (header) {
+    header.appendChild(toolbar);
+  } else {
+    const wrap = canvas.closest(".chart-wrap");
+    toolbar.classList.add("mb-2");
+    if (wrap) {
+      card.insertBefore(toolbar, wrap);
+    } else {
+      card.insertBefore(toolbar, card.firstChild);
+    }
+  }
+  return toolbar;
+}
+
+function bindResetZoom(chart, chartId) {
+  const btn = document.querySelector(`[data-reset-zoom][data-chart-id="${chartId}"]`);
+  if (!btn) return;
+  btn._resetZoomChart = chart;
+  if (btn.dataset.resetZoomBound === "true") return;
+  btn.dataset.resetZoomBound = "true";
+  btn.addEventListener("click", () => btn._resetZoomChart?.resetZoom?.("none"));
+}
+
+function enterFullscreen(card, chart) {
+  if (!card || card.classList.contains("fullscreen")) return;
+  const backdrop = document.createElement("div");
+  backdrop.className = "fullscreen-backdrop";
+  document.body.appendChild(backdrop);
+  document.body.classList.add("has-fullscreen-chart");
+  card.classList.add("fullscreen");
+
+  const dismissButton = document.createElement("button");
+  dismissButton.textContent = "×";
+  dismissButton.className = "fullscreen-dismiss chart-toggle chart-action";
+  dismissButton.type = "button";
+  dismissButton.setAttribute("aria-label", "Close fullscreen chart");
+  dismissButton.style.cssText = "font-size: 18px; padding: 2px 8px;";
+  card.appendChild(dismissButton);
+
+  const dismiss = () => {
+    card.classList.remove("fullscreen");
+    document.body.classList.remove("has-fullscreen-chart");
+    backdrop.remove();
+    dismissButton.remove();
+    document.removeEventListener("keydown", onEsc);
+    chart.resize();
+  };
+  function onEsc(event) {
+    if (event.key === "Escape") dismiss();
+  }
+
+  dismissButton.addEventListener("click", dismiss);
+  backdrop.addEventListener("click", dismiss);
+  document.addEventListener("keydown", onEsc);
+  setTimeout(() => chart.resize(), 50);
+}
+
+function bindFullscreen(chart, chartId, card) {
+  const btn = document.querySelector(`[data-fullscreen][data-chart-id="${chartId}"]`);
+  if (!btn) return;
+  btn._fullscreenChart = chart;
+  btn._fullscreenCard = card;
+  if (btn.dataset.fullscreenBound === "true") return;
+  btn.dataset.fullscreenBound = "true";
+  btn.addEventListener("click", () => enterFullscreen(btn._fullscreenCard, btn._fullscreenChart));
+}
+
+function bindChartControls(chart, canvasOrId) {
+  const canvas = typeof canvasOrId === "string" ? document.getElementById(canvasOrId) : canvasOrId;
+  if (!chart || !canvas?.id) return chart;
+  const card = chartCardForCanvas(canvas);
+  if (!card) return chart;
+  ensureChartToolbar(card, canvas, canvas.id);
+  bindResetZoom(chart, canvas.id);
+  bindFullscreen(chart, canvas.id, card);
+  return chart;
+}
+
 function chartOptions({ yTitle = "loss", componentAxis = false, logY = false } = {}) {
   const scales = {
     x: {
@@ -1151,12 +1360,13 @@ function chartOptions({ yTitle = "loss", componentAxis = false, logY = false } =
     animation: false,
     parsing: false,
     normalized: true,
-    events: ["mousemove", "click"],
+    events: chartInputEvents,
     interaction: { mode: "point", intersect: true },
     scales,
     plugins: {
       legend: { labels: { color: "#d4d4d8", boxWidth: 12 } },
       tooltip: { mode: "point", intersect: true },
+      zoom: chartZoomOptions(),
     },
   };
 }
@@ -1562,7 +1772,7 @@ function renderSingleMetricComparison(data, metric, opts) {
     animation: false,
     parsing: false,
     normalized: true,
-    events: ["mousemove", "click"],
+    events: chartInputEvents,
     interaction: { mode: "point", intersect: true },
     scales: {
       x: {
@@ -1642,9 +1852,10 @@ function renderSingleMetricComparison(data, metric, opts) {
           },
         },
       },
+      zoom: chartZoomOptions(),
     },
   };
-  return new Chart(canvas, { type: "line", data: { datasets }, options, plugins: [crossVersionLabelPlugin] });
+  return bindChartControls(new Chart(canvas, { type: "line", data: { datasets }, options, plugins: [crossVersionLabelPlugin] }), canvas);
 }
 
 function chartTooltipLines(row, run) {
@@ -1700,7 +1911,7 @@ function renderLossChart(canvas, run) {
       },
     },
   };
-  return new Chart(canvas, { type: "line", data: { datasets }, options });
+  return bindChartControls(new Chart(canvas, { type: "line", data: { datasets }, options }), canvas);
 }
 
 function renderLossDecompositionChart(canvas, run) {
@@ -1736,7 +1947,7 @@ function renderLossDecompositionChart(canvas, run) {
       },
     },
   };
-  return new Chart(canvas, { type: "line", data: { datasets }, options });
+  return bindChartControls(new Chart(canvas, { type: "line", data: { datasets }, options }), canvas);
 }
 
 function referenceLine(rows, value) {
@@ -1762,7 +1973,7 @@ function renderTrainingPsnrChart(canvas, run) {
     { label: `${run.history?.title || run.label || "run"} ${usesProxy ? "PSNR proxy" : "PSNR"}`, data: series, borderColor: colors.psnr, backgroundColor: colors.psnr, pointRadius: 0, pointHitRadius: 6, pointHoverRadius: 4, borderWidth: 2, tension: 0 },
     { label: "v5 held-out PSNR ref 25.703 dB", data: ref, borderColor: colors.gold, backgroundColor: colors.gold, pointRadius: 0, pointHitRadius: 6, borderWidth: 1.5, borderDash: [5, 4], tension: 0 },
   ].filter((dataset) => dataset.data.length);
-  return new Chart(canvas, { type: "line", data: { datasets }, options: chartOptions({ yTitle: "training-crop PSNR dB" }) });
+  return bindChartControls(new Chart(canvas, { type: "line", data: { datasets }, options: chartOptions({ yTitle: "training-crop PSNR dB" }) }), canvas);
 }
 
 function renderTrainingLpipsChart(canvas, run) {
@@ -1777,7 +1988,7 @@ function renderTrainingLpipsChart(canvas, run) {
     { label: `${run.history?.title || run.label || "run"} LPIPS`, data: series, borderColor: colors.lpips, backgroundColor: colors.lpips, pointRadius: 0, pointHitRadius: 6, pointHoverRadius: 4, borderWidth: 2, tension: 0 },
     { label: "v5 held-out LPIPS ref 0.1666", data: ref, borderColor: colors.gold, backgroundColor: colors.gold, pointRadius: 0, pointHitRadius: 6, borderWidth: 1.5, borderDash: [5, 4], tension: 0 },
   ].filter((dataset) => dataset.data.length);
-  return new Chart(canvas, { type: "line", data: { datasets }, options });
+  return bindChartControls(new Chart(canvas, { type: "line", data: { datasets }, options }), canvas);
 }
 
 function renderHeldoutChart(canvas, run) {
@@ -1801,7 +2012,7 @@ function renderHeldoutChart(canvas, run) {
     { label: "bicubic PSNR", yAxisID: "y", data: bicubicPsnr, borderColor: colors.bicubic, backgroundColor: colors.bicubic, pointRadius: 3, pointHitRadius: 6, borderWidth: 1.7, borderDash: [5, 4], tension: 0 },
     { label: "model LPIPS", yAxisID: "y1", data: modelLpips, borderColor: colors.lpips, backgroundColor: colors.lpips, pointRadius: 3, pointHitRadius: 6, borderWidth: 2, tension: 0 },
   ].filter((dataset) => dataset.data.length);
-  return new Chart(canvas, { type: "line", data: { datasets }, options });
+  return bindChartControls(new Chart(canvas, { type: "line", data: { datasets }, options }), canvas);
 }
 
 function renderScoreTable(host, run) {
