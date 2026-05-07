@@ -2,7 +2,9 @@
 
 Open-source real-time super-resolution and frame extrapolation for games. Cross-vendor (NVIDIA, AMD, Apple, Intel, Steam Deck), no SDK contract, no vendor lock-in. The planned integration path is a DLL shim for titles already exposing DLSS, FSR, or XeSS inputs.
 
-Pre-alpha. Active research.
+Pre-alpha. Active research. Apache 2.0 licensed — use it freely in commercial games.
+
+Maintained by Cash Conway (<cashcon57@gmail.com>). Available for studios + GPU vendors needing OSS integration consulting, custom per-vendor kernel work, training-recipe tuning, or full-time engineering. Reach out if you want to ship vendor-neutral SR in your title.
 
 ---
 
