@@ -603,6 +603,7 @@ const colors = {
   bicubic: "#4f6a64",
   gold: "#c8a960",
   v4: "#f0b56f",
+  v5: "#fbbf24",
   nvidia: "#8cffc1",
   amd: "#ff7b7b",
   intel: "#7dd3fc",
@@ -1345,7 +1346,7 @@ function comparisonTrajectorySeries(data) {
     name: "v5",
     label_full: "v5-pixel-temporal on TartanAir oldtown",
     manifest: "TartanAir oldtown, 64 frames",
-    color: colors.ossPoint,
+    color: colors.v5,
   });
   const v61Run = byName.get("srcnn-v6.1-pico-001");
   const v61 = comparisonPointsFromScoreLog(v61Run, {
@@ -1380,7 +1381,7 @@ function comparisonTrajectorySeries(data) {
     {
       id: "v5",
       label: "v5",
-      color: colors.ossPoint,
+      color: colors.v5,
       points: v5,
     },
     {
@@ -1393,6 +1394,10 @@ function comparisonTrajectorySeries(data) {
   ].filter((item) => item.points.length);
   if (v61Run?.active && v61.length) {
     v61[v61.length - 1].live = true;
+  }
+  if (v5.length === 1) {
+    v5[0].markerLabel = `v5 final · ${formatStepTick(v5[0].step)} steps`;
+    v5[0].markerLabelColor = colors.v5;
   }
   const allSteps = series.flatMap((item) => item.points.map((point) => point.step)).filter(Number.isFinite);
   const maxStep = Math.max(100000, ...allSteps);
@@ -1416,11 +1421,11 @@ function comparisonDatasetForSeries(series, metric) {
     pointBackgroundColor(context) {
       return context.raw?.point?.hollow || series.hollow ? "#06110f" : series.color;
     },
-    pointRadius: series.id === "v4-srgd" ? 4 : 6,
+    pointRadius: series.id === "v4-srgd" ? 4 : (series.points.length === 1 ? 8 : 6),
     pointHitRadius: 6,
-    pointHoverRadius: series.id === "v4-srgd" ? 6 : 8,
+    pointHoverRadius: series.id === "v4-srgd" ? 6 : (series.points.length === 1 ? 10 : 8),
     pointBorderWidth(context) {
-      return context.raw?.point?.hollow || series.hollow ? 3 : 2;
+      return series.points.length === 1 || context.raw?.point?.hollow || series.hollow ? 3 : 2;
     },
     showLine: series.points.length > 1,
     borderWidth: 1.8,
@@ -1474,6 +1479,25 @@ const crossVersionLabelPlugin = {
     });
     chart.data.datasets.forEach((dataset, index) => {
       if (!dataset.runLine || !chart.isDatasetVisible(index)) return;
+      const markerLabels = (dataset.data || []).filter((item) => item.point?.markerLabel);
+      markerLabels.forEach((item) => {
+        const scale = scales[dataset.yAxisID || "y"];
+        if (!scale) return;
+        const x = scales.x.getPixelForValue(item.x);
+        const y = scale.getPixelForValue(item.y);
+        if (x < chartArea.left || x > chartArea.right || y < chartArea.top || y > chartArea.bottom) return;
+        const label = item.point.markerLabel;
+        const width = ctx.measureText(label).width;
+        const labelX = Math.min(Math.max(x + 12, chartArea.left + 4), chartArea.right - width - 8);
+        const labelY = Math.max(chartArea.top + 13, y - 13);
+        ctx.fillStyle = "rgba(6,17,15,0.86)";
+        ctx.fillRect(labelX - 4, labelY - 8, width + 8, 15);
+        ctx.textAlign = "left";
+        ctx.fillStyle = item.point.markerLabelColor || dataset.borderColor;
+        ctx.globalAlpha = 0.98;
+        ctx.fillText(label, labelX, labelY);
+        ctx.globalAlpha = 1;
+      });
       const livePoint = dataset.data?.findLast?.((item) => item.point?.live) || [...(dataset.data || [])].reverse().find((item) => item.point?.live);
       if (!livePoint) return;
       const scale = scales[dataset.yAxisID || "y"];
