@@ -57,7 +57,7 @@ The day's investigation closes with a single, simple architectural picture. We h
 
 ## What survives from the Gaussian work
 
-The `oss/gaussian/` modules (renderer, network, output_head, prior_bank) are not deleted. They remain available for the OSS-Gaussian-RR (denoising) track per `docs/superpowers/oss-gaussian-rr-track.md`, where the splat representation is known to fit (D1 result on synthetic noise beat OIDN PSNR).
+The `oss/gaussian/` modules (renderer, network, output_head, prior_bank) are not deleted. They remain available for the OSS Ray Retracing (denoising) track per `docs/superpowers/oss-ray-retracing-track.md`, where the splat representation is known to fit (D1 result on synthetic noise beat OIDN PSNR).
 
 The Sprint 4 trainer infrastructure — DataLoader path, engine-aliased LR synth, bicubic comparison, held-out probe, lab notebook discipline — was built once and serves both tracks unchanged.
 

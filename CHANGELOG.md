@@ -67,7 +67,7 @@ A vector-based real-time game upscaler. Where DLSS and FSR work in pixels, OSS-G
 
 > **Result of Sprint 4:** the 2D Gaussian splat representation cannot do single-image super-resolution competitively against bicubic at our resource budget. This was triple-checked across five independent paths (see `docs/superpowers/experiments/2026-05-02-splats-cannot-SR-definitive.md`). The implementation is correct; the representation is the limit.
 >
-> **Pivot:** OSS-SR forks off the Gaussian track as a CNN-based super-resolver (V0.5 architecture, drop the splat dead-code). The Gaussian track redirects to OSS-Gaussian-RR (denoising / DLSS-RR replacement) where Image-GS at n=1000 already beat OIDN on PSNR per the D1 memo (`docs/superpowers/experiments/2026-05-01-gaussian-denoising-naive-test.md`). Sprint 5 (persistent canvas) is suspended until the RR track produces a usable per-frame splat signal.
+> **Pivot:** OSS-SR forks off the Gaussian track as a CNN-based super-resolver (V0.5 architecture, drop the splat dead-code). The Gaussian track redirects to OSS Ray Retracing (denoising / DLSS-RR replacement) where Image-GS at n=1000 already beat OIDN on PSNR per the D1 memo (`docs/superpowers/experiments/2026-05-01-gaussian-denoising-naive-test.md`). Sprint 5 (persistent canvas) is suspended until the RR track produces a usable per-frame splat signal.
 >
 > **What survives:** every piece of Sprint 4 infrastructure that isn't splat-specific — `oss/gaussian/data/` (lr_synthesis, dataset adapters), `oss/gaussian/train/train.py` (DataLoader path, bicubic comparison, checkpointing, diagnostic instrumentation), `scripts/held_out_scene_probe.py`, and the lab notebook discipline. The trainer just gets a different model wired into it.
 

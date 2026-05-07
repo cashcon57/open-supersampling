@@ -18,7 +18,7 @@ Memo retained for forensic value (decision context, scenario A/B framing).
 - `docs/superpowers/notes/cuda-mega-kernel-design.md`
 - `docs/superpowers/notes/vendor-optimization-audit.md`
 - `docs/superpowers/notes/2026-05-04-v5-pixel-temporal-onnx-export-design.md`
-- `docs/superpowers/oss-gaussian-rr-track.md` (parked on NoiseBase)
+- `docs/superpowers/oss-ray-retracing-track.md` (parked on NoiseBase)
 
 ---
 
@@ -74,7 +74,7 @@ v6 productizes this with the following commitments:
 
 ### 2.2 NoiseBase + OSS-RG (ray-reconstruction track)
 
-`docs/superpowers/oss-gaussian-rr-track.md` is parked on a NoiseBase data download. v6 unparks it as soon as the dataset materializes:
+`docs/superpowers/oss-ray-retracing-track.md` is parked on a NoiseBase data download. v6 unparks it as soon as the dataset materializes:
 
 - **Trigger:** NoiseBase or equivalent (≥ 50K paired noisy/clean ray-traced sequences with G-buffers) lands on the lab NAS.
 - **Work item:** OSS-RG = ray-reconstruction denoiser, sibling to OSS-SR. Same 1440p→4K spatial scale but consuming 1 spp ray-traced + G-buffers instead of rasterized history.

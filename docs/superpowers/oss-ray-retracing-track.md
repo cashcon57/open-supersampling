@@ -1,4 +1,4 @@
-# OSS-Gaussian-RR — Denoising / DLSS-RR Replacement Track
+# OSS Ray Retracing — Denoising / DLSS-RR Replacement Track
 
 **Date created:** 2026-05-02
 **Pivot trigger:** `docs/superpowers/experiments/2026-05-02-splats-cannot-SR-definitive.md`
@@ -8,7 +8,7 @@
 
 The Gaussian splat representation **cannot do** single-image super-resolution. It **can do** denoising — `docs/superpowers/experiments/2026-05-01-gaussian-denoising-naive-test.md` (D1) showed Image-GS at n=1000 beating OIDN on PSNR (26.90 vs 26.56 dB) and beating Gaussian blur on PSNR + LPIPS for 5/6 frames. The Gaussian prior is sound for denoising; it just can't hallucinate the high-frequency detail that SR demands.
 
-DLSS Ray Reconstruction (NVIDIA's released-2023 successor to DLSS-DR + ML denoising) is the natural product target. NRD is the open baseline. OSS-Gaussian-RR is the open vector-domain alternative.
+DLSS Ray Reconstruction (NVIDIA's released-2023 successor to DLSS-DR + ML denoising) is the natural product target. NRD is the open baseline. OSS Ray Retracing is the open vector-domain alternative.
 
 ## Architectural sketch (v0, deferred until data lands)
 

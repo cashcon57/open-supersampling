@@ -14,7 +14,7 @@ optimized via gradient descent against a target image — act as an *implicit
 smoothness prior* that denoises a noisy 1-spp path-traced frame, **without any
 custom training**?
 
-This is the gating experiment for the OSS-Gaussian-RR direction. A negative
+This is the gating experiment for the OSS Ray Retracing direction. A negative
 result kills the anisotropic-covariance Sprint 4 work before we commit to it.
 
 ## Setup
@@ -159,7 +159,7 @@ What didn't:
    of method, and PSNR rewards uniform smoothing on this content. A trained
    network knows to preserve high-frequency texture; a naive Gaussian fit doesn't.
 
-## Implications for OSS-Gaussian-RR (Sprint 4)
+## Implications for OSS Ray Retracing (Sprint 4)
 
 **The direction is not killed, but the framing must change.**
 
@@ -190,7 +190,7 @@ OIDN."**
 Image-GS optimization here takes **~20 s/frame** on a 3080 Ti (1k–30k Gaussians,
 2000 steps, 512×512). This experiment **does not validate a deployable
 denoiser** — it validates whether the Gaussian *representation* is in the right
-ballpark for path-tracing denoising. A real-time deployment is the OSS-Gaussian-RR
+ballpark for path-tracing denoising. A real-time deployment is the OSS Ray Retracing
 network (different work — direct Gaussian-parameter prediction from G-buffers,
 no per-frame optimization).
 
@@ -205,7 +205,7 @@ no per-frame optimization).
    inputs and would gain ~3–5 dB PSNR if it had them. We ran OIDN unguided to
    keep the comparison fair against the unguided Image-GS fitter.
 3. **Frame-independent.** No temporal coherence test. A learned denoiser
-   (OIDN, RR) and any deployable Gaussian-RR will both leverage temporal
+   (OIDN, RR) and any deployable Ray Retracing will both leverage temporal
    accumulation; this experiment is single-frame only.
 
 ## Reproduce

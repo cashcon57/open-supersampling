@@ -1,6 +1,6 @@
 # OSS-Gaussian — Network Architecture
 
-**Sprint:** 4 (pivoted 2026-05-02). **Status:** **NOT a path to single-image SR.** The 2D Gaussian splat representation cannot beat bicubic on single-image SR at our resource budget — verified across five independent paths in `docs/superpowers/experiments/2026-05-02-splats-cannot-SR-definitive.md`. OSS-SR has forked to a CNN-based pipeline (see `docs/superpowers/oss-sr-cnn-track.md` once it lands). This document remains the reference for the Gaussian track, which is being repurposed for **OSS-Gaussian-RR (denoising / DLSS-RR replacement)** where Image-GS already beat OIDN on PSNR (D1 memo).
+**Sprint:** 4 (pivoted 2026-05-02). **Status:** **NOT a path to single-image SR.** The 2D Gaussian splat representation cannot beat bicubic on single-image SR at our resource budget — verified across five independent paths in `docs/superpowers/experiments/2026-05-02-splats-cannot-SR-definitive.md`. OSS-SR has forked to a CNN-based pipeline (see `docs/superpowers/oss-sr-cnn-track.md` once it lands). This document remains the reference for the Gaussian track, which is being repurposed for **OSS Ray Retracing (denoising / DLSS-RR replacement)** where Image-GS already beat OIDN on PSNR (D1 memo).
 **Spec:** `docs/superpowers/specs/2026-05-01-gaussian-temporal-canvas-design.md` (SR claims now stale — RR repurposing pending).
 **Plan:** `docs/superpowers/plans/2026-05-01-gaussian-sprint-4-plan.md`.
 **Live findings:** `docs/superpowers/experiments/2026-05-02-splats-cannot-SR-definitive.md`.

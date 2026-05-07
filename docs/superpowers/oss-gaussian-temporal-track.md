@@ -67,7 +67,7 @@ First test ─────────┤
                     │                     standard CNN extrapolator (DLSS-FG-like) for v1.
                     │
                     └─ A loses ─────────► Close splat track for SR/extrapolation product.
-                                          Gaussian work continues only in OSS-Gaussian-RR (denoising).
+                                          Gaussian work continues only in OSS Ray Retracing (denoising).
 ```
 
 ## What does NOT get done in this track
@@ -107,9 +107,9 @@ The same call site supports both modes; flipping requires only providing the sec
 
 **Implementation rule:** any new code in `oss/gaussian/canvas/`, `oss/gaussian/extrapolation/`, or the inference pipeline must accept both `(gauss, motion, alpha)` *and* `(gauss_a, gauss_b, alpha)` shapes — not one or the other. Document with a tiny test for each path even if interpolation is initially unused.
 
-## Why this isn't the same as the OSS-Gaussian-RR track
+## Why this isn't the same as the OSS Ray Retracing track
 
-- **OSS-Gaussian-RR** (denoising / DLSS-RR replacement) uses Gaussians as a smoothing prior on noisy ray-traced HDR frames. The D1 result on synthetic noise validated that direction. Gated on NoiseBase data.
+- **OSS Ray Retracing** (denoising / DLSS-RR replacement) uses Gaussians as a smoothing prior on noisy ray-traced HDR frames. The D1 result on synthetic noise validated that direction. Gated on NoiseBase data.
 - **OSS-Gaussian-Temporal** (this track) uses Gaussians as a temporally-warpable HR feature/RGB representation for cheap frame extrapolation. The SR component need only be at parity for the system case to work; the value comes from extrapolation.
 
 They are independent and parallel. RR doesn't need temporal warping; Temporal doesn't need denoising. Either may succeed or fail without affecting the other.

@@ -6,7 +6,7 @@ training. The premise: the limited expressive capacity of a Gaussian splat
 representation acts as an implicit smoothness prior, in the same way a small
 implicit-neural-rep fits to the low-frequency content of a noisy signal.
 
-This is the validation experiment for the OSS-Gaussian-RR direction
+This is the validation experiment for the OSS Ray Retracing direction
 described in docs/superpowers/research-synthesis-gaussian-denoising-2026-05-01.md.
 A negative result here kills the direction before Sprint 4 commits to anisotropic
 covariance work.
