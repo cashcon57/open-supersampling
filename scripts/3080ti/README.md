@@ -35,3 +35,29 @@ powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\cashc\start-supervi
 
 The supervisor itself currently has no auto-restart; that's a Task Scheduler
 job to add later. For now it persists as long as the host doesn't reboot.
+
+## ci_auto_heal --watch (Tier 1 always-on services)
+
+`launch-ci-heal-watch.ps1` — WMI-orphan-spawns the GitHub-CI auto-healer
+in `--watch` mode against `E:\oss-gaussian-server` (a fresh clone of
+`origin/main`, kept distinct from the legacy `E:\oss-gaussian` working
+tree). Polls every 60s; on any new RED run it dispatches a codex
+session that diagnoses + fixes + pushes.
+
+Pre-reqs (one-time):
+
+- `winget install jqlang.jq` — adds `jq` to user PATH
+- `gh auth login` — authenticate the Windows-native GitHub CLI
+- Fresh clone at `E:\oss-gaussian-server` with `.secrets/` populated
+
+Launch:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\cashc\3080ti\launch-ci-heal-watch.ps1
+```
+
+Returns `ProcessId=<N> ReturnValue=0`. Tail the log via:
+
+```bash
+ssh 3080ti-windows '& "C:\Program Files\Git\bin\bash.exe" -lc "tail -f /tmp/ci_auto_heal_watch.log"'
+```
