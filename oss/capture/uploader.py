@@ -107,6 +107,25 @@ def pending_bytes(pending_dir: Path) -> int:
     return total
 
 
+def _captured_at_unix(meta_path: Path) -> float | None:
+    try:
+        raw = json.loads(meta_path.read_text(encoding="utf-8"))
+        return float(raw["captured_at_unix"])
+    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def _oldest_frame_key(frame: CaptureFrame) -> tuple[int, float, int, int, str, str]:
+    frame_stat = frame.frame_path.stat()
+    meta_stat = frame.meta_path.stat()
+    fs_mtime_ns = min(frame_stat.st_mtime_ns, meta_stat.st_mtime_ns)
+    fs_ctime_ns = min(frame_stat.st_ctime_ns, meta_stat.st_ctime_ns)
+    captured_at = _captured_at_unix(frame.meta_path)
+    if captured_at is not None:
+        return (0, captured_at, fs_mtime_ns, fs_ctime_ns, frame.frame_path.name, str(frame.frame_path))
+    return (1, float(fs_mtime_ns), fs_mtime_ns, fs_ctime_ns, frame.frame_path.name, str(frame.frame_path))
+
+
 def enforce_pending_cap(pending_dir: Path, max_bytes: int) -> list[Path]:
     """Delete oldest frame pairs until pending_dir is at or below max_bytes."""
 
@@ -117,10 +136,7 @@ def enforce_pending_cap(pending_dir: Path, max_bytes: int) -> list[Path]:
 
     candidates = sorted(
         iter_frames(pending_dir),
-        key=lambda frame: (
-            min(frame.frame_path.stat().st_mtime_ns, frame.meta_path.stat().st_mtime_ns),
-            str(frame.frame_path),
-        ),
+        key=_oldest_frame_key,
     )
     for frame in candidates:
         size = frame.frame_path.stat().st_size
