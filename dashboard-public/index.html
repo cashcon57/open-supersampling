@@ -307,6 +307,60 @@
       opacity: 1;
       transform: translateX(-50%) translateY(0);
     }
+    .hero-cite {
+      margin-top: 12px;
+      border: 1px solid #27272a;
+      border-radius: 6px;
+      padding: 8px 12px;
+      background: #0a0a0a;
+    }
+    .hero-cite > summary {
+      cursor: pointer;
+      font-size: 13px;
+      color: #a1a1aa;
+      user-select: none;
+    }
+    .hero-cite[open] > summary { color: #e4e4e7; margin-bottom: 8px; }
+    .cite-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    .cite-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #71717a;
+      margin-bottom: 4px;
+    }
+    .cite-pre {
+      background: #18181b;
+      border: 1px solid #27272a;
+      border-radius: 4px;
+      padding: 8px;
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      font-size: 11px;
+      color: #d4d4d8;
+      white-space: pre-wrap;
+      word-break: break-word;
+      margin: 0;
+    }
+    .cite-copy {
+      margin-top: 6px;
+      font-size: 11px;
+      padding: 3px 8px;
+      background: #27272a;
+      color: #e4e4e7;
+      border: 1px solid #3f3f46;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .cite-copy:hover { background: #3f3f46; }
+    .cite-copy.copied { background: #166534; border-color: #22c55e; }
+    .cite-copy.copied::after { content: " ✓"; }
+    @media (max-width: 640px) {
+      .cite-grid { grid-template-columns: 1fr; }
+    }
     .chart-card-highlight {
       outline: 2px solid rgba(56, 189, 248, 0.55);
       outline-offset: 4px;
@@ -649,6 +703,21 @@
           </div>
         </div>
         <p id="hero-active-meta" class="mt-1 text-sm text-zinc-300" data-subtext>waiting for metrics.json</p>
+        <details id="hero-cite" class="hero-cite" hidden>
+          <summary>Cite this result</summary>
+          <div class="cite-grid">
+            <div class="cite-col">
+              <div class="cite-label">BibTeX</div>
+              <pre class="cite-pre" id="cite-bib"></pre>
+              <button class="cite-copy" type="button" data-cite-target="cite-bib">Copy .bib</button>
+            </div>
+            <div class="cite-col">
+              <div class="cite-label">Plain text</div>
+              <pre class="cite-pre" id="cite-plain"></pre>
+              <button class="cite-copy" type="button" data-cite-target="cite-plain">Copy text</button>
+            </div>
+          </div>
+        </details>
       </article>
       <article class="rounded-md border border-zinc-800 bg-zinc-900/60 p-4" data-surface>
         <div class="text-sm uppercase text-zinc-500" data-dim>v5-pixel-temporal: measured</div>
@@ -1973,6 +2042,17 @@ function initDashboardUrlState() {
       copyDashboardLink(copyButton).catch((error) => console.warn(`Dashboard URL copy failed: ${error.message}`));
     }
   });
+  document.addEventListener("click", (event) => {
+    const btn = event.target.closest(".cite-copy");
+    if (!btn) return;
+    const targetId = btn.dataset.citeTarget;
+    const pre = targetId && document.getElementById(targetId);
+    if (!pre) return;
+    navigator.clipboard.writeText(pre.textContent || "").then(() => {
+      btn.classList.add("copied");
+      setTimeout(() => btn.classList.remove("copied"), 1400);
+    }).catch((error) => console.warn(`Cite copy failed: ${error.message}`));
+  });
   window.addEventListener("popstate", () => {
     if (lastKnownData) renderDashboard(lastKnownData, { preserveTrainingState: true, skipUrlState: true });
     applyUrlState();
@@ -3139,6 +3219,30 @@ function computeEtaHours(run) {
   return computeEtaInfo(run)?.hours ?? null;
 }
 
+function deriveVersionSlug(active) {
+  const src = String(active?.label || active?.name || "").toLowerCase();
+  const m = src.match(/v(\d+(?:\.\d+)?)/);
+  return m ? `v${m[1]}` : (active?.name || "oss").replace(/[^a-z0-9.-]/gi, "-");
+}
+
+function buildCitation(active) {
+  const slug = deriveVersionSlug(active);
+  const step = Number(active?.latest_step || 0);
+  const stepStr = step.toLocaleString();
+  const year = 2026;
+  const bibKey = `conway${year}oss-${slug}`;
+  const bib =
+`@misc{${bibKey},
+  title  = {OpenSuperSampling ${slug}},
+  author = {Conway, Cash},
+  year   = {${year}},
+  url    = {https://opensupersampling.org},
+  note   = {latest checkpoint at step ${stepStr}}
+}`;
+  const plain = `Conway, C. (${year}). OpenSuperSampling ${slug} (step ${stepStr}) [Software]. https://opensupersampling.org`;
+  return { bib, plain, slug, step };
+}
+
 function etaTextForRun(run) {
   const eta = computeEtaInfo(run);
   if (!eta) return "";
@@ -3175,6 +3279,13 @@ function renderHero(data) {
       progress.querySelector(".progress-pct").textContent = `${pct}% complete`;
       progress.querySelector(".progress-eta").textContent = etaTextForRun(active);
     }
+  }
+  const citeEl = document.getElementById("hero-cite");
+  if (citeEl) {
+    const { bib, plain } = buildCitation(active);
+    citeEl.hidden = false;
+    document.getElementById("cite-bib").textContent = bib;
+    document.getElementById("cite-plain").textContent = plain;
   }
   document.getElementById("hero-gpu").innerHTML = gpuPanelHtml(active).replace("rounded-md border ", "");
 }
