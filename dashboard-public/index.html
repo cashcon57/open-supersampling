@@ -3005,14 +3005,7 @@ function chartZoomOptions() {
     zoom: {
       wheel: { enabled: true, modifierKey: null },     // wheel/scroll = zoom
       pinch: { enabled: true },                          // pinch = zoom (touch)
-      drag: {
-        enabled: true,
-        modifierKey: "shift",  // shift+drag = rect-zoom (advanced)
-        backgroundColor: "rgba(56, 189, 248, 0.15)",
-        borderColor: "rgba(56, 189, 248, 0.6)",
-        borderWidth: 1,
-        threshold: 6,
-      },
+      drag: { enabled: false },                          // drag = pan only (no rect-zoom)
       mode: "xy",
       onZoomComplete({ chart }) {
         updateDashboardZoomState(chart);
@@ -3028,6 +3021,18 @@ function chartZoomOptions() {
 }
 
 function chartActionIcon(kind) {
+  if (kind === "zoom-in") {
+    return `<svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true">
+      <circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.5" fill="none"/>
+      <path d="M11 11l3.5 3.5M5 7h4M7 5v4" stroke="currentColor" stroke-width="1.5" fill="none"/>
+    </svg>`;
+  }
+  if (kind === "zoom-out") {
+    return `<svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true">
+      <circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.5" fill="none"/>
+      <path d="M11 11l3.5 3.5M5 7h4" stroke="currentColor" stroke-width="1.5" fill="none"/>
+    </svg>`;
+  }
   if (kind === "reset") {
     return `<svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true">
       <path d="M2 2v4h4M14 14v-4h-4M2 14h4v-4M14 2h-4v4" stroke="currentColor" stroke-width="1.5" fill="none"/>
@@ -3079,7 +3084,12 @@ function embedChartIdForSlug(slug) {
 
 function chartActionButton(kind, chartId, label, opts = {}) {
   const button = document.createElement("button");
-  const actionClass = kind === "reset" ? "reset-zoom" : kind === "fullscreen" ? "fullscreen-toggle" : kind === "embed" ? "embed-link" : "copy-link";
+  const actionClass = kind === "reset" ? "reset-zoom"
+    : kind === "fullscreen" ? "fullscreen-toggle"
+    : kind === "embed" ? "embed-link"
+    : kind === "zoom-in" ? "zoom-in"
+    : kind === "zoom-out" ? "zoom-out"
+    : "copy-link";
   const chartSlug = chartSlugForId(chartId);
   button.className = `chart-toggle chart-action ${actionClass}`;
   button.type = "button";
@@ -3087,6 +3097,8 @@ function chartActionButton(kind, chartId, label, opts = {}) {
   button.dataset.chartSlug = chartSlug;
   if (kind === "reset") button.setAttribute("data-reset-zoom", "");
   if (kind === "fullscreen") button.setAttribute("data-fullscreen", "");
+  if (kind === "zoom-in") button.setAttribute("data-zoom-in", "");
+  if (kind === "zoom-out") button.setAttribute("data-zoom-out", "");
   if (kind === "copy") button.setAttribute("data-copy-link", "");
   if (kind === "embed") {
     button.dataset.embedChart = embedChartIdForSlug(chartSlug);
@@ -3127,6 +3139,13 @@ function ensureChartToolbar(card, canvas, chartId) {
   }
 
   if (toolbar) {
+    if (!toolbar.querySelector("[data-zoom-out]")) {
+      toolbar.insertBefore(chartActionButton("zoom-out", chartId, "−"), toolbar.firstChild);
+    }
+    if (!toolbar.querySelector("[data-zoom-in]")) {
+      const zoomOut = toolbar.querySelector("[data-zoom-out]");
+      toolbar.insertBefore(chartActionButton("zoom-in", chartId, "+"), zoomOut?.nextSibling || toolbar.firstChild);
+    }
     if (!toolbar.querySelector("[data-embed-chart]")) {
       toolbar.appendChild(chartActionButton("embed", chartId, "Embed", { runToken }));
     }
@@ -3140,6 +3159,8 @@ function ensureChartToolbar(card, canvas, chartId) {
   toolbar.className = "chart-toolbar";
   toolbar.dataset.chartToolbar = chartId;
   toolbar.dataset.chartSlug = chartSlug;
+  toolbar.appendChild(chartActionButton("zoom-out", chartId, "−"));
+  toolbar.appendChild(chartActionButton("zoom-in", chartId, "+"));
   toolbar.appendChild(chartActionButton("reset", chartId, "Reset"));
   toolbar.appendChild(chartActionButton("fullscreen", chartId, "Fullscreen"));
   toolbar.appendChild(chartActionButton("embed", chartId, "Embed", { runToken }));
@@ -3168,7 +3189,7 @@ function ensureChartHint(card, toolbar, chartId) {
   hint.className = "chart-hint";
   hint.dataset.chartHint = chartId;
   hint.setAttribute("data-text", "");
-  hint.textContent = "drag to pan · scroll to zoom · drag axes to scale · shift+drag to zoom-rect";
+  hint.textContent = "drag to pan · scroll to zoom · drag axes to scale · +/− buttons to zoom";
   const header = toolbar.parentElement;
   if (header?.classList?.contains("flex") && header.querySelector("h3")) {
     header.insertAdjacentElement("afterend", hint);
@@ -3180,15 +3201,41 @@ function ensureChartHint(card, toolbar, chartId) {
 
 function bindResetZoom(chart, chartId) {
   const btn = document.querySelector(`[data-reset-zoom][data-chart-id="${chartId}"]`);
-  if (!btn) return;
-  btn._resetZoomChart = chart;
-  if (btn.dataset.resetZoomBound === "true") return;
-  btn.dataset.resetZoomBound = "true";
-  btn.addEventListener("click", () => {
-    btn._resetZoomChart?.resetZoom?.("none");
-    scheduleChartEventDots(btn._resetZoomChart);
-    setDashboardState({ zoom: null, chart: null });
-  });
+  if (btn) {
+    btn._resetZoomChart = chart;
+    if (btn.dataset.resetZoomBound !== "true") {
+      btn.dataset.resetZoomBound = "true";
+      btn.addEventListener("click", () => {
+        btn._resetZoomChart?.resetZoom?.("none");
+        scheduleChartEventDots(btn._resetZoomChart);
+        setDashboardState({ zoom: null, chart: null });
+      });
+    }
+  }
+  const zoomIn = document.querySelector(`[data-zoom-in][data-chart-id="${chartId}"]`);
+  if (zoomIn) {
+    zoomIn._zoomChart = chart;
+    if (zoomIn.dataset.zoomBound !== "true") {
+      zoomIn.dataset.zoomBound = "true";
+      zoomIn.addEventListener("click", () => {
+        zoomIn._zoomChart?.zoom?.(1.25);
+        updateDashboardZoomState(zoomIn._zoomChart);
+        scheduleChartEventDots(zoomIn._zoomChart);
+      });
+    }
+  }
+  const zoomOut = document.querySelector(`[data-zoom-out][data-chart-id="${chartId}"]`);
+  if (zoomOut) {
+    zoomOut._zoomChart = chart;
+    if (zoomOut.dataset.zoomBound !== "true") {
+      zoomOut.dataset.zoomBound = "true";
+      zoomOut.addEventListener("click", () => {
+        zoomOut._zoomChart?.zoom?.(0.8);
+        updateDashboardZoomState(zoomOut._zoomChart);
+        scheduleChartEventDots(zoomOut._zoomChart);
+      });
+    }
+  }
 }
 
 function enterFullscreen(card, chart) {
@@ -3531,6 +3578,8 @@ function applyRunState(data, runToken) {
   }
 }
 
+let lastScrolledUrlSignature = null;
+function resetUrlScrollMemo() { lastScrolledUrlSignature = null; }
 function applyUrlState() {
   const state = getDashboardState();
   if (!lastKnownData) return;
@@ -3541,9 +3590,12 @@ function applyUrlState() {
     applyStepReference(state.step);
   }
 
+  const signature = `${state.chart || ""}|${state.focus || ""}|${state.run || ""}`;
+  const shouldScroll = signature !== lastScrolledUrlSignature;
+
   const chartTarget = state.chart ? targetElementForChart(state.chart) : null;
   if (state.chart && chartTarget) {
-    highlightAndScroll(chartTarget);
+    if (shouldScroll) highlightAndScroll(chartTarget);
     if (state.zoom) applyZoomToTarget(chartTarget, state.zoom);
   } else if (state.chart && !warnedUrlTargets.has(`chart:${state.chart}`)) {
     console.warn(`Dashboard URL state: chart not found: ${state.chart}`);
@@ -3552,11 +3604,13 @@ function applyUrlState() {
 
   const focusTarget = state.focus ? targetElementForFocus(state.focus) : null;
   if (state.focus && focusTarget) {
-    highlightAndScroll(focusTarget);
+    if (shouldScroll) highlightAndScroll(focusTarget);
   } else if (state.focus && !warnedUrlTargets.has(`focus:${state.focus}`)) {
     console.warn(`Dashboard URL state: focus not found: ${state.focus}`);
     warnedUrlTargets.add(`focus:${state.focus}`);
   }
+
+  if (shouldScroll && (chartTarget || focusTarget)) lastScrolledUrlSignature = signature;
 }
 
 async function copyDashboardLink(button) {
@@ -3753,6 +3807,7 @@ function initDashboardUrlState() {
     }
   });
   window.addEventListener("popstate", () => {
+    resetUrlScrollMemo();
     if (lastKnownData) renderDashboard(lastKnownData, { preserveTrainingState: true, skipUrlState: true });
     applyUrlState();
   });
@@ -4410,8 +4465,20 @@ function renderTrainingLpipsChart(canvas, run) {
   if (!series.length) return null;
   const ref = referenceLine(rows, 0.1666);
   const options = chartOptions({ yTitle: "training-crop LPIPS" });
-  options.scales.y.min = 0;
-  options.scales.y.max = 1;
+  // Auto-fit y-axis to actual data range with 10% headroom on each side.
+  // Hard-coded [0, 1] squashed real LPIPS values (~0.07-0.20 typical) to the
+  // bottom 7-20% of the chart, which looked like an empty chart.
+  const ys = series.map((p) => p.y).filter((y) => Number.isFinite(y));
+  if (ys.length) {
+    const lo = Math.min(...ys, ...(ref.length ? ref.map((p) => p.y) : []));
+    const hi = Math.max(...ys, ...(ref.length ? ref.map((p) => p.y) : []));
+    const pad = Math.max(0.005, (hi - lo) * 0.15);
+    options.scales.y.min = Math.max(0, lo - pad);
+    options.scales.y.max = Math.min(1, hi + pad);
+  } else {
+    options.scales.y.min = 0;
+    options.scales.y.max = 1;
+  }
   const datasets = [
     { label: `${run.history?.title || run.label || "run"} LPIPS`, data: series, borderColor: colors.lpips, backgroundColor: colors.lpips, pointRadius: 0, pointHitRadius: 6, pointHoverRadius: 4, borderWidth: 2, tension: 0 },
     { label: "v5 held-out LPIPS ref 0.1666", data: ref, borderColor: colors.gold, backgroundColor: colors.gold, pointRadius: 0, pointHitRadius: 6, borderWidth: 1.5, borderDash: [5, 4], tension: 0 },
@@ -5817,7 +5884,10 @@ function scheduleDashboardRender(data) {
   const run = () => {
     pendingIdleRender = null;
     pendingIdleRenderFallback = null;
-    renderDashboard(data);
+    // skipUrlState on poll: applyUrlState re-scrolls/highlights the URL-targeted
+    // chart on every render which jerks the page on a 30s cadence. Apply URL
+    // state ONLY on initial load + popstate, not on poll-triggered re-renders.
+    renderDashboard(data, { skipUrlState: true, preserveTrainingState: true });
   };
   if ("requestIdleCallback" in window) {
     pendingIdleRender = window.requestIdleCallback(run, { timeout: 1500 });
