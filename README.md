@@ -195,13 +195,15 @@ The custom-kernel work runs in parallel to S6 and S7. NVIDIA gets CUDA + CUTLASS
 
 ---
 
-## OSS Capture Tool
+## Capture tool
 
 **Status: designed, not yet shipped.** The bandwidth modes, privacy guarantees, and storage layout below describe the intended design. The client side is in implementation; nothing below has been independently validated.
 
 OSS improves when it trains on real games. The Capture Tool is the planned data-collection path.
 
 You drop a per-game DLL in. You play. Frames upload, then delete from disk. You set the bandwidth budget at install time. You can pause uploads or uninstall whenever.
+
+User docs: [install runbook](docs/capture/INSTALL.md) and [supported games policy](docs/capture/SUPPORTED_GAMES.md).
 
 What does not get captured: audio, keyboard, mouse, controller input, any other window, your desktop, webcam, microphone, chat, save data, or network traffic. Only the supported game's rendered output and its engine buffers.
 
@@ -319,6 +321,8 @@ OSS Capture Tool:
 
 - [Capture tool design](docs/superpowers/specs/2026-05-04-oss-capture-tool-design.md)
 - [D3D12 hook design](docs/superpowers/d3d12-hook-design.md)
+- [Install runbook](docs/capture/INSTALL.md)
+- [Supported games policy](docs/capture/SUPPORTED_GAMES.md)
 
 Top-level project paper drafts and citation:
 
