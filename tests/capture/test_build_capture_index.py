@@ -12,7 +12,9 @@ import os
 import pytest
 
 
-def _seed(r2_client, *, n_frames: int = 5) -> list:
+def _seed(
+    r2_client, *, n_frames: int = 5, capture_mode: str | None = None
+) -> list:
     """Drop ``n_frames`` synthetic .exr/.json pairs into the bucket.
 
     Returns the list of expected metadata dicts (one per frame).
@@ -36,7 +38,10 @@ def _seed(r2_client, *, n_frames: int = 5) -> list:
             "uploader_version": "1.0.0",
             "content_sha256": f"deadbeef{i:056d}",
             "frame_bytes": 100 + i,
+            "frame_idx": i,
         }
+        if capture_mode is not None:
+            meta["capture_mode"] = capture_mode
         body = f"FRAME-BODY-{i}".encode() * 4
         from server.oss_capture_ingest.r2 import frame_key
 
@@ -46,6 +51,7 @@ def _seed(r2_client, *, n_frames: int = 5) -> list:
             meta["session_uuid"],
             meta["frame_uuid"],
             suffix=".exr",
+            capture_mode=capture_mode,
         )
         json_key = exr_key[:-4] + ".json"
         r2_client.put_bytes(exr_key, body, content_type="image/x-exr")
@@ -83,8 +89,22 @@ def test_collect_rows_skips_non_json(r2_client):
     assert len(rows) == 2
 
 
+def test_collect_rows_walks_game_month_prefix_for_modern_layout(r2_client):
+    _seed(r2_client, n_frames=4, capture_mode="lite")
+    from server.scripts.build_capture_index import REQUIRED_INDEX_COLUMNS, collect_rows
+
+    rows = collect_rows(r2_client, game_id="cyberpunk-2077", month="2024-05")
+    assert len(rows) == 2
+    assert {row["game_id"] for row in rows} == {"cyberpunk-2077"}
+    assert {row["capture_mode"] for row in rows} == {"lite"}
+    assert [row["frame_idx"] for row in rows] == [0, 2]
+    assert [row["bytes"] for row in rows] == [100, 102]
+    for col in REQUIRED_INDEX_COLUMNS:
+        assert col in rows[0]
+
+
 def test_write_parquet_roundtrip(tmp_path, r2_client):
-    pa = pytest.importorskip("pyarrow")
+    pytest.importorskip("pyarrow")
     pq = pytest.importorskip("pyarrow.parquet")
     metas = _seed(r2_client, n_frames=3)
 
@@ -120,4 +140,17 @@ def test_upload_index_to_bucket(r2_client):
         r2_client, parquet_bytes=b"FAKE-PARQUET", date_str="2026-05-04"
     )
     assert key == "_index_2026-05-04.parquet"
+    assert r2_client.get_bytes(key) == b"FAKE-PARQUET"
+
+
+def test_upload_index_to_game_month_prefix(r2_client):
+    from server.scripts.build_capture_index import upload_index_to_bucket
+
+    key = upload_index_to_bucket(
+        r2_client,
+        parquet_bytes=b"FAKE-PARQUET",
+        game_id="cyberpunk-2077",
+        month="2026-05",
+    )
+    assert key == "cyberpunk-2077/2026-05/_index.parquet"
     assert r2_client.get_bytes(key) == b"FAKE-PARQUET"

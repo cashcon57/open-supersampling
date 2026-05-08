@@ -1,0 +1,68 @@
+name: Capture index cron
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+    inputs:
+      game:
+        description: "Single game id to index. Defaults to CAPTURE_INDEX_GAMES."
+        required: false
+        type: string
+      month:
+        description: "UTC month to index, YYYY-MM. Defaults to current UTC month."
+        required: false
+        type: string
+
+jobs:
+  capture-index:
+    name: daily R2 capture index
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+      R2_BUCKET: ${{ vars.R2_BUCKET || 'ors-captures' }}
+      CAPTURE_INDEX_GAMES: ${{ vars.CAPTURE_INDEX_GAMES || 'cyberpunk-2077' }}
+      REQUESTED_GAME: ${{ inputs.game || '' }}
+      REQUESTED_MONTH: ${{ inputs.month || '' }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install capture-index dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install boto3 pyarrow
+
+      - name: Build and upload capture indexes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          month="${REQUESTED_MONTH:-$(date -u +%Y-%m)}"
+          games="${CAPTURE_INDEX_GAMES}"
+          if [[ -n "${REQUESTED_GAME}" ]]; then
+            games="${REQUESTED_GAME}"
+          fi
+
+          IFS=',' read -ra game_list <<< "${games}"
+          for raw_game in "${game_list[@]}"; do
+            game="$(echo "${raw_game}" | xargs)"
+            if [[ -z "${game}" ]]; then
+              continue
+            fi
+            python -m server.scripts.build_capture_index \
+              --month "${month}" \
+              --game "${game}"
+          done
