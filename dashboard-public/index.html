@@ -1664,6 +1664,17 @@ const INFO_COPY = {
   cost: "Local cost uses measured or estimated 3080 Ti wall-clock, 400 W board power, and OSS_KWH_USD (default $0.15/kWh). Cloud projection extrapolates the current loss trend to DLSS 4-class quality.",
   "bad-data": "Off by default. Hides runs that aren't apples-to-apples with the current models — different test sets, failure modes. Toggle on for transparency.",
   "v4-two-points": "v4 was the first single-frame model. It looks fine on its training data but fails badly when you change the content (~22 dB cliff). v5 and v6 were designed to NOT do this.",
+  "stopped-early-v61-pico-001": "Stopped early at ~step 12k on 2026-05-08. λ=2px stippling artifact (per-pixel checkerboard) was getting WORSE during training, not recovering. Root cause: spawner regresses Δxy with integer-pixel-aligned bias, and the in-flight `spawn_subpixel_jitter` fix in commit 221a325 was (a) defaulted off and (b) wrong-period (per-batch tile-grid offset, not per-Gaussian sub-pixel offset). Restart from scratch as v6.2-pico-002 with the v4 architecture: disocclusion-pixel-center spawn + DGP dictionary covariance + per-Gaussian (not per-batch) jitter. Memo: docs/superpowers/experiments/2026-05-08-v6.1-pico-001-stopped-stippling-not-fixable-mid-flight.md.",
+};
+
+// Static metadata for runs stopped early. Keyed by exact run.name. Each entry
+// shows a yellow "stopped early" badge in the lineage row + an info-tooltip
+// pointing to the explanation in INFO_COPY.
+const STOPPED_EARLY_REASONS = {
+  "srcnn-v6.1-pico-001": {
+    info_key: "stopped-early-v61-pico-001",
+    short: "stippling not fixable mid-flight",
+  },
 };
 
 const GLOSSARY = {
@@ -5691,6 +5702,11 @@ function renderRun(run, index, openByRun = new Map()) {
             <span class="text-base font-semibold text-zinc-50" data-text>${escapeHtml(run.label || run.name)}</span>
             ${trainingIndicatorHtml(run)}
             <span class="rounded border ${run.active ? "border-emerald-700 text-emerald-300" : "border-zinc-700 text-zinc-300"} px-2 py-0.5 text-xs">${escapeHtml(history.status || "")}</span>
+            ${(() => {
+              const stopped = STOPPED_EARLY_REASONS[run.name];
+              if (!stopped) return "";
+              return `<span class="rounded border border-amber-700 bg-amber-950/30 text-amber-200 px-2 py-0.5 text-xs flex items-center gap-1">stopped early — ${escapeHtml(stopped.short)}${infoButtonHtml(stopped.info_key)}</span>`;
+            })()}
           </span>
         <span class="mt-1 block text-sm text-zinc-400" data-subtext>${escapeHtml(history.summary || run.name)}</span>
       </span>

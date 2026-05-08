@@ -11,15 +11,22 @@
 //
 // Hardened build per the 2026-05-07 security review:
 //   - Constant-time auth (bitwise XOR over equal-length bytes)
-//   - PUT body-size cap (8 MiB; rejects 413 if larger or 411 if missing CL)
+//   - PUT body-size cap (48 MiB; rejects 413 if larger or 411 if missing CL)
 //   - Key-prefix allow-list (no arbitrary key namespaces can be created)
 //   - DELETE removed entirely (was unused; eliminates wipe-everything risk)
 //
 // Reads (GET / HEAD) are unauthenticated and serve from R2 directly. HTML and
 // JSON are no-cache-must-revalidate so the dashboard always sees fresh data;
 // other assets get a 30s edge cache.
+//
+// Cap history: 8 MiB (initial) → 48 MiB (2026-05-08). Viz strips at 4-bin
+// composite (LR | bicubic | model | GT | error | features) at 4K-target
+// resolution land in the 12-22 MB range; 8 MiB was rejecting all of them
+// with HTTP 413. 48 MiB covers our largest current viz with 2x headroom and
+// stays well under Cloudflare's 100 MiB platform limit. Quality preserved:
+// no resize, no recompression — full PNG artifacts upload as-is.
 
-const MAX_PUT_BYTES = 8 * 1024 * 1024;  // 8 MiB
+const MAX_PUT_BYTES = 48 * 1024 * 1024;  // 48 MiB
 
 const KEY_PREFIX_ALLOWLIST = [
   'data.json',
