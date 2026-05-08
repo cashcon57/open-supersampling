@@ -1,16 +1,35 @@
 OpenSuperSampling (OSS)
+=======================
+
+Originally developed by Cash Conway (cashcon57@gmail.com).
+Project home: https://github.com/cashcon57/open-supersampling
+First public release tag: v0.5.0-pixel-temporal (2026-05-07).
+
 Copyright 2026 Cash Conway and OSS contributors.
 
-This product is licensed under the Apache License, Version 2.0 (the "License").
-See the LICENSE file at the repository root, or
-http://www.apache.org/licenses/LICENSE-2.0 for the full license text.
+OSS is an open-source super-resolution and frame-extrapolation system for
+games, built on a persistent 2D Gaussian canvas warped frame-to-frame by
+exact engine motion vectors with covariance resampling at the rasterizer.
+The architecture is documented in RESEARCH.md and the design memo at
+docs/superpowers/experiments/2026-05-05-v6-architecture-canonical.md.
 
-This product includes the following third-party components:
+This product is licensed under the Apache License, Version 2.0 ("the License").
+A copy of the License is provided in the LICENSE file at the repository root,
+or available at http://www.apache.org/licenses/LICENSE-2.0.
+
+Per Section 4(d) of the License, any redistribution or derivative work of OSS
+must reproduce this NOTICE file in its attribution. The Apache License does
+not require contribution of changes back upstream, but the maintainer welcomes
+issues, pull requests, and integration contact at the project home above.
+
+------------------------------------------------------------------------------
+Third-party components included in this product
+------------------------------------------------------------------------------
 
 - Image-GS (oss/gaussian/renderer/vendor/image_gs/)
   Copyright (c) 2025 NYU Immersive Computing Lab.
-  Licensed under the MIT License. See the vendored LICENSE file in that
-  directory for full terms.
+  Licensed under the MIT License. See the LICENSE file vendored in that
+  directory for the full license text.
 
 - Microsoft Detours (oss/gaussian/interception/third_party/Detours/)
   Copyright (c) Microsoft Corporation.
@@ -21,10 +40,27 @@ This product includes the following third-party components:
   Licensed under the BSD-3-Clause License. See the LICENSE file in that
   directory.
 
+------------------------------------------------------------------------------
+Independent reimplementations and prior-art references
+------------------------------------------------------------------------------
+
 The HAT spatial backbone (oss/sr/v6/hat.py) is an independent reimplementation
 of Chen et al., "Activating More Pixels in Image Super-Resolution Transformer"
 (CVPR 2023). The original reference implementation is Apache-2.0 licensed.
+No code is copied verbatim from the upstream HAT repository.
 
 Other prior-art references (GSASR, AAA-Gaussians, AA-2DGS, vk_gaussian_splatting,
-GaussianVideo, etc.) are cited in BIBLIOGRAPHY.md and integrated as design
-inspiration only — no code from those projects is included verbatim.
+GaussianVideo, 4DGS-1K, GS-STVSR, etc.) are cited in BIBLIOGRAPHY.md and
+integrated as design inspiration only. No code from those projects is included
+in OSS verbatim; the v6 architecture is an independent integration of the
+ideas, with provenance recorded per-component in the bibliography.
+
+------------------------------------------------------------------------------
+Trademark
+------------------------------------------------------------------------------
+
+"OpenSuperSampling" and "OSS" (in the context of super-resolution / frame
+extrapolation software) are used by the original project to identify this
+work. The Apache License does not grant trademark rights. Derivative works
+must use a different name; attribution to the original work must remain in
+this NOTICE file.
