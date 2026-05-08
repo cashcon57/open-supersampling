@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-05-08T05:03:13Z",
+  "generated_at": "2026-05-08T09:16:16Z",
   "models": [
     {
       "active": true,
@@ -77,6 +77,29 @@
   "runs": [
     {
       "active": true,
+      "cost": {
+        "gpu_hours": 0.55375,
+        "kwh": 0.2215,
+        "projections": {
+          "4090": {
+            "gpu_hours_to_dlss4_quality": 73.00846666666666,
+            "usd_at_runpod_rate": 50.37584199999999
+          },
+          "A100": {
+            "gpu_hours_to_dlss4_quality": 44.80065,
+            "usd_at_runpod_rate": 84.6732285
+          },
+          "B200": {
+            "gpu_hours_to_dlss4_quality": 15.763191666666666,
+            "usd_at_runpod_rate": 94.26388616666667
+          },
+          "H100": {
+            "gpu_hours_to_dlss4_quality": 24.88925,
+            "usd_at_runpod_rate": 74.4188575
+          }
+        },
+        "usd": 0.033225
+      },
       "cross_version_points": [],
       "events": [
         {
@@ -18452,6 +18475,29 @@
     },
     {
       "active": false,
+      "cost": {
+        "gpu_hours": 8.767916666666666,
+        "kwh": 3.5071666666666665,
+        "projections": {
+          "4090": {
+            "gpu_hours_to_dlss4_quality": 0.0,
+            "usd_at_runpod_rate": 0.0
+          },
+          "A100": {
+            "gpu_hours_to_dlss4_quality": 0.0,
+            "usd_at_runpod_rate": 0.0
+          },
+          "B200": {
+            "gpu_hours_to_dlss4_quality": 0.0,
+            "usd_at_runpod_rate": 0.0
+          },
+          "H100": {
+            "gpu_hours_to_dlss4_quality": 0.0,
+            "usd_at_runpod_rate": 0.0
+          }
+        },
+        "usd": 0.526075
+      },
       "cross_version_points": [],
       "events": [],
       "gpu_status": null,
@@ -34521,6 +34567,29 @@
     },
     {
       "active": false,
+      "cost": {
+        "gpu_hours": 0.0,
+        "kwh": 0.0,
+        "projections": {
+          "4090": {
+            "gpu_hours_to_dlss4_quality": 73.33333333333333,
+            "usd_at_runpod_rate": 50.599999999999994
+          },
+          "A100": {
+            "gpu_hours_to_dlss4_quality": 45.0,
+            "usd_at_runpod_rate": 85.05
+          },
+          "B200": {
+            "gpu_hours_to_dlss4_quality": 15.833333333333334,
+            "usd_at_runpod_rate": 94.68333333333334
+          },
+          "H100": {
+            "gpu_hours_to_dlss4_quality": 25.0,
+            "usd_at_runpod_rate": 74.75
+          }
+        },
+        "usd": 0.0
+      },
       "cross_version_points": [],
       "events": [],
       "gpu_status": null,
@@ -34568,6 +34637,29 @@
     },
     {
       "active": false,
+      "cost": {
+        "gpu_hours": 33.333333333333336,
+        "kwh": 13.333333333333336,
+        "projections": {
+          "4090": {
+            "gpu_hours_to_dlss4_quality": 0.0,
+            "usd_at_runpod_rate": 0.0
+          },
+          "A100": {
+            "gpu_hours_to_dlss4_quality": 0.0,
+            "usd_at_runpod_rate": 0.0
+          },
+          "B200": {
+            "gpu_hours_to_dlss4_quality": 0.0,
+            "usd_at_runpod_rate": 0.0
+          },
+          "H100": {
+            "gpu_hours_to_dlss4_quality": 0.0,
+            "usd_at_runpod_rate": 0.0
+          }
+        },
+        "usd": 2.0000000000000004
+      },
       "cross_version_points": [],
       "events": [],
       "gpu_status": null,
@@ -47681,6 +47773,29 @@
     },
     {
       "active": false,
+      "cost": {
+        "gpu_hours": 0.0,
+        "kwh": 0.0,
+        "projections": {
+          "4090": {
+            "gpu_hours_to_dlss4_quality": 19.555555555555557,
+            "usd_at_runpod_rate": 13.493333333333334
+          },
+          "A100": {
+            "gpu_hours_to_dlss4_quality": 12.0,
+            "usd_at_runpod_rate": 22.68
+          },
+          "B200": {
+            "gpu_hours_to_dlss4_quality": 4.222222222222222,
+            "usd_at_runpod_rate": 25.248888888888892
+          },
+          "H100": {
+            "gpu_hours_to_dlss4_quality": 6.666666666666667,
+            "usd_at_runpod_rate": 19.933333333333337
+          }
+        },
+        "usd": 0.0
+      },
       "cross_version_points": [],
       "events": [],
       "gpu_status": null,
@@ -47727,6 +47842,29 @@
     },
     {
       "active": false,
+      "cost": {
+        "gpu_hours": 174.95833333333334,
+        "kwh": 69.98333333333333,
+        "projections": {
+          "4090": {
+            "gpu_hours_to_dlss4_quality": 0.0,
+            "usd_at_runpod_rate": 0.0
+          },
+          "A100": {
+            "gpu_hours_to_dlss4_quality": 0.0,
+            "usd_at_runpod_rate": 0.0
+          },
+          "B200": {
+            "gpu_hours_to_dlss4_quality": 0.0,
+            "usd_at_runpod_rate": 0.0
+          },
+          "H100": {
+            "gpu_hours_to_dlss4_quality": 0.0,
+            "usd_at_runpod_rate": 0.0
+          }
+        },
+        "usd": 10.4975
+      },
       "cross_version_points": [
         {
           "color_class": "v4",

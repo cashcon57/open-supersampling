@@ -280,6 +280,34 @@ def validate_event(event: object, path: str, errors: list[str]) -> None:
             add_error(errors, f"{path}.{key}", "str | null", value)
 
 
+def validate_cost_projection(projection: object, path: str, errors: list[str]) -> None:
+    if not isinstance(projection, dict):
+        add_error(errors, path, "object", projection)
+        return
+    require_finite_float(projection, "gpu_hours_to_dlss4_quality", path, errors, ge=0.0)
+    require_finite_float(projection, "usd_at_runpod_rate", path, errors, ge=0.0)
+
+
+def validate_cost(cost: object, path: str, errors: list[str]) -> None:
+    if not isinstance(cost, dict):
+        add_error(errors, path, "object", cost)
+        return
+    require_finite_float(cost, "kwh", path, errors, ge=0.0)
+    require_finite_float(cost, "usd", path, errors, ge=0.0)
+    require_finite_float(cost, "gpu_hours", path, errors, ge=0.0)
+    if require_key(cost, "projections", path, errors):
+        projections = cost["projections"]
+        if not isinstance(projections, dict):
+            add_error(errors, f"{path}.projections", "object", projections)
+        else:
+            expected = {"B200", "H100", "A100", "4090"}
+            seen = set(projections)
+            if seen != expected:
+                errors.append(f"{path}.projections: expected keys {sorted(expected)}, got {sorted(seen)}")
+            for gpu_class, projection in projections.items():
+                validate_cost_projection(projection, f"{path}.projections.{gpu_class}", errors)
+
+
 def validate_run(run: object, index: int, errors: list[str], warnings: list[str]) -> None:
     path = f"runs[{index}]"
     if not isinstance(run, dict):
@@ -305,6 +333,8 @@ def validate_run(run: object, index: int, errors: list[str], warnings: list[str]
                 validate_event(event, f"{path}.events[{event_index}]", errors)
     require_object_list(run, "cross_version_points", path, errors)
     require_optional_object(run, "gpu_status", path, errors)
+    if require_key(run, "cost", path, errors):
+        validate_cost(run["cost"], f"{path}.cost", errors)
 
     if run.get("active") is True and isinstance(run.get("loss_curve"), list) and not run["loss_curve"]:
         warnings.append(f"WARNING {path}.loss_curve: active run has no rows")
@@ -450,6 +480,29 @@ def self_test() -> int:
                 ],
                 "cross_version_points": [],
                 "gpu_status": None,
+                "cost": {
+                    "kwh": 0.1,
+                    "usd": 0.015,
+                    "gpu_hours": 0.25,
+                    "projections": {
+                        "B200": {
+                            "gpu_hours_to_dlss4_quality": 0.01,
+                            "usd_at_runpod_rate": 0.0598,
+                        },
+                        "H100": {
+                            "gpu_hours_to_dlss4_quality": 0.02,
+                            "usd_at_runpod_rate": 0.0598,
+                        },
+                        "A100": {
+                            "gpu_hours_to_dlss4_quality": 0.03,
+                            "usd_at_runpod_rate": 0.0567,
+                        },
+                        "4090": {
+                            "gpu_hours_to_dlss4_quality": 0.04,
+                            "usd_at_runpod_rate": 0.0276,
+                        },
+                    },
+                },
             }
         ],
         "models": [],

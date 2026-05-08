@@ -13,6 +13,7 @@ import datetime as _dt
 import html
 import json
 import math
+import os
 import re
 import sys
 from pathlib import Path
@@ -168,6 +169,16 @@ REFERENCE_OUTPUT_IDS = {
     "xess1": "xess-1.x",
     "dlss4": "dlss-4",
 }
+DLSS4_PSNR_TARGET = 32.5
+DLSS4_CHARBONNIER_TARGET = 10 ** (-DLSS4_PSNR_TARGET / 20.0)
+LOCAL_3080TI_SECONDS_PER_STEP = 1.5
+GPU_POWER_KW = 0.4
+GPU_CLASS_PROJECTION = {
+    "B200": {"seconds_per_step": 0.19, "runpod_usd_per_hour": 5.98},
+    "H100": {"seconds_per_step": 0.30, "runpod_usd_per_hour": 2.99},
+    "A100": {"seconds_per_step": 0.54, "runpod_usd_per_hour": 1.89},
+    "4090": {"seconds_per_step": 0.88, "runpod_usd_per_hour": 0.69},
+}
 
 
 def utc_now_iso() -> str:
@@ -257,6 +268,11 @@ def finite_float(value: Any) -> float | None:
     if not math.isfinite(number):
         return None
     return number
+
+
+def kwh_usd_rate() -> float:
+    rate = finite_float(os.environ.get("OSS_KWH_USD"))
+    return rate if rate is not None and rate >= 0.0 else 0.15
 
 
 def numeric_list(row: dict[str, Any], *keys: str) -> list[float] | None:
@@ -381,6 +397,114 @@ def row_with_derived_metrics(row: dict[str, Any]) -> dict[str, Any]:
                 out["psnr_proxy"] = -10.0 * math.log10(max(lc * lc, 1e-12))
                 break
     return out
+
+
+def row_timestamp_seconds(row: dict[str, Any]) -> float | None:
+    for key in ("timestamp", "time", "t", "ts", "created_at", "captured_at"):
+        value = row.get(key)
+        if isinstance(value, str):
+            try:
+                parsed = _dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            return parsed.timestamp()
+        number = finite_float(value)
+        if number is not None and number > 1_000_000_000:
+            return number / 1000.0 if number > 10_000_000_000 else number
+    return None
+
+
+def training_wallclock_hours(metrics: list[dict[str, Any]], latest_step: int) -> float:
+    for key in ("elapsed_seconds", "wallclock_seconds", "train_seconds", "runtime_seconds"):
+        values = [finite_float(row.get(key)) for row in metrics]
+        finite_values = [value for value in values if value is not None and value >= 0.0]
+        if finite_values:
+            return max(finite_values) / 3600.0
+
+    stamped = [(step_value(row), row_timestamp_seconds(row)) for row in metrics]
+    stamped = [(step, ts) for step, ts in stamped if step >= 0 and ts is not None]
+    stamped.sort(key=lambda item: (item[1], item[0]))
+    if len(stamped) >= 2:
+        wallclock = 0.0
+        previous_step, previous_ts = stamped[0]
+        for current_step, current_ts in stamped[1:]:
+            delta = current_ts - previous_ts
+            if current_step >= previous_step and 0.0 <= delta <= 900.0:
+                wallclock += delta
+            previous_step, previous_ts = current_step, current_ts
+        if wallclock > 0.0:
+            return wallclock / 3600.0
+
+    return max(0.0, latest_step * LOCAL_3080TI_SECONDS_PER_STEP / 3600.0)
+
+
+def linear_slope(rows: list[tuple[float, float]]) -> float | None:
+    if len(rows) < 2:
+        return None
+    x_mean = sum(x for x, _y in rows) / len(rows)
+    y_mean = sum(y for _x, y in rows) / len(rows)
+    denom = sum((x - x_mean) ** 2 for x, _y in rows)
+    if denom <= 0.0:
+        return None
+    return sum((x - x_mean) * (y - y_mean) for x, y in rows) / denom
+
+
+def steps_to_dlss4_quality(metrics: list[dict[str, Any]], latest_step: int, max_target_steps: int) -> float:
+    recent = metrics[-200:] if len(metrics) > 200 else metrics
+    charbonnier_rows: list[tuple[float, float]] = []
+    for row in recent:
+        loss = finite_float(row.get("loss_charbonnier") or row.get("t_l1") or row.get("l1") or row.get("tp1_l1"))
+        step = finite_float(row.get("step"))
+        if loss is not None and step is not None and loss > 0.0:
+            charbonnier_rows.append((step, loss))
+
+    if charbonnier_rows:
+        current_loss = charbonnier_rows[-1][1]
+        if current_loss <= DLSS4_CHARBONNIER_TARGET:
+            return 0.0
+        slope = linear_slope(charbonnier_rows)
+        if slope is not None and slope < 0.0:
+            projected = (DLSS4_CHARBONNIER_TARGET - current_loss) / slope
+            if math.isfinite(projected) and projected >= 0.0:
+                return projected
+
+    psnr_rows: list[tuple[float, float]] = []
+    for row in recent:
+        psnr = finite_float(row.get("psnr_proxy") or row.get("psnr_db"))
+        step = finite_float(row.get("step"))
+        if psnr is not None and step is not None:
+            psnr_rows.append((step, psnr))
+    if psnr_rows:
+        current_psnr = psnr_rows[-1][1]
+        if current_psnr >= DLSS4_PSNR_TARGET:
+            return 0.0
+        slope = linear_slope(psnr_rows)
+        if slope is not None and slope > 0.0:
+            projected = (DLSS4_PSNR_TARGET - current_psnr) / slope
+            if math.isfinite(projected) and projected >= 0.0:
+                return projected
+
+    return max(0.0, max_target_steps - latest_step)
+
+
+def build_cost(metrics: list[dict[str, Any]], latest_step: int, max_target_steps: int) -> dict[str, Any]:
+    gpu_hours = training_wallclock_hours(metrics, latest_step)
+    kwh = gpu_hours * GPU_POWER_KW
+    usd = kwh * kwh_usd_rate()
+    remaining_steps = steps_to_dlss4_quality(metrics, latest_step, max_target_steps)
+    projections: dict[str, dict[str, float]] = {}
+    for gpu_class, spec in GPU_CLASS_PROJECTION.items():
+        gpu_hours_to_target = remaining_steps * spec["seconds_per_step"] / 3600.0
+        projections[gpu_class] = {
+            "gpu_hours_to_dlss4_quality": gpu_hours_to_target,
+            "usd_at_runpod_rate": gpu_hours_to_target * spec["runpod_usd_per_hour"],
+        }
+    return {
+        "gpu_hours": gpu_hours,
+        "kwh": kwh,
+        "usd": usd,
+        "projections": projections,
+    }
 
 
 def step_value(row: dict[str, Any]) -> int:
@@ -535,9 +659,16 @@ def build_run(name: str, previous: dict[str, Any] | None) -> dict[str, Any] | No
         cached["events"] = events if events else cached.get("events", [])
         cached["max_target_steps"] = max_steps_for_run(name, [], cached)
         cached["cross_version_points"] = cross_version_points_for_run(name)
+        cached_metrics = cached.get("loss_curve") if isinstance(cached.get("loss_curve"), list) else []
+        cached["cost"] = build_cost(
+            [row for row in cached_metrics if isinstance(row, dict)],
+            int(cached.get("latest_step") or 0),
+            int(cached["max_target_steps"] or 0),
+        )
         return cached
 
     if not metrics and not scores and not viz_pngs:
+        max_target_steps = max_steps_for_run(name, [], previous)
         return {
             "name": name,
             "label": label_for_run(name, config),
@@ -550,15 +681,17 @@ def build_run(name: str, previous: dict[str, Any] | None) -> dict[str, Any] | No
             "viz_pngs": [],
             "viz_columns": viz_columns_for_run(name),
             "events": events,
-            "max_target_steps": max_steps_for_run(name, [], previous),
+            "max_target_steps": max_target_steps,
             "gpu_status": read_gpu_status(run_dir),
             "cross_version_points": cross_version_points_for_run(name),
+            "cost": build_cost([], 0, max_target_steps),
         }
 
     metrics = [row_with_derived_metrics(row) for row in sorted(metrics, key=step_value)]
     latest = slim_row(metrics[-1]) if metrics else {}
     latest_step = step_value(metrics[-1]) if metrics else 0
     viz_columns = viz_columns_for_run(name)
+    max_target_steps = max_steps_for_run(name, metrics, previous)
 
     return {
         "name": name,
@@ -572,9 +705,10 @@ def build_run(name: str, previous: dict[str, Any] | None) -> dict[str, Any] | No
         "viz_pngs": viz_pngs,
         "viz_columns": viz_columns,
         "events": events,
-        "max_target_steps": max_steps_for_run(name, metrics, previous),
+        "max_target_steps": max_target_steps,
         "gpu_status": read_gpu_status(run_dir),
         "cross_version_points": cross_version_points_for_run(name),
+        "cost": build_cost(metrics, latest_step, max_target_steps),
     }
 
 

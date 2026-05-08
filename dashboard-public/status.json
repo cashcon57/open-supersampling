@@ -1,0 +1,41 @@
+{
+  "schema_version": "2026-05-07",
+  "checked_at": "2026-05-08T09:18:32Z",
+  "services": [
+    {
+      "id": "trainer",
+      "name": "Trainer",
+      "status": "healthy",
+      "detail": "step 1329, first sample",
+      "tooltip": "Background process at /Users/cashconway/OpenSuperSampling trains the v6.1 SRCNN model on the 3080 Ti and emits metrics.json every step."
+    },
+    {
+      "id": "watcher",
+      "name": "Watcher",
+      "status": "degraded",
+      "detail": "published 2m ago",
+      "tooltip": "Loop in scripts/watch_and_publish.sh that rebuilds data.json from runs/ and pushes to R2 every ~30s."
+    },
+    {
+      "id": "worker",
+      "name": "CF Worker",
+      "status": "healthy",
+      "detail": "HTTP 200 in 103ms",
+      "tooltip": "Cloudflare Worker at upload.opensupersampling.com that auths uploads from the trainer and writes them into the R2 bucket."
+    },
+    {
+      "id": "r2",
+      "name": "R2 origin",
+      "status": "degraded",
+      "detail": "HTTP 200, missing Content-Length",
+      "tooltip": "Cloudflare R2 bucket served at opensupersampling.com - the CDN origin every visitor hits."
+    },
+    {
+      "id": "dns",
+      "name": "DNS",
+      "status": "healthy",
+      "detail": "resolved 172.67.192.141 in 3ms",
+      "tooltip": "Public DNS resolution for opensupersampling.com via Cloudflare nameservers."
+    }
+  ]
+}
