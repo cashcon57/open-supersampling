@@ -53,7 +53,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from oss.sr.v6.concat_fusion import ConcatFusion
 from oss.sr.v6.cross_attention import PixelGaussianFusion
+from oss.sr.v6.disocclusion_spawner import DisocclusionSpawner
 from oss.sr.v6.gaussian_spawner import GaussianSpawner, GaussianSpawnState
 from oss.sr.v6.hat import HAT, hat_l, hat_small, hat_tiny
 from oss.sr.v6.keyframe_active_mask import KeyframeActiveMaskCache
@@ -119,6 +121,20 @@ class V6Config:
     keyframe_interval: int = 10
     prune_every: int = 200
     prune_fraction: float = 0.7
+    # v6.2 architectural switches (T6 wiring). Defaults preserve the v6.1
+    # legacy path so existing checkpoints + tests stay green; pico-002 opts
+    # in to "concat" + "disocclusion" + R=16 per the arch v4 spec and the
+    # 2026-05-08 SVD rank gate (issue #11).
+    fusion_mode: str = "cross_attention"  # {"cross_attention", "concat"}
+    spawner_mode: str = "legacy"          # {"legacy", "disocclusion"}
+    latent_rank: int = 16                 # gate-passing default; <token_dim
+    # Disocclusion spawner controls (only used when spawner_mode="disocclusion")
+    disocclusion_births_per_frame: int = 256
+    disocclusion_births_per_tile: int = 4
+    disocclusion_depth_threshold: float = 0.05
+    disocclusion_residual_threshold: float = 0.02
+    # ConcatFusion controls (only used when fusion_mode="concat")
+    concat_fusion_hidden: int = 64
 
 
 class V6Model(nn.Module):
@@ -140,6 +156,21 @@ class V6Model(nn.Module):
                 "('softplus' / 'sigmoid' aliases are deprecated); got "
                 f"{self.cfg.color_activation!r}"
             )
+        if self.cfg.fusion_mode not in ("cross_attention", "concat"):
+            raise ValueError(
+                "fusion_mode must be 'cross_attention' or 'concat'; "
+                f"got {self.cfg.fusion_mode!r}"
+            )
+        if self.cfg.spawner_mode not in ("legacy", "disocclusion"):
+            raise ValueError(
+                "spawner_mode must be 'legacy' or 'disocclusion'; "
+                f"got {self.cfg.spawner_mode!r}"
+            )
+        if self.cfg.latent_rank <= 0 or self.cfg.latent_rank > self.cfg.token_dim:
+            raise ValueError(
+                f"latent_rank must be in (0, token_dim={self.cfg.token_dim}]; "
+                f"got {self.cfg.latent_rank}"
+            )
         self.scale = int(self.cfg.scale)
 
         self.backbone: HAT = _BACKBONE_REGISTRY[self.cfg.backbone](
@@ -152,35 +183,68 @@ class V6Model(nn.Module):
         # canvas representation doesn't have to match feat_dim exactly.
         self.canvas_to_token = nn.Linear(self.cfg.token_dim, self.cfg.token_dim)
 
-        self.fusion = PixelGaussianFusion(
-            feat_dim=self.feat_dim,
-            token_dim=self.cfg.token_dim,
-            num_heads=self.cfg.cross_attention_heads,
-            window_size=self.cfg.window_size,
-        )
+        if self.cfg.fusion_mode == "cross_attention":
+            self.fusion = PixelGaussianFusion(
+                feat_dim=self.feat_dim,
+                token_dim=self.cfg.token_dim,
+                num_heads=self.cfg.cross_attention_heads,
+                window_size=self.cfg.window_size,
+            )
+        else:  # "concat"
+            self.fusion = ConcatFusion(
+                feat_dim=self.feat_dim,
+                latent_R=self.cfg.latent_rank,
+                hidden=self.cfg.concat_fusion_hidden,
+            )
 
         # LR feature refinement before canvas fusion. The old PixelShuffle
         # decoder is replaced below by rasterize + composite.
         self.pixel_head = nn.Conv2d(self.feat_dim, self.feat_dim, 3, padding=1)
         self.activation = nn.GELU()
 
-        self.gaussian_spawner = GaussianSpawner(
-            feat_dim=self.feat_dim,
-            token_dim=self.cfg.token_dim,
-            scale=self.scale,
-            tile_size_lr=self.cfg.tile_size_lr,
-            config=self.cfg,
-        )
+        if self.cfg.spawner_mode == "legacy":
+            self.gaussian_spawner = GaussianSpawner(
+                feat_dim=self.feat_dim,
+                token_dim=self.cfg.token_dim,
+                scale=self.scale,
+                tile_size_lr=self.cfg.tile_size_lr,
+                config=self.cfg,
+            )
+            self.disocclusion_spawner = None
+        else:  # "disocclusion"
+            self.gaussian_spawner = None
+            self.disocclusion_spawner = DisocclusionSpawner(
+                feat_dim=self.feat_dim,
+                max_births_per_frame=self.cfg.disocclusion_births_per_frame,
+                max_births_per_tile=self.cfg.disocclusion_births_per_tile,
+                disocclusion_depth_threshold=self.cfg.disocclusion_depth_threshold,
+                residual_threshold=self.cfg.disocclusion_residual_threshold,
+            )
+            # Project per-Gaussian feature payload (feat_dim) into the
+            # rasterizer's color/feature channel (token_dim). Zero-init so
+            # newly spawned Gaussians start with no canvas contribution and
+            # the model converges to learning the residual.
+            self.disocclusion_color_proj = nn.Linear(
+                self.feat_dim, self.cfg.token_dim
+            )
+            nn.init.zeros_(self.disocclusion_color_proj.weight)
+            nn.init.zeros_(self.disocclusion_color_proj.bias)
         from oss.sr.v6.rasterizer import V6Rasterizer
 
         self.rasterizer = V6Rasterizer(
             token_dim=self.cfg.token_dim,
             tile_size=self.cfg.tile_size_hr,
             overlap=self.cfg.rasterizer_overlap,
+            latent_rank=self.cfg.latent_rank,
         )
         hidden = max(16, self.feat_dim // 2)
+        # canvas_hr produced by the rasterizer has `latent_rank` channels (or
+        # token_dim when latent_rank == token_dim). Use the rasterizer's own
+        # output dim as the source of truth so the composite head's input
+        # channel count tracks latent_rank automatically.
+        canvas_hr_channels = int(self.rasterizer.feature_dim)
         self.composite_head = nn.Sequential(
-            nn.Conv2d(self.feat_dim + self.cfg.token_dim, self.feat_dim, 3, padding=1),
+            nn.Conv2d(self.feat_dim + canvas_hr_channels, self.feat_dim, 3, padding=1),
             nn.GELU(),
             nn.Conv2d(self.feat_dim, hidden, 3, padding=1),
             nn.GELU(),
@@ -194,6 +258,10 @@ class V6Model(nn.Module):
         self._canvas_state: Optional[CanvasState] = None
         self._st_state: Optional[STVScoreState] = None
         self._spawn_offset_xy: Optional[torch.Tensor] = None
+        # Disocclusion spawner needs previous-frame depth at LR to compute
+        # the disocclusion mask. We carry it across calls; first frame uses
+        # depth_t (yields zero disocclusion, which is correct for frame 0).
+        self._depth_lr_prev: Optional[torch.Tensor] = None
         self.keyframe_mask = KeyframeActiveMaskCache(
             keyframe_interval=self.cfg.keyframe_interval,
         )
@@ -221,6 +289,7 @@ class V6Model(nn.Module):
         self._canvas_state = None
         self._st_state = None
         self._spawn_offset_xy = None
+        self._depth_lr_prev = None
         self.keyframe_mask.reset()
         self._step_count.zero_()
 
@@ -283,22 +352,51 @@ class V6Model(nn.Module):
             frame_index=frame_index,
             output_hw=output_hw,
         )
-        tokens = self._tokens_from_canvas(feats, warped_canvas, active_mask)
-        debug_check("tokens", tokens)
 
-        refined = self.fusion(feats, tokens)
+        # ----- Fusion stage: branch on fusion_mode -----
+        if self.cfg.fusion_mode == "cross_attention":
+            tokens = self._tokens_from_canvas(feats, warped_canvas, active_mask)
+            debug_check("tokens", tokens)
+            refined = self.fusion(feats, tokens)
+        else:  # "concat"
+            G_lr, m_lr = self._rasterize_canvas_at_lr(
+                warped_canvas, active_mask, b, h_lr, w_lr, feats.device, feats.dtype
+            )
+            debug_check("concat.G_lr", G_lr)
+            debug_check("concat.m_lr", m_lr)
+            I_base = lr_inputs[:, :3].to(dtype=feats.dtype)
+            depth_lr = lr_inputs[:, 3:4].to(dtype=feats.dtype) if lr_inputs.shape[1] > 3 \
+                else torch.zeros((b, 1, h_lr, w_lr), device=feats.device, dtype=feats.dtype)
+            mv_lr = motion_lr if motion_lr is not None \
+                else torch.zeros((b, 2, h_lr, w_lr), device=feats.device, dtype=feats.dtype)
+            mv_lr = mv_lr.to(dtype=feats.dtype)
+            refined = self.fusion(feats, G_lr, m_lr, I_base, depth_lr, mv_lr)
         debug_check("refined", refined)
-        spawned = self.gaussian_spawner(
-            refined,
-            spawn_offset_xy=self._spawn_offset_for(refined),
-        )
-        debug_check("spawned.positions", spawned.positions)
-        debug_check("spawned.scales", spawned.scales)
-        debug_check("spawned.rotations", spawned.rotations)
-        debug_check("spawned.opacities", spawned.opacities)
-        debug_check("spawned.colors", spawned.colors)
-        debug_check("spawned.confidence", spawned.confidence)
-        spawned_canvas = self._flatten_spawned(spawned)
+
+        # ----- Spawner stage: branch on spawner_mode -----
+        if self.cfg.spawner_mode == "legacy":
+            spawned = self.gaussian_spawner(
+                refined,
+                spawn_offset_xy=self._spawn_offset_for(refined),
+            )
+            debug_check("spawned.positions", spawned.positions)
+            debug_check("spawned.scales", spawned.scales)
+            debug_check("spawned.rotations", spawned.rotations)
+            debug_check("spawned.opacities", spawned.opacities)
+            debug_check("spawned.colors", spawned.colors)
+            debug_check("spawned.confidence", spawned.confidence)
+            spawned_canvas = self._flatten_spawned(spawned)
+        else:  # "disocclusion"
+            spawned_canvas = self._disocclusion_spawn(
+                refined=refined,
+                lr_inputs=lr_inputs,
+                motion_lr=motion_lr,
+                warped_canvas=warped_canvas,
+                active_mask=active_mask,
+                h_lr=h_lr,
+                w_lr=w_lr,
+                debug_check=debug_check,
+            )
         debug_check("flattened.positions", spawned_canvas.positions)
         debug_check("flattened.scales", spawned_canvas.scales)
         debug_check("flattened.rotations", spawned_canvas.rotations)
@@ -334,11 +432,16 @@ class V6Model(nn.Module):
                 "unknown" if self.debug_nan_step is None else int(self.debug_nan_step),
                 int(frame_index),
             )
-        canvas_hr = self.rasterizer(
+        rast_hr_out = self.rasterizer(
             render_canvas,
             render_active.unsqueeze(0).expand(b, -1),
             output_hw=output_hw,
+            return_weight_sum=False,
         )
+        # Low-rank rasterizer (latent_rank<token_dim) defaults to returning
+        # (features, weight_sum); we explicitly request features-only here
+        # since the composite head consumes only the latent splat.
+        canvas_hr = rast_hr_out[0] if isinstance(rast_hr_out, tuple) else rast_hr_out
         debug_check("rasterizer.output", canvas_hr)
         refined_hr = F.interpolate(
             refined,
@@ -520,6 +623,161 @@ class V6Model(nn.Module):
             canvas=canvas,
             view_matrix=view_matrix,
             viewport_hw=output_hw,
+        )
+
+    def _rasterize_canvas_at_lr(
+        self,
+        warped_canvas: Optional[CanvasState],
+        active_mask: Optional[torch.Tensor],
+        batch_size: int,
+        h_lr: int,
+        w_lr: int,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Rasterize the warped canvas at LR resolution to produce (G, m)
+        for ConcatFusion. G is (B, R, H_lr, W_lr) — latent splat readout.
+        m is (B, 1, H_lr, W_lr) — per-pixel sum of Gaussian weights.
+
+        Canvas positions live in HR pixel space, so we scale them down by
+        ``self.scale`` to render at LR. Empty / no-canvas case returns
+        zeros, which makes ConcatFusion behave as a pure-feature pass.
+        """
+        R = int(self.cfg.latent_rank)
+        if warped_canvas is None or warped_canvas.count == 0:
+            G = torch.zeros((batch_size, R, h_lr, w_lr), device=device, dtype=dtype)
+            m = torch.zeros((batch_size, 1, h_lr, w_lr), device=device, dtype=dtype)
+            return G, m
+        scaled = CanvasState(
+            positions=warped_canvas.positions / float(self.scale),
+            scales=warped_canvas.scales / float(self.scale),
+            rotations=warped_canvas.rotations,
+            opacities=warped_canvas.opacities,
+            colors=warped_canvas.colors,
+            count=warped_canvas.count,
+        )
+        if active_mask is None:
+            mask = torch.ones(
+                int(warped_canvas.count), device=device, dtype=torch.bool
+            )
+        elif active_mask.ndim == 1:
+            mask = active_mask
+        else:
+            mask = active_mask
+        out = self.rasterizer(
+            scaled,
+            mask.unsqueeze(0).expand(batch_size, -1) if mask.ndim == 1 else mask,
+            output_hw=(h_lr, w_lr),
+            return_weight_sum=True,
+        )
+        if isinstance(out, tuple):
+            G, m = out
+        else:
+            G = out
+            m = torch.zeros((batch_size, 1, h_lr, w_lr), device=device, dtype=dtype)
+        return G.to(dtype=dtype), m.to(dtype=dtype)
+
+    def _disocclusion_spawn(
+        self,
+        *,
+        refined: torch.Tensor,
+        lr_inputs: torch.Tensor,
+        motion_lr: Optional[torch.Tensor],
+        warped_canvas: Optional[CanvasState],
+        active_mask: Optional[torch.Tensor],
+        h_lr: int,
+        w_lr: int,
+        debug_check,
+    ) -> CanvasState:
+        """Run the disocclusion spawner and convert its dict output into a
+        CanvasState in HR pixel coordinates so the rest of the pipeline is
+        unchanged. Inputs sourced from ``lr_inputs`` channel layout:
+        [0:3]=RGB, [3:4]=depth, [4:6]=MV, [6:9]=normals.
+        """
+        b = int(refined.shape[0])
+        device = refined.device
+        dtype = refined.dtype
+
+        # depth_t at LR
+        if lr_inputs.shape[1] >= 4:
+            depth_t = lr_inputs[:, 3:4].to(dtype=dtype)
+        else:
+            depth_t = torch.zeros((b, 1, h_lr, w_lr), device=device, dtype=dtype)
+        # depth_prev: persisted across frames; first frame uses depth_t so
+        # the disocclusion mask is empty (no spawn — correct for frame 0).
+        if self._depth_lr_prev is None or self._depth_lr_prev.shape != depth_t.shape:
+            depth_prev = depth_t.detach().clone()
+        else:
+            depth_prev = self._depth_lr_prev.to(device=device, dtype=dtype)
+        # MV at LR
+        if motion_lr is not None:
+            mv = motion_lr.to(dtype=dtype)
+        elif lr_inputs.shape[1] >= 6:
+            mv = lr_inputs[:, 4:6].to(dtype=dtype)
+        else:
+            mv = torch.zeros((b, 2, h_lr, w_lr), device=device, dtype=dtype)
+        # Residual: per-pixel canvas-coverage shortfall. Use (1 - m) where
+        # m is the rasterizer's weight-sum at LR. Areas with no canvas
+        # coverage have residual ~1, fully-covered areas ~0. Combined with
+        # the depth-disocclusion mask, this concentrates spawn budget at
+        # newly-revealed pixels exactly when the canvas hasn't yet learned
+        # them.
+        _, m_lr = self._rasterize_canvas_at_lr(
+            warped_canvas, active_mask, b, h_lr, w_lr, device, dtype
+        )
+        residual = (1.0 - m_lr).clamp(0.0, 1.0).to(dtype=dtype)
+        debug_check("disocclusion.residual", residual)
+
+        spawn_dict = self.disocclusion_spawner(
+            depth_t=depth_t,
+            depth_prev=depth_prev,
+            MV=mv,
+            lr_features=refined,
+            residual=residual,
+        )
+        # Cache depth for next frame (detached — no autograd across frames).
+        self._depth_lr_prev = depth_t.detach()
+
+        K = int(spawn_dict["xy"].shape[0])
+        if K == 0:
+            zero_pos = torch.zeros((0, 2), device=device, dtype=dtype)
+            zero_scale = torch.zeros((0, 2), device=device, dtype=dtype)
+            zero_rot = torch.zeros((0,), device=device, dtype=dtype)
+            zero_op = torch.zeros((0,), device=device, dtype=dtype)
+            zero_col = torch.zeros(
+                (0, self.cfg.token_dim), device=device, dtype=dtype
+            )
+            return CanvasState(
+                positions=zero_pos,
+                scales=zero_scale,
+                rotations=zero_rot,
+                opacities=zero_op,
+                colors=zero_col,
+                count=0,
+            )
+        # xy is in LR pixel coords (spawner reads LR features). Scale to HR
+        # so it matches the legacy pipeline's HR-coordinate canvas convention.
+        xy_lr = spawn_dict["xy"].to(dtype=dtype)
+        positions_hr = (xy_lr * float(self.scale)).contiguous()
+        # Isotropic scale_iso (LR pixel units) -> HR pixel units, broadcast
+        # to (K, 2). Floor at 0.5 HR pixels so newly spawned Gaussians have
+        # a usable footprint even if DGP outputs near-zero scale at init.
+        scale_iso_lr = spawn_dict["scale"].to(dtype=dtype)
+        scale_hr = (scale_iso_lr * float(self.scale)).clamp(min=0.5)
+        scales = scale_hr[:, None].expand(-1, 2).contiguous()
+        rotations = torch.zeros((K,), device=device, dtype=dtype)
+        opacities = torch.ones((K,), device=device, dtype=dtype)
+        # feat (K, feat_dim) -> colors (K, token_dim). Zero-init projection
+        # means newborn Gaussians contribute nothing on step 0 and only
+        # earn contribution as the projection trains.
+        colors = self.disocclusion_color_proj(spawn_dict["feat"].to(dtype=dtype))
+        return CanvasState(
+            positions=positions_hr,
+            scales=scales,
+            rotations=rotations,
+            opacities=opacities,
+            colors=colors.contiguous(),
+            count=K,
         )
 
     def _flatten_spawned(self, spawned: GaussianSpawnState) -> CanvasState:
