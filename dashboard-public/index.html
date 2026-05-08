@@ -1418,6 +1418,21 @@
       <p class="mt-2 text-xs leading-5 text-zinc-500" data-dim>Sources: bicubic is measured on the OSS TartanAir oldtown batch; FSR references use AMD GPUOpen/FidelityFX documentation plus Digital Foundry/Insider Gaming comparisons; XeSS references use Intel XeSS paper and game-benchmark coverage; DLSS references use NVIDIA DLSS publications plus Digital Foundry/TechPowerUp comparisons. Values are favorable competitor-side reference anchors, not OSS-measured head-to-head scores.</p>
     </section>
 
+    <div class="terminal-divider" aria-hidden="true"><span class="td-corner">├─ viz strips ─</span><span class="td-rule"></span><span class="td-corner">─┤</span></div>
+    <section id="global-viz-section" class="rounded-md border border-zinc-800 bg-zinc-900/60 p-5" data-surface aria-labelledby="global-viz-title">
+      <header class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h2 id="global-viz-title" class="text-xl font-semibold text-zinc-50" data-text>Viz strips</h2>
+          <p class="mt-1 max-w-3xl text-sm text-zinc-400" data-subtext>Recent rendered comparisons (LR · bicubic · model · GT · |error| · features) for any tracked run. Click any strip to open the lightbox compare view.</p>
+        </div>
+        <div class="flex items-center gap-2 text-sm">
+          <label for="global-viz-run-select" class="text-zinc-400" data-dim>Run:</label>
+          <select id="global-viz-run-select" class="rounded border border-zinc-700 bg-zinc-950 px-2 py-1 font-mono text-xs text-zinc-100 focus:outline-none focus:ring-1 focus:ring-cyan-400"></select>
+        </div>
+      </header>
+      <div id="global-viz-strip" class="viz-strip mt-4 flex gap-3 overflow-x-auto pb-2"></div>
+    </section>
+
     <div class="terminal-divider" aria-hidden="true"><span class="td-corner">├─ lineage ─</span><span class="td-rule"></span><span class="td-corner">─┤</span></div>
     <section class="deferred-section flex flex-col gap-3" aria-labelledby="run-history-title">
       <div class="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
@@ -3134,16 +3149,17 @@ function chartZoomOptions() {
     pan: {
       enabled: true,
       mode: "xy",
-      modifierKey: null,    // plain drag = pan (was: shift+drag)
+      modifierKey: null,    // plain drag = pan
+      threshold: 0,         // pan immediately on drag, no minimum distance
       onPanComplete({ chart }) {
         updateDashboardZoomState(chart);
         scheduleChartEventDots(chart);
       },
     },
     zoom: {
-      wheel: { enabled: true, modifierKey: null },     // wheel/scroll = zoom
-      pinch: { enabled: true },                          // pinch = zoom (touch)
-      drag: { enabled: false },                          // drag = pan only (no rect-zoom)
+      wheel: { enabled: false },     // trackpad scroll-zoom OFF; use +/− or axis-drag
+      pinch: { enabled: true },      // pinch = zoom (touch)
+      drag: { enabled: false },      // drag = pan only (no rect-zoom)
       mode: "xy",
       onZoomComplete({ chart }) {
         updateDashboardZoomState(chart);
@@ -3327,7 +3343,7 @@ function ensureChartHint(card, toolbar, chartId) {
   hint.className = "chart-hint";
   hint.dataset.chartHint = chartId;
   hint.setAttribute("data-text", "");
-  hint.textContent = "drag to pan · scroll to zoom · drag axes to scale · +/− buttons to zoom";
+  hint.textContent = "drag to pan · drag axes to scale · +/− buttons to zoom · pinch on touch";
   const header = toolbar.parentElement;
   if (header?.classList?.contains("flex") && header.querySelector("h3")) {
     header.insertAdjacentElement("afterend", hint);
@@ -5960,6 +5976,7 @@ function renderDashboard(data, options = {}) {
   updateStamp();
   renderHero(data);
   renderRuns(data);
+  renderGlobalVizStrip(data);
   const comparisonCharts = renderCrossVersionComparison(data) || [];
   comparisonCharts.forEach((chart) => {
     if (chart) activeCharts.push(chart);
@@ -5970,6 +5987,57 @@ function renderDashboard(data, options = {}) {
   setLoadedState();
   if (!options.skipUrlState) {
     window.requestAnimationFrame(applyUrlState);
+  }
+}
+
+// Top-level viz strip with a run-selector dropdown. Lets users compare any
+// run's recent strips without expanding the full per-run accordion in the
+// lineage section. Default selection: the active/training run; sticks across
+// poll cycles via window.__globalVizSelectedRun.
+let _globalVizSelectedRun = null;
+function renderGlobalVizStrip(data) {
+  const select = document.getElementById("global-viz-run-select");
+  const host = document.getElementById("global-viz-strip");
+  if (!select || !host) return;
+  const runs = (data.runs || []).filter((run) => (run.viz_pngs || []).length > 0);
+  if (runs.length === 0) {
+    host.replaceChildren();
+    select.innerHTML = '<option>(no runs with viz strips)</option>';
+    select.disabled = true;
+    return;
+  }
+  // Pick a default: stored selection, else active run, else first run with most strips
+  const stored = _globalVizSelectedRun;
+  const activeName = trainingPulseState?.activeRunName;
+  const candidate = stored && runs.find((r) => r.name === stored)
+    || runs.find((r) => r.name === activeName)
+    || runs.slice().sort((a, b) => (b.viz_pngs?.length || 0) - (a.viz_pngs?.length || 0))[0];
+  const selectedName = candidate?.name || runs[0].name;
+  // Rebuild the option list (preserves selection across poll cycles)
+  select.innerHTML = "";
+  for (const run of runs) {
+    const opt = document.createElement("option");
+    opt.value = run.name;
+    const stripCount = (run.viz_pngs || []).length;
+    opt.textContent = `${run.label || run.name} (${stripCount} strip${stripCount === 1 ? "" : "s"})`;
+    if (run.name === selectedName) opt.selected = true;
+    select.appendChild(opt);
+  }
+  select.disabled = false;
+  _globalVizSelectedRun = selectedName;
+
+  // Render strips for the selected run
+  const sel = runs.find((r) => r.name === selectedName) || runs[0];
+  renderVizStrip(host, sel, 12);
+
+  // Wire change handler (idempotent — replace prior listener)
+  if (!select._oss_bound) {
+    select.addEventListener("change", () => {
+      _globalVizSelectedRun = select.value;
+      const r = (lastKnownData?.runs || []).find((x) => x.name === select.value);
+      if (r) renderVizStrip(host, r, 12);
+    });
+    select._oss_bound = true;
   }
 }
 
