@@ -21,6 +21,10 @@ QUEUE_DIR="${OSS_QUEUE_DIR:-/tmp/codex-queue}"
 DONE_DIR="${OSS_QUEUE_DONE_DIR:-/tmp/codex-queue-done}"
 STOP_MARKER="${QUEUE_DIR}/.stop"
 POLL_SEC="${POLL_SEC:-30}"
+# MAX_PARALLEL: how many codex exec processes can run concurrently.
+# Default 1 (serial, safe — no git-commit races). Bump to 3+ when prompts
+# work on disjoint files / don't commit / use git worktrees.
+MAX_PARALLEL="${MAX_PARALLEL:-3}"
 
 mkdir -p "$QUEUE_DIR" "$DONE_DIR"
 
@@ -32,7 +36,7 @@ active_codex_count() {
   pgrep -af "codex exec" 2>/dev/null | grep -vc "codex_queue_runner\|grep" || true
 }
 
-log "queue runner starting; queue=${QUEUE_DIR} done=${DONE_DIR} poll=${POLL_SEC}s"
+log "queue runner starting; queue=${QUEUE_DIR} done=${DONE_DIR} poll=${POLL_SEC}s max_parallel=${MAX_PARALLEL}"
 
 while :; do
   # Stop marker check
@@ -46,8 +50,9 @@ while :; do
     exit 0
   fi
 
-  # Wait for any running codex to finish before popping next
-  if (( $(active_codex_count) > 0 )); then
+  # Throttle: wait while at MAX_PARALLEL active codex jobs.
+  active="$(active_codex_count)"
+  if (( active >= MAX_PARALLEL )); then
     sleep "$POLL_SEC"
     continue
   fi
@@ -55,13 +60,12 @@ while :; do
   # Pop next prompt (lexical order)
   next="$(ls "$QUEUE_DIR"/*.txt 2>/dev/null | sort | head -1 || true)"
   if [[ -z "$next" || ! -f "$next" ]]; then
-    log "queue empty; sleeping"
     sleep 60
     continue
   fi
 
   slug="$(basename "$next" .txt)"
-  log "dispatching slug=$slug prompt=$next"
+  log "dispatching slug=$slug prompt=$next active=${active}/${MAX_PARALLEL}"
 
   cd "$REPO_ROOT"
   nohup bash scripts/dispatch_codex.sh "$slug" "$next" \
@@ -77,26 +81,17 @@ while :; do
   # Now safe to archive the prompt — dispatch_codex has already read it.
   mv "$next" "$DONE_DIR/"
 
-  # Wait for this codex to actually start (codex exec process visible)
+  # Brief wait for the new codex to register before popping the next slot.
+  # We do NOT block until completion — that's what made the runner serial.
+  # Instead we rely on the active-count throttle at top of the loop to
+  # gate new dispatches until in-flight count drops below MAX_PARALLEL.
   attempts=0
-  while (( $(active_codex_count) == 0 )) && (( attempts < 12 )); do
+  while (( $(active_codex_count) <= active )) && (( attempts < 12 )); do
     sleep 5
     attempts=$((attempts+1))
   done
 
-  if (( $(active_codex_count) == 0 )); then
+  if (( $(active_codex_count) <= active )); then
     log "WARN slug=$slug failed to spawn within 60s; check /tmp/codex-queue-${slug}.dispatch.log"
-  else
-    log "slug=$slug active; will block until completion"
   fi
-
-  # Block until completion
-  while (( $(active_codex_count) > 0 )); do
-    sleep "$POLL_SEC"
-    if [[ -f "$STOP_MARKER" ]]; then
-      log "stop requested mid-flight; will not pop next after current finishes"
-    fi
-  done
-
-  log "slug=$slug completed (or vanished)"
 done

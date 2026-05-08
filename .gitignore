@@ -87,3 +87,8 @@ id_ed25519*
 
 # Misc local
 2407.01866v2.pdf
+
+# Playwright + Wrangler + ad-hoc artifacts (runtime, not source)
+.playwright-mcp/
+.wrangler/
+artifacts/

@@ -1,8 +1,10 @@
 #include "common.cuh"
 
+#include <cuda_bf16.h>
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <mma.h>
 
 #ifndef OSS_CUDA_KERNELS_ONLY
 #include <c10/cuda/CUDAException.h>
@@ -12,6 +14,8 @@
 #endif
 
 namespace {
+
+using namespace nvcuda;
 
 __device__ __forceinline__ float clamp_min_preserve_nan(float v, float lo) {
     return v < lo ? lo : v;
@@ -137,67 +141,158 @@ void rasterize_sum(
     }
 
     const int lane = static_cast<int>(threadIdx.y) * OSS_TILE_SIZE + static_cast<int>(threadIdx.x);
-    const int px = tile_x * OSS_TILE_SIZE + static_cast<int>(threadIdx.x);
-    const int py = tile_y * OSS_TILE_SIZE + static_cast<int>(threadIdx.y);
-    const bool inside = px < W && py < H;
     const int tile_id = tile_y * num_tiles_x + tile_x;
 
-    __shared__ int id_batch[OSS_RASTER_BLOCK];
     __shared__ float2 xy_batch[OSS_RASTER_BLOCK];
     __shared__ float3 conic_batch[OSS_RASTER_BLOCK];
+    __shared__ __align__(16) __nv_bfloat16 feat_hi_batch[OSS_RASTER_BLOCK * OSS_F_CHUNK];
+    __shared__ __align__(16) __nv_bfloat16 feat_lo_batch[OSS_RASTER_BLOCK * OSS_F_CHUNK];
+    __shared__ __align__(16) __nv_bfloat16 weight_hi_tile[8 * OSS_TILE_SIZE * OSS_TILE_SIZE];
+    __shared__ __align__(16) __nv_bfloat16 weight_lo_tile[8 * OSS_TILE_SIZE * OSS_TILE_SIZE];
+    __shared__ __align__(16) float out_tile[8 * OSS_TILE_SIZE * OSS_F_CHUNK];
 
-    float pix_out[OSS_F_CHUNK];
-#pragma unroll
-    for (int c = 0; c < OSS_F_CHUNK; ++c) {
-        pix_out[c] = 0.0f;
-    }
+    const int warp_id = lane >> 5;
+    const int warp_lane = lane & 31;
+
+    wmma::fragment<wmma::accumulator, OSS_TILE_SIZE, OSS_TILE_SIZE, OSS_TILE_SIZE, float> acc0;
+    wmma::fragment<wmma::accumulator, OSS_TILE_SIZE, OSS_TILE_SIZE, OSS_TILE_SIZE, float> acc1;
+    wmma::fill_fragment(acc0, 0.0f);
+    wmma::fill_fragment(acc1, 0.0f);
 
     const int start = tile_offsets[tile_id];
     const int end = tile_offsets[tile_id + 1];
     for (int batch_start = start; batch_start < end; batch_start += OSS_RASTER_BLOCK) {
         const int load_idx = batch_start + lane;
+        const bool load_valid = load_idx < end;
+        int gid = 0;
         if (load_idx < end) {
-            const int gid = gaussian_idx_sorted[load_idx];
-            id_batch[lane] = gid;
+            gid = gaussian_idx_sorted[load_idx];
             xy_batch[lane] = xy[gid];
             conic_batch[lane] = conic[gid];
+        } else {
+            xy_batch[lane] = make_float2(0.0f, 0.0f);
+            conic_batch[lane] = make_float3(0.0f, 0.0f, 0.0f);
+        }
+#pragma unroll
+        for (int c = 0; c < OSS_F_CHUNK; ++c) {
+            float v = 0.0f;
+            if (load_valid && c < F_chunk) {
+                v = feat[gid * F_total + F_offset + c];
+            }
+            const __nv_bfloat16 hi = __float2bfloat16_rn(v);
+            feat_hi_batch[lane * OSS_F_CHUNK + c] = hi;
+            feat_lo_batch[lane * OSS_F_CHUNK + c] = __float2bfloat16_rn(v - __bfloat162float(hi));
         }
         __syncthreads();
 
         const int remaining = end - batch_start;
         const int batch_count = remaining < OSS_RASTER_BLOCK ? remaining : OSS_RASTER_BLOCK;
-        if (inside) {
-            for (int t = 0; t < batch_count; ++t) {
-                const int gid = id_batch[t];
-                const float2 center = xy_batch[t];
-                const float3 k = conic_batch[t];
-                const float dx = static_cast<float>(px) - center.x;
-                const float dy = static_cast<float>(py) - center.y;
-                const float q = k.x * dx * dx + 2.0f * k.y * dx * dy + k.z * dy * dy;
-                if (!isfinite(q) || q < 0.0f) {
-                    continue;
-                }
-                const float weight = expf(-0.5f * q);
-                const int feat_base = gid * F_total + F_offset;
+
 #pragma unroll
-                for (int c = 0; c < OSS_F_CHUNK; ++c) {
-                    if (c < F_chunk) {
-                        pix_out[c] += weight * feat[feat_base + c];
+        for (int row_group_iter = 0; row_group_iter < 2; ++row_group_iter) {
+            wmma::fragment<wmma::accumulator, OSS_TILE_SIZE, OSS_TILE_SIZE, OSS_TILE_SIZE, float>& acc =
+                row_group_iter == 0 ? acc0 : acc1;
+            const int pixel_group = warp_id + row_group_iter * 8;
+            const int pixel_base = pixel_group * OSS_TILE_SIZE;
+
+            for (int k_base = 0; k_base < batch_count; k_base += OSS_TILE_SIZE) {
+                __nv_bfloat16* warp_weight_hi_tile =
+                    weight_hi_tile + warp_id * OSS_TILE_SIZE * OSS_TILE_SIZE;
+                __nv_bfloat16* warp_weight_lo_tile =
+                    weight_lo_tile + warp_id * OSS_TILE_SIZE * OSS_TILE_SIZE;
+                for (int e = warp_lane; e < OSS_TILE_SIZE * OSS_TILE_SIZE; e += 32) {
+                    const int row = e / OSS_TILE_SIZE;
+                    const int col = e - row * OSS_TILE_SIZE;
+                    const int t = k_base + col;
+                    const int pixel_in_tile = pixel_base + row;
+                    const int local_px = pixel_in_tile & (OSS_TILE_SIZE - 1);
+                    const int local_py = pixel_in_tile >> 4;
+                    const int out_px = tile_x * OSS_TILE_SIZE + local_px;
+                    const int out_py = tile_y * OSS_TILE_SIZE + local_py;
+
+                    float weight = 0.0f;
+                    if (t < batch_count && out_px < W && out_py < H) {
+                        const float2 center = xy_batch[t];
+                        const float3 k = conic_batch[t];
+                        const float dx = static_cast<float>(out_px) - center.x;
+                        const float dy = static_cast<float>(out_py) - center.y;
+                        const float q = k.x * dx * dx + 2.0f * k.y * dx * dy + k.z * dy * dy;
+                        if (isfinite(q) && q >= 0.0f) {
+                            weight = expf(-0.5f * q);
+                        }
                     }
+                    const __nv_bfloat16 hi = __float2bfloat16_rn(weight);
+                    warp_weight_hi_tile[e] = hi;
+                    warp_weight_lo_tile[e] = __float2bfloat16_rn(weight - __bfloat162float(hi));
                 }
+                __syncwarp();
+
+                wmma::fragment<
+                    wmma::matrix_a, OSS_TILE_SIZE, OSS_TILE_SIZE, OSS_TILE_SIZE,
+                    __nv_bfloat16, wmma::row_major>
+                    a_hi_frag;
+                wmma::fragment<
+                    wmma::matrix_a, OSS_TILE_SIZE, OSS_TILE_SIZE, OSS_TILE_SIZE,
+                    __nv_bfloat16, wmma::row_major>
+                    a_lo_frag;
+                wmma::fragment<
+                    wmma::matrix_b, OSS_TILE_SIZE, OSS_TILE_SIZE, OSS_TILE_SIZE,
+                    __nv_bfloat16, wmma::row_major>
+                    b_hi_frag;
+                wmma::fragment<
+                    wmma::matrix_b, OSS_TILE_SIZE, OSS_TILE_SIZE, OSS_TILE_SIZE,
+                    __nv_bfloat16, wmma::row_major>
+                    b_lo_frag;
+                wmma::load_matrix_sync(a_hi_frag, warp_weight_hi_tile, OSS_TILE_SIZE);
+                wmma::load_matrix_sync(a_lo_frag, warp_weight_lo_tile, OSS_TILE_SIZE);
+                wmma::load_matrix_sync(
+                    b_hi_frag,
+                    feat_hi_batch + k_base * OSS_F_CHUNK,
+                    OSS_F_CHUNK
+                );
+                wmma::load_matrix_sync(
+                    b_lo_frag,
+                    feat_lo_batch + k_base * OSS_F_CHUNK,
+                    OSS_F_CHUNK
+                );
+                wmma::mma_sync(acc, a_hi_frag, b_hi_frag, acc);
+                wmma::mma_sync(acc, a_hi_frag, b_lo_frag, acc);
+                wmma::mma_sync(acc, a_lo_frag, b_hi_frag, acc);
+                wmma::mma_sync(acc, a_lo_frag, b_lo_frag, acc);
+                __syncwarp();
             }
         }
         __syncthreads();
     }
 
-    if (inside) {
-        const int pix_id = py * W + px;
 #pragma unroll
-        for (int c = 0; c < OSS_F_CHUNK; ++c) {
+    for (int row_group_iter = 0; row_group_iter < 2; ++row_group_iter) {
+        const int pixel_group = warp_id + row_group_iter * 8;
+        const int pixel_base = pixel_group * OSS_TILE_SIZE;
+        float* warp_out_tile = out_tile + warp_id * OSS_TILE_SIZE * OSS_F_CHUNK;
+        if (row_group_iter == 0) {
+            wmma::store_matrix_sync(warp_out_tile, acc0, OSS_F_CHUNK, wmma::mem_row_major);
+        } else {
+            wmma::store_matrix_sync(warp_out_tile, acc1, OSS_F_CHUNK, wmma::mem_row_major);
+        }
+        __syncwarp();
+
+        for (int e = warp_lane; e < OSS_TILE_SIZE * OSS_F_CHUNK; e += 32) {
+            const int row = e / OSS_F_CHUNK;
+            const int c = e - row * OSS_F_CHUNK;
             if (c < F_chunk) {
-                out[(F_offset + c) * H * W + pix_id] = pix_out[c];
+                const int pixel_in_tile = pixel_base + row;
+                const int local_px = pixel_in_tile & (OSS_TILE_SIZE - 1);
+                const int local_py = pixel_in_tile >> 4;
+                const int out_px = tile_x * OSS_TILE_SIZE + local_px;
+                const int out_py = tile_y * OSS_TILE_SIZE + local_py;
+                if (out_px < W && out_py < H) {
+                    const int pix_id = out_py * W + out_px;
+                    out[(F_offset + c) * H * W + pix_id] = warp_out_tile[e];
+                }
             }
         }
+        __syncwarp();
     }
 }
 

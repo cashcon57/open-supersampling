@@ -60,6 +60,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="Seconds between viz iterations (default 300 = 5 min).")
     p.add_argument("--device", default="cpu",
                    help="Inference device. Default cpu (avoids contention with training GPU).")
+    p.add_argument("--ckpt", type=Path, default=None,
+                   help="Optional explicit primary checkpoint to render. "
+                        "Default uses latest step-*.pt in --output-dir.")
     p.add_argument("--primary-version",
                    choices=("v4", "v5-pixel", "v5-gaussian", "v6"),
                    default=None,
@@ -660,9 +663,13 @@ def main(argv: list[str] | None = None) -> int:
     last_step = -1
     iters = 0
     while True:
-        ckpt = _latest_ckpt(args.output_dir)
+        ckpt = args.ckpt if args.ckpt is not None else _latest_ckpt(args.output_dir)
         if ckpt is None:
             print(f"  no checkpoints yet at {args.output_dir}", flush=True)
+        elif not ckpt.is_file():
+            print(f"  checkpoint not found: {ckpt}", file=sys.stderr, flush=True)
+            if args.once:
+                return 1
         else:
             step = _step_from_ckpt_name(ckpt)
             if step != last_step:

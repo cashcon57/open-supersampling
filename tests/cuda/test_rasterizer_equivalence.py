@@ -14,6 +14,14 @@ def _old_ref_forward_symbol_name():
 @pytest.mark.parametrize("H,W", [(32, 32), (64, 128), (256, 256), (270, 480), (540, 960)])
 @pytest.mark.parametrize("F", [1, 3, 12, 64])
 def test_rasterizer_forward_equivalence(cuda_device, kernels_built, N, H, W, F):
+    """Phase 4b tensor-core forward uses BF16 MMA inputs.
+
+    The CUDA kernel still computes Gaussian weights in FP32 and accumulates
+    MMA outputs in FP32, but the dynamic weight tile and feature tile enter
+    tensor cores through BF16 high/low components. The Phase 2c shape grid
+    therefore uses a per-shape 5e-3 tolerance instead of the original
+    scalar-FP32 1e-5 bar.
+    """
     from oss.cuda.oss_cuda import rasterize_gaussians
     from oss.gaussian.renderer.rasterizer import GaussianBatch, Rasterizer
 
@@ -41,7 +49,7 @@ def test_rasterizer_forward_equivalence(cuda_device, kernels_built, N, H, W, F):
         f"shape mismatch: {out_kernel.shape} vs {out_ref.shape}"
     )
     assert out_kernel.shape == (F, H, W)
-    torch.testing.assert_close(out_kernel, out_ref, atol=1e-5, rtol=1e-5)
+    torch.testing.assert_close(out_kernel, out_ref, atol=5e-3, rtol=5e-3)
 
 
 def _assert_old_ref_forward_symbol_is_gone(cuda_device, kernels_built):

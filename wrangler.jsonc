@@ -1,0 +1,14 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "pen-uper-ampling",
+  "compatibility_date": "2025-09-27",
+  "observability": {
+    "enabled": true
+  },
+  "assets": {
+    "directory": "dashboard-public"
+  },
+  "compatibility_flags": [
+    "nodejs_compat"
+  ]
+}
