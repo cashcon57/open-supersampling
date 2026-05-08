@@ -107,7 +107,7 @@ def test_429_with_retry_after_header_uses_server_hint(tmp_path: Path) -> None:
     assert not capture.meta_path.exists()
 
 
-def test_429_after_max_attempts_falls_back_to_delete(tmp_path: Path) -> None:
+def test_429_after_max_attempts_stays_pending_for_next_pass(tmp_path: Path) -> None:
     pending = tmp_path / "pending"
     capture = make_synthetic_capture(pending)
     attempts: list[int] = []
@@ -131,10 +131,11 @@ def test_429_after_max_attempts_falls_back_to_delete(tmp_path: Path) -> None:
     )
 
     assert result.status_code == 429
-    assert result.terminal is True
+    assert result.terminal is False
+    assert result.retryable is True
     assert attempts == [429, 429]
-    assert not capture.frame_path.exists()
-    assert not capture.meta_path.exists()
+    assert capture.frame_path.exists()
+    assert capture.meta_path.exists()
 
 
 def test_upload_with_retries_drops_after_exhausted_5xx(tmp_path: Path) -> None:

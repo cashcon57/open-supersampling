@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import os
+import socket
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-import os
 from pathlib import Path
+
+import pytest
 
 from oss.capture.uploader import UploadConfig, drain_once
 from tests.capture.test_fixtures import make_synthetic_capture
@@ -32,6 +35,119 @@ def _start_server(statuses: list[int]) -> tuple[ThreadingHTTPServer, str]:
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return server, f"http://127.0.0.1:{server.server_port}/ingest"
+
+
+def _closed_loopback_ingest_url() -> str:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    return f"http://127.0.0.1:{port}/ingest"
+
+
+def _single_capture_config(pending: Path, ingest_url: str, *, max_attempts: int = 1) -> UploadConfig:
+    return UploadConfig(
+        pending_dir=pending,
+        ingest_url=ingest_url,
+        install_token="test-token",
+        max_attempts=max_attempts,
+        backoff_seconds=(0.0, 0.0, 0.0),
+    )
+
+
+@pytest.mark.parametrize("status", [200, 201, 204])
+def test_uploader_deletes_successful_statuses(tmp_path: Path, status: int) -> None:
+    pending = tmp_path / "pending"
+    capture = make_synthetic_capture(pending, frame_uuid=f"success-{status}")
+    server, ingest_url = _start_server([status])
+    try:
+        config = _single_capture_config(pending, ingest_url, max_attempts=3)
+        assert drain_once(config, sleep=lambda _: None) == 1
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert not capture.frame_path.exists()
+    assert not capture.meta_path.exists()
+    assert len(ScriptedIngestHandler.requests_seen) == 1
+
+
+@pytest.mark.parametrize("status", [401, 409, 413])
+def test_uploader_deletes_terminal_statuses(tmp_path: Path, status: int) -> None:
+    pending = tmp_path / "pending"
+    capture = make_synthetic_capture(pending, frame_uuid=f"terminal-{status}")
+    server, ingest_url = _start_server([status])
+    try:
+        config = _single_capture_config(pending, ingest_url, max_attempts=3)
+        assert drain_once(config, sleep=lambda _: None) == 1
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert not capture.frame_path.exists()
+    assert not capture.meta_path.exists()
+    assert len(ScriptedIngestHandler.requests_seen) == 1
+
+
+def test_uploader_keeps_429_pending_after_attempts_then_retries_next_pass(tmp_path: Path) -> None:
+    pending = tmp_path / "pending"
+    capture = make_synthetic_capture(pending, frame_uuid="rate-limited")
+    sleeps: list[float] = []
+    server, ingest_url = _start_server([429, 429])
+    try:
+        config = UploadConfig(
+            pending_dir=pending,
+            ingest_url=ingest_url,
+            install_token="test-token",
+            max_attempts=2,
+            backoff_seconds=(0.25, 0.5),
+        )
+        assert drain_once(config, sleep=sleeps.append) == 1
+        assert capture.frame_path.exists()
+        assert capture.meta_path.exists()
+        assert len(ScriptedIngestHandler.requests_seen) == 2
+        assert sleeps == [1.0]
+
+        ScriptedIngestHandler.statuses = [200]
+        ScriptedIngestHandler.requests_seen = []
+        assert drain_once(config, sleep=sleeps.append) == 1
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert not capture.frame_path.exists()
+    assert not capture.meta_path.exists()
+    assert len(ScriptedIngestHandler.requests_seen) == 1
+
+
+def test_uploader_drops_5xx_after_exhausted_retries(tmp_path: Path) -> None:
+    pending = tmp_path / "pending"
+    capture = make_synthetic_capture(pending, frame_uuid="server-error")
+    sleeps: list[float] = []
+    server, ingest_url = _start_server([500, 502, 503])
+    try:
+        config = _single_capture_config(pending, ingest_url, max_attempts=3)
+        assert drain_once(config, sleep=sleeps.append) == 1
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert not capture.frame_path.exists()
+    assert not capture.meta_path.exists()
+    assert len(ScriptedIngestHandler.requests_seen) == 3
+    assert sleeps == [0.0, 0.0]
+
+
+def test_uploader_drops_connection_error_after_exhausted_retries(tmp_path: Path) -> None:
+    pending = tmp_path / "pending"
+    capture = make_synthetic_capture(pending, frame_uuid="connection-error")
+    sleeps: list[float] = []
+    config = _single_capture_config(pending, _closed_loopback_ingest_url(), max_attempts=2)
+
+    assert drain_once(config, sleep=sleeps.append) == 1
+
+    assert not capture.frame_path.exists()
+    assert not capture.meta_path.exists()
+    assert sleeps == [0.0]
 
 
 def test_uploader_fake_server_roundtrip_deletes_terminal_and_exhausted_frames(tmp_path: Path) -> None:

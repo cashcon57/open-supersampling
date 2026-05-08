@@ -1,8 +1,11 @@
 """Drain locally captured OSS training frames to the ingest service.
 
-The uploader treats every terminal server response as a delete signal. That is
-intentional: local capture files are transient consented uploads, not a user
-archive.
+Status handling is intentionally conservative for terminal outcomes: 2xx
+responses, revoked auth (401), durable dedup hits (409), and oversize payloads
+(413) delete local files because there is no useful local retry. Other 4xx
+responses are terminal as well. Rate limits (429) are retryable and stay pending
+after this pass, while 5xx and network errors retry with backoff and are dropped
+only after exhausting configured attempts.
 """
 
 from __future__ import annotations
@@ -262,6 +265,10 @@ def upload_with_retries(
             else:
                 delay = base_delay
             sleep(delay)
+
+    if last.status_code == 429:
+        LOGGER.warning("leaving rate-limited capture pending for next upload pass: %s", frame.frame_path)
+        return last
 
     LOGGER.warning(
         "dropping capture after exhausted upload retries: %s status=%s message=%s",
