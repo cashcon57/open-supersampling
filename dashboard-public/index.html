@@ -1385,37 +1385,16 @@
       </article>
     </section>
 
-    <div class="terminal-divider" aria-hidden="true"><span class="td-corner">├─ industry context ─</span><span class="td-rule"></span><span class="td-corner">─┤</span></div>
-    <section id="comparison" class="rounded-md border border-zinc-800 bg-zinc-900/60 p-5" data-surface aria-labelledby="comparison-title">
-      <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-        <div>
-          <h2 id="comparison-title" class="title-with-info text-xl font-semibold text-zinc-50" data-text><span>Held-out PSNR / LPIPS by version</span><button class="info-btn" data-info-key="held-out-psnr" type="button" aria-label="What is this chart?">(i)</button></h2>
-          <p class="mt-1 max-w-3xl text-sm text-zinc-400" data-subtext>OSS measured points against conservative DLSS / FSR / XeSS reference lines.</p>
-        </div>
-        <div class="flex flex-wrap gap-2">
-          <label class="chart-toggle"><input id="comparison-show-all" type="checkbox"> Show all generations</label>
-          <label class="chart-toggle">
-            <input id="comparison-show-bad-data" type="checkbox">
-            Show bad data
-            <button class="info-btn" data-info-key="bad-data" aria-label="What is bad data?" type="button">(i)</button>
-          </label>
-          <label class="chart-toggle"><input id="comparison-full-range" type="checkbox"> Full range</label>
-          <label class="chart-toggle"><input id="comparison-log-x" type="checkbox"> Log x-axis</label>
-        </div>
+    <div class="terminal-divider" aria-hidden="true"><span class="td-corner">├─ view options ─</span><span class="td-rule"></span><span class="td-corner">─┤</span></div>
+    <section id="view-options" class="rounded-md border border-zinc-800 bg-zinc-900/60 p-4" data-surface aria-labelledby="view-options-title">
+      <div class="flex flex-wrap items-center gap-4 text-sm">
+        <h2 id="view-options-title" class="text-base font-semibold text-zinc-50" data-text>View options</h2>
+        <label class="chart-toggle">
+          <input id="show-industry-refs" type="checkbox">
+          <span>Show industry reference lines</span>
+          <button class="info-btn" data-info-key="industry-refs" type="button" aria-label="What is this?">(i)</button>
+        </label>
       </div>
-      <div id="comparison-density-note" class="mt-3 hidden text-xs text-amber-200">(many overlapping lines — use checkbox above to hide older gens)</div>
-      <div class="grid gap-4 mt-4 lg:grid-cols-2">
-        <div class="chart-card" data-chart-id="cross-version-psnr-chart" data-chart-slug="cross-version-psnr">
-          <h3 class="title-with-info text-sm font-semibold text-zinc-300 mb-2 font-mono"><span>PSNR — higher is better</span><button class="info-btn" data-info-key="held-out-psnr" type="button" aria-label="What is this chart?">(i)</button></h3>
-          <div class="chart-wrap comparison-chart-wrap"><canvas id="cross-version-psnr-chart"></canvas></div>
-        </div>
-        <div class="chart-card" data-chart-id="cross-version-lpips-chart" data-chart-slug="cross-version-lpips">
-          <h3 class="title-with-info text-sm font-semibold text-zinc-300 mb-2 font-mono"><span>LPIPS — lower is better</span><button class="info-btn" data-info-key="held-out-lpips" type="button" aria-label="What is this chart?">(i)</button></h3>
-          <div class="chart-wrap comparison-chart-wrap"><canvas id="cross-version-lpips-chart"></canvas></div>
-        </div>
-      </div>
-      <p class="mt-3 text-xs leading-5 text-zinc-500" data-dim>Reference lines are from competitor-published or third-party-benchmarked values on heterogeneous content (Cyberpunk 2077, Death Stranding, Hitman 3, etc.) — not direct head-to-head on the TartanAir oldtown batch OSS uses. They establish ROM order-of-magnitude context, not apples-to-apples comparison. OSS aims to publish head-to-head numbers on game-engine footage as the v6 cross-game-engine eval matures. <strong class="text-zinc-300">v4 has a trajectory plus a distribution-shift cliff</strong> <button class="info-btn" data-info-key="v4-two-points" type="button" aria-label="Why does v4 have two data points?">(i)</button>: the solid v4 line is the SRGD held-out trajectory across training, while the hollow marker at 300K is the same model family on the TartanAir oldtown batch v5+v6.1 use — the "rainbow mess" failure mode that motivated the v5+v6 architectural redesign. v6 is built to NOT distribution-shift like this; v6.1 cross-game-engine eval (UE5 / Unity / Source 2) is the ongoing test of whether that architectural design actually generalizes.</p>
-      <p class="mt-2 text-xs leading-5 text-zinc-500" data-dim>Sources: bicubic is measured on the OSS TartanAir oldtown batch; FSR references use AMD GPUOpen/FidelityFX documentation plus Digital Foundry/Insider Gaming comparisons; XeSS references use Intel XeSS paper and game-benchmark coverage; DLSS references use NVIDIA DLSS publications plus Digital Foundry/TechPowerUp comparisons. Values are favorable competitor-side reference anchors, not OSS-measured head-to-head scores.</p>
     </section>
 
     <div class="terminal-divider" aria-hidden="true"><span class="td-corner">├─ viz strips ─</span><span class="td-rule"></span><span class="td-corner">─┤</span></div>
@@ -1683,6 +1662,7 @@ const INFO_COPY = {
   "bad-data": "Off by default. Hides runs that aren't apples-to-apples with the current models — different test sets, failure modes. Toggle on for transparency.",
   "v4-two-points": "v4 was the first single-frame model. It looks fine on its training data but fails badly when you change the content (~22 dB cliff). v5 and v6 were designed to NOT do this.",
   "stopped-early-v61-pico-001": "Stopped early at ~step 12k on 2026-05-08. λ=2px stippling artifact (per-pixel checkerboard) was getting WORSE during training, not recovering. Root cause: spawner regresses Δxy with integer-pixel-aligned bias, and the in-flight `spawn_subpixel_jitter` fix in commit 221a325 was (a) defaulted off and (b) wrong-period (per-batch tile-grid offset, not per-Gaussian sub-pixel offset). Restart from scratch as v6.2-pico-002 with the v4 architecture: disocclusion-pixel-center spawn + DGP dictionary covariance + per-Gaussian (not per-batch) jitter. Memo: docs/superpowers/experiments/2026-05-08-v6.1-pico-001-stopped-stippling-not-fixable-mid-flight.md.",
+  "industry-refs": "When checked, overlays horizontal reference lines for the latest generation of each upscaler (Bicubic baseline · FSR 3 · XeSS 1 · DLSS 4) on each run's held-out PSNR / LPIPS chart. The reference lines are from competitor-published or third-party-benchmarked values on heterogeneous content (Cyberpunk 2077, Death Stranding, Hitman 3, etc.) — NOT direct head-to-head on the TartanAir oldtown batch OSS uses. They establish ROM order-of-magnitude context, not apples-to-apples comparison. Bicubic IS measured on the OSS held-out batch and is apples-to-apples.",
   "versioning-convention": "OSS uses THREE independent naming layers, each with its own format and rate of change. (1) Project semver (e.g. 0.6.0.dev0) — what pyproject.toml, GitHub releases, and pip install see. Bumps per release. (2) Architecture iteration (e.g. v6.2 architecture) — research-tradition naming used in design docs and memos. Bumps per architecture rewrite. (3) Training-run identifier (e.g. srcnn-v6.2-pico-002) — what you see on this dashboard, in checkpoint paths, and in viz strip filenames. FROZEN FOREVER once a run starts; renaming would break dashboard data continuity. The three layers move at different rates and are deliberately decoupled — a v6.2 architecture might ship across the 0.6.0, 0.6.1, etc. releases; a single 0.x.y release might touch v6, v6.1, AND v6.2 code paths. Run names never change.",
 };
 
@@ -1802,6 +1782,12 @@ let trainingPulseState = {
 };
 let stagnantActivePolls = 0;
 let comparisonShowAll = false;
+// Industry reference-line overlay on per-run held-out charts. Persisted via
+// localStorage so the user's preference survives page reload.
+let showIndustryRefs = (() => {
+  try { return window.localStorage.getItem("oss-show-industry-refs") === "1"; }
+  catch { return false; }
+})();
 let comparisonShowBadData = false;
 let comparisonFullRange = false;
 let comparisonLogX = false;
@@ -4661,6 +4647,46 @@ function renderHeldoutChart(canvas, run) {
     { label: "bicubic PSNR", yAxisID: "y", data: bicubicPsnr, borderColor: colors.bicubic, backgroundColor: colors.bicubic, pointRadius: 3, pointHitRadius: 6, borderWidth: 1.7, borderDash: [5, 4], tension: 0 },
     { label: "model LPIPS", yAxisID: "y1", data: modelLpips, borderColor: colors.lpips, backgroundColor: colors.lpips, pointRadius: 3, pointHitRadius: 6, borderWidth: 2, tension: 0 },
   ].filter((dataset) => dataset.data.length);
+
+  // Industry reference lines (overlay when "Show industry refs" is checked).
+  // We draw flat lines spanning the chart's x-domain at the published competitor
+  // values. Latest generation only (FSR 3, XeSS 1, DLSS 4) plus the OSS-measured
+  // bicubic baseline for apples-to-apples comparison.
+  if (showIndustryRefs) {
+    const xMin = Math.min(...datasets.flatMap(d => d.data.map(p => p.x)));
+    const xMax = Math.max(...datasets.flatMap(d => d.data.map(p => p.x)));
+    const range = (refY) => [{ x: xMin, y: refY }, { x: xMax, y: refY }];
+    for (const ref of comparisonReferenceLines) {
+      if (!ref.latest) continue;  // only latest gen of each vendor
+      // PSNR reference (left axis)
+      datasets.push({
+        label: `${ref.method} PSNR (ref)`,
+        yAxisID: "y",
+        data: range(ref.psnr),
+        borderColor: ref.color,
+        backgroundColor: ref.color,
+        pointRadius: 0,
+        borderWidth: 1.2,
+        borderDash: ref.id === "bicubic" ? [] : [4, 4],
+        tension: 0,
+        showLine: true,
+      });
+      // LPIPS reference (right axis)
+      datasets.push({
+        label: `${ref.method} LPIPS (ref)`,
+        yAxisID: "y1",
+        data: range(ref.lpips),
+        borderColor: ref.color,
+        backgroundColor: ref.color,
+        pointRadius: 0,
+        borderWidth: 1.2,
+        borderDash: ref.id === "bicubic" ? [] : [2, 6],
+        tension: 0,
+        showLine: true,
+      });
+    }
+  }
+
   return bindChartControls(new Chart(canvas, { type: "line", data: { datasets }, options }), canvas);
 }
 
@@ -5977,10 +6003,11 @@ function renderDashboard(data, options = {}) {
   renderHero(data);
   renderRuns(data);
   renderGlobalVizStrip(data);
-  const comparisonCharts = renderCrossVersionComparison(data) || [];
-  comparisonCharts.forEach((chart) => {
-    if (chart) activeCharts.push(chart);
-  });
+  // The standalone "Industry context" cross-version comparison section was
+  // removed in favor of per-run held-out reference-line overlays. The
+  // `renderCrossVersionComparison(data)` call site is intentionally left out;
+  // the underlying function is still defined for potential future re-use.
+  bindIndustryRefsCheckbox();
   setupGlossaryTooltips();
   setupInfoTooltips();
   initDashboardUrlState();
@@ -5988,6 +6015,25 @@ function renderDashboard(data, options = {}) {
   if (!options.skipUrlState) {
     window.requestAnimationFrame(applyUrlState);
   }
+}
+
+// Industry-reference-lines checkbox: toggles overlay on per-run held-out charts.
+// Persists across page reloads via localStorage. On change, full re-render so
+// every visible run accordion picks up the toggle in its held-out chart.
+function bindIndustryRefsCheckbox() {
+  const cb = document.getElementById("show-industry-refs");
+  if (!cb) return;
+  cb.checked = showIndustryRefs;
+  if (cb._oss_bound) return;
+  cb._oss_bound = true;
+  cb.addEventListener("change", () => {
+    showIndustryRefs = cb.checked;
+    try { window.localStorage.setItem("oss-show-industry-refs", showIndustryRefs ? "1" : "0"); }
+    catch {}
+    if (lastKnownData) {
+      renderDashboard(lastKnownData, { skipUrlState: true, preserveTrainingState: true });
+    }
+  });
 }
 
 // Top-level viz strip with a run-selector dropdown. Lets users compare any
