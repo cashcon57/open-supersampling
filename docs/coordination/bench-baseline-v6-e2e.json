@@ -1,0 +1,364 @@
+{
+  "baseline_scope": "smoke-shape 16k-canvas CUDA harness validation; production 1080p->4K baseline blocked, see docs/coordination/cuda-phase4a-baseline.md",
+  "benchmark": "v6.1_end_to_end_forward",
+  "generated_at": "2026-05-08T16:56:10+00:00",
+  "hosts": {
+    "3080ti-smoke16k": {
+      "benchmark": {
+        "canvas_source": "synthetic",
+        "checkpoint": null,
+        "checkpoint_load": {
+          "loaded": false
+        },
+        "component_order": [
+          "hat_tiny_lr_forward",
+          "cross_attention_fusion",
+          "spawner_write_back",
+          "rasterizer_composite_head"
+        ],
+        "dtype": "bf16",
+        "iterations": 10,
+        "rasterizer_backend": "gsplat",
+        "timing": "torch.cuda.synchronize + time.perf_counter",
+        "warmup": 3
+      },
+      "config": {
+        "backbone": "hat-tiny",
+        "canvas_capacity": 16384,
+        "color_activation": "hdr",
+        "cross_attention_heads": 6,
+        "in_channels": 9,
+        "keyframe_interval": 10,
+        "prune_every": 200,
+        "prune_fraction": 0.7,
+        "rasterizer_overlap": 0,
+        "scale": 2,
+        "spawn_offset_random": false,
+        "tile_size_hr": 16,
+        "tile_size_lr": 8,
+        "token_dim": 64,
+        "window_size": 16
+      },
+      "device": {
+        "compute_capability": "sm_86",
+        "cuda": "12.4",
+        "cudnn": 90100,
+        "multiprocessor_count": 80,
+        "name": "NVIDIA GeForce RTX 3080 Ti",
+        "torch": "2.4.1",
+        "total_memory_bytes": 12884377600
+      },
+      "host": {
+        "hostname": "Cash-PC",
+        "key": "3080ti-smoke16k",
+        "pid": 29768,
+        "platform": "Windows-10-10.0.26220-SP0"
+      },
+      "measured_at": "2026-05-08T16:56:01+00:00",
+      "metrics": {
+        "components": {
+          "cross_attention_fusion": {
+            "max_ms": 25.869400007650256,
+            "median_ms": 18.351049977354705,
+            "min_ms": 10.302300041075796,
+            "p90_ms": 25.247319985646755
+          },
+          "hat_tiny_lr_forward": {
+            "max_ms": 70.46439999248832,
+            "median_ms": 56.823199993232265,
+            "min_ms": 38.47529995255172,
+            "p90_ms": 61.630359990522265
+          },
+          "rasterizer_composite_head": {
+            "max_ms": 48.215200018603355,
+            "median_ms": 39.03324998100288,
+            "min_ms": 17.232900019735098,
+            "p90_ms": 45.3376300050877
+          },
+          "spawner_write_back": {
+            "max_ms": 10.145300009753555,
+            "median_ms": 5.847549997270107,
+            "min_ms": 3.3879000111483037,
+            "p90_ms": 9.308209974551573
+          }
+        },
+        "samples_ms": {
+          "components": {
+            "cross_attention_fusion": [
+              20.500499987974763,
+              23.586699971929193,
+              18.542499979957938,
+              25.17819998320192,
+              25.869400007650256,
+              16.593499982263893,
+              18.02970003336668,
+              18.159599974751472,
+              10.302300041075796,
+              17.345700005535036
+            ],
+            "hat_tiny_lr_forward": [
+              57.858800049871206,
+              55.81230000825599,
+              56.58719997154549,
+              70.46439999248832,
+              58.069400023669004,
+              54.99880004208535,
+              57.05920001491904,
+              60.648799990303814,
+              48.064099973998964,
+              38.47529995255172
+            ],
+            "rasterizer_composite_head": [
+              48.215200018603355,
+              42.47730004135519,
+              43.58340002363548,
+              37.411199999041855,
+              45.017900003585964,
+              35.32640001503751,
+              34.040500002447516,
+              40.65529996296391,
+              17.232900019735098,
+              20.79849998699501
+            ],
+            "spawner_write_back": [
+              10.145300009753555,
+              9.215199970640242,
+              4.16340003721416,
+              6.395299977157265,
+              6.070000003091991,
+              5.625099991448224,
+              4.010899981949478,
+              5.212700052652508,
+              7.235800032503903,
+              3.3879000111483037
+            ]
+          },
+          "total_wallclock": [
+            138.58530001016334,
+            133.17970000207424,
+            124.95679996209219,
+            144.11569997901097,
+            137.67580001149327,
+            119.57949999487028,
+            114.66599995037541,
+            126.87759997788817,
+            84.32790002552792,
+            81.27639995655045
+          ]
+        },
+        "total_wallclock": {
+          "max_ms": 144.11569997901097,
+          "median_ms": 125.91719996999018,
+          "min_ms": 81.27639995655045,
+          "p90_ms": 139.1383400070481
+        }
+      },
+      "shape": {
+        "canvas_count": 16384,
+        "fusion_chunk_windows": 4,
+        "hr": {
+          "channels": 3,
+          "height": 128,
+          "width": 192
+        },
+        "lr": {
+          "channels": 9,
+          "height": 64,
+          "width": 96
+        },
+        "name": "smoke",
+        "scale": 2
+      }
+    },
+    "g14-smoke16k": {
+      "benchmark": {
+        "canvas_source": "synthetic",
+        "checkpoint": null,
+        "checkpoint_load": {
+          "loaded": false
+        },
+        "component_order": [
+          "hat_tiny_lr_forward",
+          "cross_attention_fusion",
+          "spawner_write_back",
+          "rasterizer_composite_head"
+        ],
+        "dtype": "bf16",
+        "iterations": 10,
+        "rasterizer_backend": "oss_cuda",
+        "timing": "torch.cuda.synchronize + time.perf_counter",
+        "warmup": 3
+      },
+      "config": {
+        "backbone": "hat-tiny",
+        "canvas_capacity": 16384,
+        "color_activation": "hdr",
+        "cross_attention_heads": 6,
+        "in_channels": 9,
+        "keyframe_interval": 10,
+        "prune_every": 200,
+        "prune_fraction": 0.7,
+        "rasterizer_overlap": 0,
+        "scale": 2,
+        "spawn_offset_random": false,
+        "tile_size_hr": 16,
+        "tile_size_lr": 8,
+        "token_dim": 64,
+        "window_size": 16
+      },
+      "device": {
+        "compute_capability": "sm_89",
+        "cuda": "12.4",
+        "cudnn": 90100,
+        "multiprocessor_count": 36,
+        "name": "NVIDIA GeForce RTX 4070 Laptop GPU",
+        "torch": "2.6.0+cu124",
+        "total_memory_bytes": 8157265920
+      },
+      "host": {
+        "hostname": "G14",
+        "key": "g14-smoke16k",
+        "pid": 38387,
+        "platform": "Linux-7.0.4-1-cachyos-x86_64-with-glibc2.43"
+      },
+      "measured_at": "2026-05-08T16:55:49+00:00",
+      "metrics": {
+        "components": {
+          "cross_attention_fusion": {
+            "max_ms": 5.090304002806079,
+            "median_ms": 4.866550996666774,
+            "min_ms": 4.826822005270515,
+            "p90_ms": 5.0812518027669284
+          },
+          "hat_tiny_lr_forward": {
+            "max_ms": 4.804128999239765,
+            "median_ms": 4.655756500142161,
+            "min_ms": 4.5535210010712035,
+            "p90_ms": 4.763553404336562
+          },
+          "rasterizer_composite_head": {
+            "max_ms": 36.06897899589967,
+            "median_ms": 33.12254550110083,
+            "min_ms": 33.053787003154866,
+            "p90_ms": 36.04143270276836
+          },
+          "spawner_write_back": {
+            "max_ms": 0.4004889997304417,
+            "median_ms": 0.3672820021165535,
+            "min_ms": 0.35266899794805795,
+            "p90_ms": 0.3974146027758252
+          }
+        },
+        "samples_ms": {
+          "components": {
+            "cross_attention_fusion": [
+              5.090304002806079,
+              5.078902999230195,
+              5.080246002762578,
+              5.07994499639608,
+              4.855234998103697,
+              4.835558000195306,
+              4.834054998354986,
+              4.8778669952298515,
+              4.854373000853229,
+              4.826822005270515
+            ],
+            "hat_tiny_lr_forward": [
+              4.804128999239765,
+              4.759045004902873,
+              4.707829000835773,
+              4.5535210010712035,
+              4.595558995788451,
+              4.603683999448549,
+              4.599626001436263,
+              4.716464994999114,
+              4.748846004076768,
+              4.596840997692198
+            ],
+            "rasterizer_composite_head": [
+              36.06897899589967,
+              36.03837200353155,
+              36.00417699635727,
+              34.852302000217605,
+              33.119599997007754,
+              33.066691998101305,
+              33.053787003154866,
+              33.07034799945541,
+              33.12549100519391,
+              33.09539500332903
+            ],
+            "spawner_write_back": [
+              0.3673669998534024,
+              0.3582599965739064,
+              0.35266899794805795,
+              0.3637509944383055,
+              0.3770359980990179,
+              0.39707300311420113,
+              0.35599600232671946,
+              0.3743699999176897,
+              0.4004889997304417,
+              0.3671970043797046
+            ]
+          },
+          "total_wallclock": [
+            46.578673005569726,
+            46.46012200100813,
+            46.36897100135684,
+            45.07581100187963,
+            43.173502999707125,
+            43.1398100045044,
+            43.08929499529768,
+            43.279240002448205,
+            43.36463900108356,
+            43.112578001455404
+          ]
+        },
+        "total_wallclock": {
+          "max_ms": 46.578673005569726,
+          "median_ms": 43.32193950176588,
+          "min_ms": 43.08929499529768,
+          "p90_ms": 46.47197710146429
+        }
+      },
+      "shape": {
+        "canvas_count": 16384,
+        "fusion_chunk_windows": 4,
+        "hr": {
+          "channels": 3,
+          "height": 128,
+          "width": 192
+        },
+        "lr": {
+          "channels": 9,
+          "height": 64,
+          "width": 96
+        },
+        "name": "smoke",
+        "scale": 2
+      }
+    }
+  },
+  "latest_host": "3080ti-smoke16k",
+  "phase": "4a",
+  "production_shape": {
+    "blockers": [
+      "G14 RTX 4070 Laptop 8GB OOMs in rasterizer_composite_head at production shape before one timed iteration completes.",
+      "3080 Ti is running protected v6.1 trainer PID 22712 with about 7.6GB VRAM in use; production probe was not run to avoid competing with the trainer.",
+      "Nsight Compute ncu is not installed or visible in PATH on either GPU host."
+    ],
+    "canvas_count": 16384,
+    "hr": {
+      "channels": 3,
+      "height": 2160,
+      "width": 3840
+    },
+    "lr": {
+      "channels": 9,
+      "height": 1080,
+      "width": 1920
+    },
+    "status": "blocked_on_2026-05-08"
+  },
+  "schema_version": 1,
+  "updated_at": "2026-05-08T16:56:10+00:00"
+}

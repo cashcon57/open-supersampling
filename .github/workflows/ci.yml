@@ -59,6 +59,66 @@ jobs:
             --out /tmp/test-dashboard
           python tools/check_data_schema.py /tmp/test-dashboard/data.json
 
+  v6-e2e-bench:
+    name: v6.1 e2e bench gate (CUDA if available)
+    runs-on: ${{ vars.CUDA_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Detect CUDA runner
+        id: cuda
+        run: |
+          if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "CUDA not available on this runner; skipping enforced v6.1 e2e bench gate."
+          fi
+
+      - name: Set up Python 3.12
+        if: steps.cuda.outputs.available == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            oss/cuda/pyproject.toml
+
+      - name: Install CUDA PyTorch + project + custom kernels
+        if: steps.cuda.outputs.available == 'true'
+        run: |
+          python -m pip install --upgrade pip
+          pip install --index-url https://download.pytorch.org/whl/cu124 \
+              torch torchvision
+          pip install -e ".[dev]"
+          pip install --no-build-isolation -e ./oss/cuda --force-reinstall
+          python - <<'PY'
+          import torch
+          from oss.cuda import oss_cuda
+
+          if not torch.cuda.is_available():
+              raise SystemExit("CUDA runner detected, but PyTorch cannot access CUDA")
+          if not getattr(oss_cuda.rasterizer, "_COMPILED", False):
+              raise SystemExit("oss_cuda extension did not load as a compiled kernel")
+          print(torch.cuda.get_device_name(0))
+          PY
+
+      - name: Phase 4a v6.1 end-to-end bench regression gate
+        if: steps.cuda.outputs.available == 'true'
+        run: |
+          python tests/cuda/bench_end_to_end_v6.py \
+            --shape smoke \
+            --warmup 3 \
+            --iterations 10 \
+            --output-json /tmp/oss-v6.1-e2e-bench-result.json \
+            --baseline-json docs/coordination/bench-baseline-v6-e2e.json \
+            --check-regression
+
   lint:
     name: ruff lint (non-blocking)
     runs-on: ubuntu-latest
