@@ -277,14 +277,20 @@ def gan_hinge_g_loss(fake_logits: torch.Tensor) -> torch.Tensor:
 # Composite
 # ---------------------------------------------------------------------------
 
-# v6 memo §5 weights.
-_W_CHARBONNIER = 1.0
-_W_LPIPS = 1.0
-_W_VGG = 1.0  # the per-layer weights inside the multi-scale term carry the rest
-_W_WAVELET = 0.5
-_W_GAN = 0.05
-_W_SOBEL = 0.2
-_W_TEMPORAL = 0.5
+# v6 memo §5 weights — retuned 2026-05-08 after the v6.1-pico-001 plateau audit
+# (docs/coordination/v6.1-plateau-audit-2026-05-08.md). Pre-retune values left
+# in comments for reference. Diagnosis: msvgg dominated 87% of the gradient
+# because its internal per-layer weights sum to 3.2 while charbonnier at λ=1.0
+# contributed only 1.4%. Pixel-fidelity terms (charb / tc / wavelet) all
+# flatlined at step ~400 as a result. Retune targets each major term at
+# 10–25% of total gradient.
+_W_CHARBONNIER = 5.0   # was 1.0 — lift pixel signal ~5×
+_W_LPIPS       = 2.0   # was 1.0 — perceptual still mattered
+_W_VGG         = 0.15  # was 1.0 — multi-scale VGG was dominating; cut ~6.7×
+_W_WAVELET     = 1.5   # was 0.5 — frequency-domain pixel signal needs amplification
+_W_GAN         = 0.05  # unchanged (still gated by warmup_step=20K)
+_W_SOBEL       = 1.0   # was 0.2 — edge sharpness term was nearly silent
+_W_TEMPORAL    = 2.0   # was 0.5 — temporal-consistency was essentially off
 
 
 class V6CompositeLoss(nn.Module):
