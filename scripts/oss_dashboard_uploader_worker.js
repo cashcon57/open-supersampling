@@ -25,6 +25,8 @@ const KEY_PREFIX_ALLOWLIST = [
   'data.json',
   'status.json',
   'index.html',
+  'embed.html',
+  'embed-chart-builder.js',
   'oss-logo.svg',
   'crt-shader.js',
   'runs/',                  // any per-run files

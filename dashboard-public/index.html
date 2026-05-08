@@ -538,6 +538,104 @@
       opacity: 1;
       transform: translateX(-50%) translateY(0);
     }
+    .embed-modal {
+      position: fixed;
+      inset: 0;
+      z-index: 9000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .embed-modal[hidden] { display: none; }
+    .embed-modal-backdrop {
+      position: absolute;
+      inset: 0;
+      background: rgba(0,0,0,0.7);
+    }
+    .embed-modal-card {
+      position: relative;
+      width: min(680px, 92vw);
+      max-height: 92vh;
+      overflow-y: auto;
+      background: #0a0a0a;
+      border: 1px solid #27272a;
+      border-radius: 8px;
+      padding: 16px 20px;
+      box-shadow: 0 24px 64px rgba(0,0,0,0.6);
+    }
+    .embed-modal-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    .embed-modal-head h3 {
+      margin: 0;
+      font-size: 15px;
+      color: #e4e4e7;
+    }
+    .embed-modal-close {
+      background: transparent;
+      color: #a1a1aa;
+      border: none;
+      font-size: 22px;
+      line-height: 1;
+      cursor: pointer;
+    }
+    .embed-modal-close:hover { color: #e4e4e7; }
+    .embed-preview {
+      background: #18181b;
+      border: 1px solid #27272a;
+      border-radius: 6px;
+      padding: 8px;
+      margin-bottom: 14px;
+      display: flex;
+      justify-content: center;
+    }
+    .embed-preview iframe {
+      background: #0a0a0a;
+      border-radius: 4px;
+      max-width: 100%;
+    }
+    .embed-snippet-block { margin-bottom: 12px; }
+    .embed-snippet-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #71717a;
+      margin-bottom: 4px;
+    }
+    .embed-snippet {
+      background: #18181b;
+      border: 1px solid #27272a;
+      border-radius: 4px;
+      padding: 8px;
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      font-size: 11px;
+      color: #d4d4d8;
+      white-space: pre-wrap;
+      word-break: break-all;
+      margin: 0;
+    }
+    .embed-snippet-copy {
+      margin-top: 6px;
+      font-size: 11px;
+      padding: 3px 8px;
+      background: #27272a;
+      color: #e4e4e7;
+      border: 1px solid #3f3f46;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .embed-snippet-copy:hover { background: #3f3f46; }
+    .embed-snippet-copy.copied { background: #166534; border-color: #22c55e; }
+    .embed-snippet-copy.copied::after { content: " ✓"; }
+    @media (max-width: 640px) {
+      .embed-preview iframe {
+        width: 100% !important;
+        height: 240px !important;
+      }
+    }
     .hero-cite {
       margin-top: 12px;
       border: 1px solid #27272a;
@@ -1236,6 +1334,30 @@
       <button id="viz-compare-dismiss" class="viz-compare-dismiss" type="button" aria-label="Close comparison viewer">&times;</button>
     </div>
   </dialog>
+  <div id="embed-modal" class="embed-modal" hidden role="dialog" aria-modal="true" aria-labelledby="embed-modal-title">
+    <div class="embed-modal-backdrop" data-embed-close></div>
+    <div class="embed-modal-card">
+      <div class="embed-modal-head">
+        <h3 id="embed-modal-title">Embed chart</h3>
+        <button class="embed-modal-close" type="button" data-embed-close aria-label="Close">&times;</button>
+      </div>
+      <div class="embed-modal-body">
+        <div class="embed-preview">
+          <iframe id="embed-preview-iframe" width="600" height="400" frameborder="0" referrerpolicy="no-referrer" loading="lazy" title="Embed preview"></iframe>
+        </div>
+        <div class="embed-snippet-block">
+          <div class="embed-snippet-label">HTML iframe (blogs, docs, MDX)</div>
+          <pre class="embed-snippet" id="embed-snippet-html"></pre>
+          <button class="embed-snippet-copy" type="button" data-embed-copy="embed-snippet-html">Copy HTML</button>
+        </div>
+        <div class="embed-snippet-block" id="embed-md-block" hidden>
+          <div class="embed-snippet-label">Markdown screenshot (forums, GitHub, Discord)</div>
+          <pre class="embed-snippet" id="embed-snippet-md"></pre>
+          <button class="embed-snippet-copy" type="button" data-embed-copy="embed-snippet-md">Copy Markdown</button>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <script>
 "use strict";
@@ -2391,6 +2513,11 @@ function chartActionIcon(kind) {
     <path d="M2 5V2h3M14 5V2h-3M2 11v3h3M14 11v3h-3" stroke="currentColor" stroke-width="1.5" fill="none"/>
   </svg>`;
   }
+  if (kind === "embed") {
+    return `<svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M5.5 4L2 8l3.5 4M10.5 4L14 8l-3.5 4" stroke="currentColor" stroke-width="1.4" fill="none"/>
+    </svg>`;
+  }
   return `<svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true">
     <path d="M5 11l-2 2a2 2 0 0 1-2.83-2.83l4-4a2 2 0 0 1 2.83 0M11 5l2-2a2 2 0 0 1 2.83 2.83l-4 4a2 2 0 0 1-2.83 0" stroke="currentColor" stroke-width="1.4" fill="none"/>
   </svg>`;
@@ -2416,9 +2543,17 @@ function chartCardAttrs(chartId) {
   return `data-chart-id="${escapeHtml(chartCardIdForSlug(slug))}" data-chart-slug="${escapeHtml(slug)}"`;
 }
 
-function chartActionButton(kind, chartId, label) {
+function embedChartIdForSlug(slug) {
+  if (slug === "loss") return "loss-curve";
+  if (slug === "psnr-live") return "psnr-inflight";
+  if (slug === "lpips-live") return "lpips-inflight";
+  if (slug === "cross-version-psnr") return "cross-version-aggregate";
+  return slug;
+}
+
+function chartActionButton(kind, chartId, label, opts = {}) {
   const button = document.createElement("button");
-  const actionClass = kind === "reset" ? "reset-zoom" : kind === "fullscreen" ? "fullscreen-toggle" : "copy-link";
+  const actionClass = kind === "reset" ? "reset-zoom" : kind === "fullscreen" ? "fullscreen-toggle" : kind === "embed" ? "embed-link" : "copy-link";
   const chartSlug = chartSlugForId(chartId);
   button.className = `chart-toggle chart-action ${actionClass}`;
   button.type = "button";
@@ -2427,7 +2562,12 @@ function chartActionButton(kind, chartId, label) {
   if (kind === "reset") button.setAttribute("data-reset-zoom", "");
   if (kind === "fullscreen") button.setAttribute("data-fullscreen", "");
   if (kind === "copy") button.setAttribute("data-copy-link", "");
-  button.setAttribute("aria-label", kind === "copy" ? "Copy link to chart" : `${label} chart`);
+  if (kind === "embed") {
+    button.dataset.embedChart = embedChartIdForSlug(chartSlug);
+    if (opts.runToken) button.dataset.embedRun = opts.runToken;
+    button.setAttribute("title", "Embed this chart");
+  }
+  button.setAttribute("aria-label", kind === "copy" ? "Copy link to chart" : kind === "embed" ? "Embed this chart" : `${label} chart`);
   button.innerHTML = `${chartActionIcon(kind)}<span class="chart-action-label">${label}</span>`;
   return button;
 }
@@ -2444,9 +2584,15 @@ function chartCardForCanvas(canvas) {
   return card;
 }
 
+function runTokenForCanvas(canvas) {
+  const runName = canvas?.closest?.("details[data-run-name]")?.dataset?.runName;
+  return runName ? runTokenFromName(runName) : null;
+}
+
 function ensureChartToolbar(card, canvas, chartId) {
   let toolbar = card.querySelector(`[data-chart-toolbar="${chartId}"]`);
   const chartSlug = chartSlugForId(chartId);
+  const runToken = runTokenForCanvas(canvas);
 
   card.dataset.chartId = chartCardIdForSlug(chartSlug);
   card.dataset.chartSlug = chartSlug;
@@ -2455,6 +2601,9 @@ function ensureChartToolbar(card, canvas, chartId) {
   }
 
   if (toolbar) {
+    if (!toolbar.querySelector("[data-embed-chart]")) {
+      toolbar.appendChild(chartActionButton("embed", chartId, "Embed", { runToken }));
+    }
     if (!toolbar.querySelector("[data-copy-link]")) {
       toolbar.appendChild(chartActionButton("copy", chartId, "Link"));
     }
@@ -2467,6 +2616,7 @@ function ensureChartToolbar(card, canvas, chartId) {
   toolbar.dataset.chartSlug = chartSlug;
   toolbar.appendChild(chartActionButton("reset", chartId, "Reset"));
   toolbar.appendChild(chartActionButton("fullscreen", chartId, "Fullscreen"));
+  toolbar.appendChild(chartActionButton("embed", chartId, "Embed", { runToken }));
   toolbar.appendChild(chartActionButton("copy", chartId, "Link"));
 
   const header = Array.from(card.children).find((child) => child.classList?.contains("flex") && child.querySelector("h3"));
@@ -2906,10 +3056,82 @@ async function copyDashboardLink(button) {
   window.setTimeout(() => button.classList.remove("copied"), 1200);
 }
 
+function buildEmbedSnippet({ chartId, run }) {
+  const url = new URL("embed.html", location.href);
+  url.search = "";
+  url.hash = "";
+  url.searchParams.set("chart", chartId);
+  if (run) url.searchParams.set("run", run);
+  const html = `<iframe src="${url.href}" width="600" height="400" frameborder="0" loading="lazy" referrerpolicy="no-referrer"></iframe>`;
+  return { url: url.href, html };
+}
+
+function buildMarkdownSnippet() {
+  return null;
+}
+
+function closeEmbedModal() {
+  const modal = document.getElementById("embed-modal");
+  const iframe = document.getElementById("embed-preview-iframe");
+  if (!modal) return;
+  modal.hidden = true;
+  if (iframe) iframe.src = "about:blank";
+}
+
+function openEmbedModal(trigger) {
+  const chartId = trigger.dataset.embedChart;
+  if (!chartId) return;
+  const run = trigger.dataset.embedRun || null;
+  const { url, html } = buildEmbedSnippet({ chartId, run });
+  const iframe = document.getElementById("embed-preview-iframe");
+  const htmlSnippet = document.getElementById("embed-snippet-html");
+  const mdSnippet = document.getElementById("embed-snippet-md");
+  const mdBlock = document.getElementById("embed-md-block");
+  const modal = document.getElementById("embed-modal");
+  if (!iframe || !htmlSnippet || !modal) return;
+  iframe.src = url;
+  htmlSnippet.textContent = html;
+  const md = buildMarkdownSnippet({ chartId, run });
+  if (md && mdSnippet && mdBlock) {
+    mdSnippet.textContent = md;
+    mdBlock.hidden = false;
+  } else if (mdBlock) {
+    mdBlock.hidden = true;
+  }
+  modal.hidden = false;
+}
+
 function initDashboardUrlState() {
   if (document.body.dataset.urlStateBound === "true") return;
   document.body.dataset.urlStateBound = "true";
   document.addEventListener("click", (event) => {
+    const embedTrigger = event.target.closest("[data-embed-chart]");
+    if (embedTrigger) {
+      event.preventDefault();
+      openEmbedModal(embedTrigger);
+      return;
+    }
+
+    const embedCloser = event.target.closest("[data-embed-close]");
+    if (embedCloser) {
+      event.preventDefault();
+      closeEmbedModal();
+      return;
+    }
+
+    const embedCopyButton = event.target.closest(".embed-snippet-copy");
+    if (embedCopyButton) {
+      event.preventDefault();
+      const targetId = embedCopyButton.dataset.embedCopy;
+      const pre = targetId && document.getElementById(targetId);
+      if (!pre) return;
+      navigator.clipboard.writeText(pre.textContent || "").then(() => {
+        embedCopyButton.classList.add("copied");
+        setTimeout(() => embedCopyButton.classList.remove("copied"), 1400);
+      }).catch((error) => console.warn(`Embed copy failed: ${error.message}`));
+      return;
+    }
+
     const copyButton = event.target.closest("[data-copy-link]");
     if (copyButton) {
       event.preventDefault();
@@ -2926,6 +3148,9 @@ function initDashboardUrlState() {
       btn.classList.add("copied");
       setTimeout(() => btn.classList.remove("copied"), 1400);
     }).catch((error) => console.warn(`Cite copy failed: ${error.message}`));
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeEmbedModal();
   });
   window.addEventListener("popstate", () => {
     if (lastKnownData) renderDashboard(lastKnownData, { preserveTrainingState: true, skipUrlState: true });
