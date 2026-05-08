@@ -1048,7 +1048,10 @@ function updateTrainingPulseState(data, preserve = false) {
     stagnantActivePolls = 0;
   }
   const fresh = ageSeconds <= 120;
-  const live = Boolean(active && fresh && (advanced || (lastActiveStep !== null && stagnantActivePolls < 2)));
+  // Optimistic on first load: if active+fresh and we haven't seen any prior step yet,
+  // assume live. Subsequent polls flip back to idle if no advance after 2 stagnant polls.
+  const firstLoad = lastActiveStep === null;
+  const live = Boolean(active && fresh && (advanced || firstLoad || stagnantActivePolls < 2));
   trainingPulseState = {
     activeRunName: active?.name || null,
     advanced,
@@ -2462,7 +2465,13 @@ function trainingProgressHtml(run) {
 function renderHero(data) {
   const active = activeRunFrom(data);
   if (!active) return;
-  document.getElementById("hero-active-status").textContent = active.active ? `${active.history?.title || active.label || active.name} is training right now` : (active.history?.status || "active run");
+  // Single source of truth for active/idle is the animated chip on the
+  // title line. Hide the verbose "is training right now" text duplicate.
+  const heroStatus = document.getElementById("hero-active-status");
+  if (heroStatus) {
+    heroStatus.textContent = active.active ? "" : (active.history?.status || "");
+    heroStatus.parentElement.style.display = active.active ? "none" : "";
+  }
   document.getElementById("hero-active-title").innerHTML = `${escapeHtml(active.label || active.name)} ${trainingIndicatorHtml(active)}`;
   const latest = active.latest_metrics || {};
   document.getElementById("hero-active-meta").innerHTML = `step ${Number(active.latest_step || 0).toLocaleString()} / loss ${fmtNumber(latest.loss_total ?? latest.loss, 5)} ${directionHtml("loss_total")}`;
