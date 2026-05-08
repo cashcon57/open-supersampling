@@ -34,8 +34,19 @@ add_executable(test_oss_cuda
   test_preprocess.cu
   test_build_pairs.cu
   test_rasterize.cu
+)
+set(OSS_CUDA_TEST_SOURCES
   "${OSS_CUDA_SRC}/rasterizer_fwd.cu"
 )
+if(EXISTS "${OSS_CUDA_SRC}/rasterizer_bwd.cu")
+  list(APPEND OSS_CUDA_TEST_SOURCES
+    test_rasterize_backward.cu
+    "${OSS_CUDA_SRC}/rasterizer_bwd.cu"
+  )
+else()
+  message(WARNING "Skipping backward rasterizer gtest: ${OSS_CUDA_SRC}/rasterizer_bwd.cu not found")
+endif()
+target_sources(test_oss_cuda PRIVATE ${OSS_CUDA_TEST_SOURCES})
 
 target_compile_definitions(test_oss_cuda PRIVATE OSS_CUDA_KERNELS_ONLY)
 target_include_directories(test_oss_cuda PRIVATE

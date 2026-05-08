@@ -12,6 +12,8 @@
 #define OSS_F_CHUNK 16
 #define OSS_RASTER_BLOCK 256
 
+constexpr float kMinScale = 1.0e-6f;
+
 __global__ void preprocess_gaussians(
     int N, int H, int W, int tile_size, int num_tiles_x, int num_tiles_y,
     const float2* __restrict__ xy,
@@ -40,4 +42,19 @@ void rasterize_sum(
     const float3* __restrict__ conic,
     const float*  __restrict__ feat,
     float*        __restrict__ out
+);
+
+__global__ __launch_bounds__(OSS_RASTER_BLOCK, 4)
+void rasterize_backward(
+    int H, int W, int num_tiles_x, int num_tiles_y,
+    int F_chunk, int F_offset, int F_total,
+    const int*    __restrict__ gaussian_idx_sorted,
+    const int*    __restrict__ tile_offsets,
+    const float2* __restrict__ xy,
+    const float3* __restrict__ conic,
+    const float*  __restrict__ feat,
+    const float*  __restrict__ grad_out,
+    float2*       __restrict__ d_xy,
+    float3*       __restrict__ d_conic,
+    float*        __restrict__ d_feat
 );

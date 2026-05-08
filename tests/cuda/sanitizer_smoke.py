@@ -1,4 +1,4 @@
-"""Compute Sanitizer smoke for the Phase 2c rasterizer."""
+"""Compute Sanitizer smoke for the Phase 3a rasterizer."""
 
 from pathlib import Path
 import sys
@@ -41,14 +41,20 @@ def _run_shape(n: int, h: int, w: int, f: int) -> None:
     xy = xy_cpu.to(device)
     scale = scale_cpu.to(device)
     rot = rot_cpu.to(device)
-    feat = feat_cpu.to(device)
+    feat = feat_cpu.to(device).requires_grad_(True)
 
     from oss.cuda.oss_cuda import rasterize_gaussians
 
     out = rasterize_gaussians(xy, scale, rot, feat, h, w, 16, True)
+    grad_out = torch.ones(out.shape, dtype=out.dtype).to(device)
+    out.backward(grad_out)
     torch.cuda.synchronize()
     assert out.shape == (f, h, w)
     assert torch.isfinite(out.cpu()).all()
+    assert feat.grad is not None
+    assert torch.isfinite(feat.grad.cpu()).all()
+    d_feat_sum = feat.grad.detach().cpu().sum().item()
+    print(f"smoke backward d_feat sum: {d_feat_sum:.6f}")
 
 
 def main() -> None:

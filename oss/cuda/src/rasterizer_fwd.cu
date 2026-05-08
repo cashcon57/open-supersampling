@@ -13,8 +13,6 @@
 
 namespace {
 
-constexpr float kMinScale = 1.0e-6f;
-
 __device__ __forceinline__ float clamp_min_preserve_nan(float v, float lo) {
     return v < lo ? lo : v;
 }
@@ -357,7 +355,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, int64_t> pair_constructi
     return std::make_tuple(gid_sorted, tile_offsets, conic, total_pairs);
 }
 
-torch::Tensor rasterize_forward_cuda(
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> rasterize_forward_cuda(
     torch::Tensor xy,
     torch::Tensor scale,
     torch::Tensor rot,
@@ -403,46 +401,51 @@ torch::Tensor rasterize_forward_cuda(
         "full-frame raster pair count exceeds int32 range"
     );
 
-    auto out = torch::zeros({F_total, h, w}, feat.options().dtype(torch::kFloat32));
-    if (N == 0 || F_total == 0 || h == 0 || w == 0) {
-        return out;
-    }
-
     auto f32_options = xy.options().dtype(torch::kFloat32);
     auto i32_options = xy.options().dtype(torch::kInt32);
     torch::Tensor conic = torch::empty({N, 3}, f32_options);
-    torch::Tensor aabb = torch::empty({N, 4}, i32_options);
-    torch::Tensor pair_count = torch::empty({N}, i32_options);
+    auto out = torch::zeros({F_total, h, w}, feat.options().dtype(torch::kFloat32));
 
-    const dim3 preprocess_block(OSS_PREPROCESS_BLOCK);
-    const dim3 preprocess_grid((N + OSS_PREPROCESS_BLOCK - 1) / OSS_PREPROCESS_BLOCK);
-    preprocess_gaussians<<<preprocess_grid, preprocess_block>>>(
-        N, h, w, OSS_TILE_SIZE, num_tiles_x, num_tiles_y,
-        reinterpret_cast<const float2*>(xy.data_ptr<float>()),
-        reinterpret_cast<const float2*>(scale.data_ptr<float>()),
-        rot.data_ptr<float>(),
-        reinterpret_cast<float3*>(conic.data_ptr<float>()),
-        reinterpret_cast<int4*>(aabb.data_ptr<int>()),
-        pair_count.data_ptr<int>()
-    );
-    C10_CUDA_CHECK(cudaGetLastError());
+    if (N > 0) {
+        torch::Tensor aabb = torch::empty({N, 4}, i32_options);
+        torch::Tensor pair_count = torch::empty({N}, i32_options);
+
+        const dim3 preprocess_block(OSS_PREPROCESS_BLOCK);
+        const dim3 preprocess_grid((N + OSS_PREPROCESS_BLOCK - 1) / OSS_PREPROCESS_BLOCK);
+        preprocess_gaussians<<<preprocess_grid, preprocess_block>>>(
+            N, h, w, OSS_TILE_SIZE, num_tiles_x, num_tiles_y,
+            reinterpret_cast<const float2*>(xy.data_ptr<float>()),
+            reinterpret_cast<const float2*>(scale.data_ptr<float>()),
+            rot.data_ptr<float>(),
+            reinterpret_cast<float3*>(conic.data_ptr<float>()),
+            reinterpret_cast<int4*>(aabb.data_ptr<int>()),
+            pair_count.data_ptr<int>()
+        );
+        C10_CUDA_CHECK(cudaGetLastError());
+    }
 
     // The Phase 2c reference sums the full Gaussian tail, while the Phase 2b
     // pair-construction helper keeps the 3-sigma tile AABB contract. Use a
     // full-frame tile map here so forward equivalence remains exact.
     const int64_t total_pairs = static_cast<int64_t>(N) * num_tiles;
     torch::Tensor gid_sorted = torch::empty({total_pairs}, i32_options);
-    torch::Tensor tile_offsets = torch::empty({num_tiles + 1}, i32_options);
-    const int full_pairs_threads = static_cast<int>(std::max(total_pairs, num_tiles + 1));
-    const dim3 full_pairs_block(OSS_PREPROCESS_BLOCK);
-    const dim3 full_pairs_grid((full_pairs_threads + OSS_PREPROCESS_BLOCK - 1) / OSS_PREPROCESS_BLOCK);
-    build_full_tile_pairs<<<full_pairs_grid, full_pairs_block>>>(
-        N,
-        static_cast<int>(num_tiles),
-        gid_sorted.data_ptr<int>(),
-        tile_offsets.data_ptr<int>()
-    );
-    C10_CUDA_CHECK(cudaGetLastError());
+    torch::Tensor tile_offsets = torch::zeros({num_tiles + 1}, i32_options);
+    if (N > 0 && num_tiles > 0) {
+        const int full_pairs_threads = static_cast<int>(std::max(total_pairs, num_tiles + 1));
+        const dim3 full_pairs_block(OSS_PREPROCESS_BLOCK);
+        const dim3 full_pairs_grid((full_pairs_threads + OSS_PREPROCESS_BLOCK - 1) / OSS_PREPROCESS_BLOCK);
+        build_full_tile_pairs<<<full_pairs_grid, full_pairs_block>>>(
+            N,
+            static_cast<int>(num_tiles),
+            gid_sorted.data_ptr<int>(),
+            tile_offsets.data_ptr<int>()
+        );
+        C10_CUDA_CHECK(cudaGetLastError());
+    }
+
+    if (N == 0 || F_total == 0 || h == 0 || w == 0) {
+        return std::make_tuple(out, gid_sorted, tile_offsets, conic);
+    }
 
     const dim3 grid(num_tiles_x, num_tiles_y);
     const dim3 block(OSS_TILE_SIZE, OSS_TILE_SIZE);
@@ -463,6 +466,6 @@ torch::Tensor rasterize_forward_cuda(
         C10_CUDA_CHECK(cudaGetLastError());
     }
 
-    return out;
+    return std::make_tuple(out, gid_sorted, tile_offsets, conic);
 }
 #endif

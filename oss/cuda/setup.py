@@ -29,12 +29,16 @@ if CUDA_HOME:
 
 setup(
     name="oss_cuda",
-    version="0.2.0",
+    version="0.3.0+phase3a",
     packages=["oss_cuda"],
     ext_modules=[
         CUDAExtension(
             name="oss_cuda._C",
-            sources=["src/bindings.cpp", "src/rasterizer_fwd.cu"],
+            sources=[
+                "src/bindings.cpp",
+                "src/rasterizer_fwd.cu",
+                "src/rasterizer_bwd.cu",
+            ],
             include_dirs=INCLUDE_DIRS,
             extra_compile_args={
                 "cxx": ["-O3", "-std=c++17", "-fPIC"],
