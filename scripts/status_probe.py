@@ -23,8 +23,8 @@ SERVICE_ORDER = ("trainer", "watcher", "worker", "r2", "dns")
 
 TOOLTIPS = {
     "trainer": (
-        "Background process at /Users/cashconway/OpenSuperSampling trains the "
-        "v6.1 SRCNN model on the 3080 Ti and emits metrics.json every step."
+        "Background trainer process on the 3080 Ti host emits metrics.json every "
+        "step into the active run directory; that's what this row reflects."
     ),
     "watcher": (
         "Loop in scripts/watch_and_publish.sh that rebuilds data.json from "

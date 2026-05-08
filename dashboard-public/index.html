@@ -1154,6 +1154,51 @@
     .live-indicator.stale { color: #facc15; }
     .live-indicator.stale .ascii-spinner { color: #fbbf24; }
     .live-indicator.idle { color: #a1a1aa; }
+    .live-indicator.stopped { color: #fda4af; border-color: rgba(244,114,182,0.55); }
+    .live-indicator.stopped .ascii-spinner { color: #fb7185; }
+    #hero-best-card { transition: border-color 120ms ease; }
+    #hero-best-card:hover, #hero-best-card:focus-within { border-color: rgba(34,211,238,0.55); }
+    .hero-best-compare {
+      position: absolute; left: 0; right: 0; top: 100%;
+      z-index: 30; margin-top: 6px; padding: 10px 12px;
+      background: rgba(9,9,11,0.98); border: 1px solid rgba(63,63,70,0.9);
+      border-radius: 6px; box-shadow: 0 12px 28px rgba(0,0,0,0.45);
+      font-size: 12px; color: #d4d4d8;
+      opacity: 0; pointer-events: none; transform: translateY(-3px);
+      transition: opacity 120ms ease, transform 120ms ease;
+    }
+    #hero-best-card:hover .hero-best-compare,
+    #hero-best-card:focus-within .hero-best-compare {
+      opacity: 1; pointer-events: auto; transform: translateY(0);
+    }
+    .hero-best-compare-title { color: #a1a1aa; margin-bottom: 6px; }
+    .hero-best-compare-table { width: 100%; border-collapse: collapse; font-family: ui-monospace, monospace; }
+    .hero-best-compare-table th, .hero-best-compare-table td { padding: 3px 6px; text-align: left; }
+    .hero-best-compare-table th.num, .hero-best-compare-table td.num { text-align: right; }
+    .hero-best-compare-table thead th { color: #71717a; font-weight: 500; border-bottom: 1px solid rgba(63,63,70,0.6); }
+    .hero-best-compare-table tr.is-best td { color: #6ee7b7; font-weight: 600; }
+    .hero-best-compare-table tr.is-bicubic td { color: #fbbf24; }
+    .hero-best-compare-note { margin-top: 6px; color: #71717a; font-size: 11px; line-height: 1.45; }
+    .hero-eta-banner {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+      margin-top: 10px; padding: 8px 12px;
+      border: 1px solid rgba(34,211,238,0.35); border-radius: 6px;
+      background: linear-gradient(90deg, rgba(34,211,238,0.06), rgba(167,139,250,0.06));
+      font-size: 13px; color: #e4e4e7;
+    }
+    .hero-eta-banner[hidden] { display: none; }
+    .hero-eta-banner .eta-label { color: #67e8f9; text-transform: uppercase; font-size: 11px; letter-spacing: 0.06em; }
+    .hero-eta-banner .eta-value { font-family: ui-monospace, monospace; font-weight: 600; color: #f4f4f5; }
+    .hero-eta-banner .eta-cta {
+      margin-left: auto; padding: 4px 10px;
+      border: 1px solid rgba(167,139,250,0.55); border-radius: 4px;
+      color: #c4b5fd; text-decoration: none; font-weight: 500;
+      transition: background 120ms ease, color 120ms ease;
+    }
+    .hero-eta-banner .eta-cta:hover, .hero-eta-banner .eta-cta:focus-visible {
+      background: rgba(167,139,250,0.18); color: #e9d5ff; outline: none;
+    }
+    .hero-eta-banner .eta-sub { color: #a1a1aa; font-size: 11px; flex-basis: 100%; }
     .terminal-cursor { animation: step-blink 1s steps(1, end) infinite; color: var(--oss-accent); will-change: opacity; }
     .convergence-progress { margin-top: 8px; }
     .progress-track {
@@ -1287,7 +1332,7 @@
         <div class="max-w-4xl">
           <img class="oss-logo" src="oss-logo.svg" alt="Open Super Sampling">
           <p class="mt-4 text-xs font-semibold uppercase tracking-wide text-cyan-300">OpenSuperSampling</p>
-          <h1 class="mt-2 text-3xl font-semibold tracking-normal text-zinc-50 sm:text-4xl" data-text>v6.1 Pico is training right now</h1>
+          <h1 id="page-headline" class="mt-2 text-3xl font-semibold tracking-normal text-zinc-50 sm:text-4xl" data-text>OpenSuperSampling — vendor-neutral SR + frame extrapolation</h1>
           <p class="mt-3 max-w-3xl text-sm leading-6 text-zinc-300" data-subtext>OpenSuperSampling is training a unified game reconstruction pipeline for super-resolution and frame extrapolation from one temporal model.</p>
           <p class="mt-2 max-w-3xl text-xs leading-5 text-zinc-500" data-dim>v6 notes: HAT-Tiny is the small HAT backbone; GS-STVSR and EWA describe the temporal canvas math; Net2Net is the expansion path; Charbonnier trains regression; Bicubic, DLSS, FSR, and XeSS are comparison anchors; PSNR and LPIPS stay as quality gauges; SDR ships first, HDR follows.</p>
           <div class="mt-4 flex flex-wrap items-center gap-3 text-sm text-zinc-400" data-subtext>
@@ -1356,6 +1401,13 @@
           </div>
         </div>
         <p id="hero-active-meta" class="mt-1 text-sm text-zinc-300" data-subtext>waiting for metrics.json</p>
+        <div id="hero-eta-banner" class="hero-eta-banner" hidden>
+          <span class="eta-label">ETA</span>
+          <span class="eta-value" id="hero-eta-value">—</span>
+          <span id="hero-eta-context" class="text-zinc-400">to reach target step on local 3080 Ti</span>
+          <a class="eta-cta" id="hero-eta-cta" href="https://github.com/sponsors/cashcon57" target="_blank" rel="noopener">Sponsor cloud GPU →</a>
+          <span class="eta-sub" id="hero-eta-sub">Sponsorships fund cloud GPU rentals — every $1 ≈ ~3 min on an A100.</span>
+        </div>
         <details id="hero-cite" class="hero-cite" hidden>
           <summary>Cite this result</summary>
           <div class="cite-grid">
@@ -1372,29 +1424,37 @@
           </div>
         </details>
       </article>
-      <article class="rounded-md border border-zinc-800 bg-zinc-900/60 p-4" data-surface>
-        <div class="text-sm uppercase text-zinc-500" data-dim>v5-pixel-temporal: measured</div>
-        <div class="mt-2 font-mono text-2xl font-semibold text-emerald-300">25.703 dB</div>
-        <div class="metric-direction" data-direction="higher">↑ higher is better</div>
-        <p class="mt-1 text-sm text-zinc-400" data-subtext>v5-pixel-temporal, LPIPS 0.1666, temporal ratio 0.337x</p>
-        <div class="metric-direction" data-direction="lower">LPIPS ↓ lower is better / temporal ratio ↓ lower is better (smaller frame-to-frame delta)</div>
+      <article id="hero-best-card" class="relative rounded-md border border-zinc-800 bg-zinc-900/60 p-4" data-surface tabindex="0" aria-describedby="hero-best-compare">
+        <div class="flex items-center justify-between gap-2">
+          <div id="hero-best-title" class="text-sm uppercase text-zinc-500" data-dim>Current best model run</div>
+          <span id="hero-best-info" class="text-xs text-zinc-500" data-dim aria-hidden="true">hover for refs</span>
+        </div>
+        <div class="mt-2 grid grid-cols-2 gap-3">
+          <div>
+            <div class="text-xs uppercase text-zinc-500" data-dim>PSNR</div>
+            <div id="hero-best-psnr" class="font-mono text-2xl font-semibold text-emerald-300">— dB</div>
+            <div class="metric-direction" data-direction="higher">↑ higher is better</div>
+          </div>
+          <div>
+            <div class="text-xs uppercase text-zinc-500" data-dim>LPIPS</div>
+            <div id="hero-best-lpips" class="font-mono text-2xl font-semibold text-cyan-300">—</div>
+            <div class="metric-direction" data-direction="lower">↓ lower is better</div>
+          </div>
+        </div>
+        <p id="hero-best-meta" class="mt-2 text-sm text-zinc-400" data-subtext>computing from data.json…</p>
+        <div id="hero-best-compare" class="hero-best-compare" role="tooltip" aria-hidden="true">
+          <div class="hero-best-compare-title">Public-source estimates · TartanAir oldtown is the only OSS-measured row</div>
+          <table class="hero-best-compare-table">
+            <thead><tr><th>Method</th><th class="num">PSNR ↑</th><th class="num">LPIPS ↓</th></tr></thead>
+            <tbody id="hero-best-compare-body"></tbody>
+          </table>
+          <div class="hero-best-compare-note">Industry rows from vendor + Digital Foundry coverage on heterogeneous game content. Not apples-to-apples with OSS held-out batch.</div>
+        </div>
       </article>
       <article id="hero-gpu" class="rounded-md border border-zinc-800 bg-zinc-900/60 p-4" data-surface>
         <div class="text-sm uppercase text-zinc-500" data-dim>GPU usage</div>
         <div class="mt-2 text-sm text-zinc-400" data-subtext>loading GPU status</div>
       </article>
-    </section>
-
-    <div class="terminal-divider" aria-hidden="true"><span class="td-corner">├─ view options ─</span><span class="td-rule"></span><span class="td-corner">─┤</span></div>
-    <section id="view-options" class="rounded-md border border-zinc-800 bg-zinc-900/60 p-4" data-surface aria-labelledby="view-options-title">
-      <div class="flex flex-wrap items-center gap-4 text-sm">
-        <h2 id="view-options-title" class="text-base font-semibold text-zinc-50" data-text>View options</h2>
-        <label class="chart-toggle">
-          <input id="show-industry-refs" type="checkbox">
-          <span>Show industry reference lines</span>
-          <button class="info-btn" data-info-key="industry-refs" type="button" aria-label="What is this?">(i)</button>
-        </label>
-      </div>
     </section>
 
     <div class="terminal-divider" aria-hidden="true"><span class="td-corner">├─ viz strips ─</span><span class="td-rule"></span><span class="td-corner">─┤</span></div>
@@ -2839,7 +2899,19 @@ function activeRunFrom(data) {
     const selected = (data.runs || []).find((run) => run.name === dashboardActiveRunNameOverride);
     if (selected) return selected;
   }
-  return (data.runs || []).find((run) => run.active) || (data.runs || [])[0] || null;
+  // Prefer runs that are active AND not in the stopped-early registry.
+  // A run flagged active=true but listed in STOPPED_EARLY_REASONS is a
+  // killed-but-not-yet-cleaned-up state — don't surface it as "currently
+  // training" in the hero card.
+  const runs = data.runs || [];
+  const stoppedNames = (typeof STOPPED_EARLY_REASONS !== "undefined")
+    ? Object.keys(STOPPED_EARLY_REASONS) : [];
+  const liveNotStopped = runs.find((run) =>
+    run.active && !stoppedNames.includes(run.name)
+  );
+  if (liveNotStopped) return liveNotStopped;
+  // Fallback chain: any active run (even if stopped-early), then any run.
+  return runs.find((run) => run.active) || runs[0] || null;
 }
 
 function visitStorageGet(key) {
@@ -3004,6 +3076,16 @@ function updateTrainingPulseState(data, preserve = false) {
 
 function trainingIndicatorHtml(run) {
   if (!run?.active) return "";
+  // If this run is in the stopped-early registry, show a stopped badge
+  // instead of live/idle/stale — even if data.json still has active=true
+  // (it can lag the actual process state for a few cycles).
+  if (typeof STOPPED_EARLY_REASONS !== "undefined" && STOPPED_EARLY_REASONS[run.name]) {
+    const reason = STOPPED_EARLY_REASONS[run.name];
+    return `<span class="live-indicator stopped" aria-label="run stopped early" title="${escapeHtml(reason.short || "stopped early")}">
+      <span class="ascii-spinner" data-static="true" aria-hidden="true">[xxx]</span>
+      <span>stopped</span>
+    </span>`;
+  }
   const live = trainingPulseState.activeRunName === run.name && trainingPulseState.live;
   const stale = trainingPulseState.activeRunName === run.name && trainingPulseState.fresh === false;
   if (stale) {
@@ -5687,6 +5769,26 @@ function renderHero(data) {
   const active = activeRunFrom(data);
   if (!active) return;
   window.__lastActiveName = active.name;
+  // Update the page headline to reflect actual state — not hardcoded.
+  // States: training-now / stopped / idle / no-active-run.
+  const headline = document.getElementById("page-headline");
+  if (headline) {
+    const stoppedReg = (typeof STOPPED_EARLY_REASONS !== "undefined") ? STOPPED_EARLY_REASONS : {};
+    const liveAndFresh = active.active &&
+                         trainingPulseState.activeRunName === active.name &&
+                         trainingPulseState.live;
+    let text;
+    if (stoppedReg[active.name]) {
+      text = `${active.label || active.name} stopped — ${stoppedReg[active.name].short || "early stop"}`;
+    } else if (liveAndFresh) {
+      text = `${active.label || active.name} is training right now`;
+    } else if (active.active) {
+      text = `${active.label || active.name} (training paused)`;
+    } else {
+      text = `OpenSuperSampling — vendor-neutral SR + frame extrapolation`;
+    }
+    headline.textContent = text;
+  }
   // Single source of truth for active/idle is the animated chip on the
   // title line. Hide the verbose "is training right now" text duplicate.
   const heroStatus = document.getElementById("hero-active-status");
@@ -5718,7 +5820,93 @@ function renderHero(data) {
     document.getElementById("cite-plain").textContent = plain;
   }
   document.getElementById("hero-gpu").innerHTML = gpuPanelHtml(active).replace("rounded-md border ", "");
+  renderHeroBestCard(data);
+  renderHeroEtaBanner(active);
   setupVisitBanner(active);
+}
+
+// Find the best run by max held-out PSNR and populate the hero best-card.
+// Equal prominence for PSNR + LPIPS; on hover, show industry-reference table
+// with the best run highlighted in its computed band.
+function renderHeroBestCard(data) {
+  const titleEl = document.getElementById("hero-best-title");
+  const psnrEl = document.getElementById("hero-best-psnr");
+  const lpipsEl = document.getElementById("hero-best-lpips");
+  const metaEl = document.getElementById("hero-best-meta");
+  const bodyEl = document.getElementById("hero-best-compare-body");
+  if (!titleEl || !psnrEl || !lpipsEl || !metaEl || !bodyEl) return;
+  const runs = (data?.runs || []).filter((run) => Array.isArray(run.score_log) && run.score_log.length);
+  let bestRun = null;
+  let bestRow = null;
+  for (const run of runs) {
+    for (const row of run.score_log) {
+      const psnr = Number(row.model_psnr_mean);
+      if (!Number.isFinite(psnr)) continue;
+      if (!bestRow || psnr > Number(bestRow.model_psnr_mean)) {
+        bestRow = row;
+        bestRun = run;
+      }
+    }
+  }
+  if (!bestRun || !bestRow) {
+    titleEl.textContent = "Current best model run";
+    psnrEl.textContent = "— dB";
+    lpipsEl.textContent = "—";
+    metaEl.textContent = "no held-out scores published yet";
+    bodyEl.innerHTML = "";
+    return;
+  }
+  const psnr = Number(bestRow.model_psnr_mean);
+  const lpips = Number(bestRow.model_lpips_mean);
+  const label = bestRun.label || bestRun.name;
+  const step = Number(bestRow.step || bestRun.latest_step || 0);
+  titleEl.textContent = `Current best · ${label}`;
+  psnrEl.textContent = `${psnr.toFixed(2)} dB`;
+  lpipsEl.textContent = Number.isFinite(lpips) ? lpips.toFixed(4) : "—";
+  metaEl.textContent = `held-out TartanAir oldtown · step ${step.toLocaleString()}`;
+  // Build comparison table — OSS row + every comparisonReferenceLines entry,
+  // sorted by PSNR descending. Highlight OSS best + bicubic anchor.
+  const rows = [
+    { method: `OSS · ${label}`, psnr, lpips: Number.isFinite(lpips) ? lpips : null, isBest: true },
+    ...comparisonReferenceLines.map((ref) => ({
+      method: ref.method,
+      psnr: ref.psnr,
+      lpips: ref.lpips,
+      isBicubic: ref.id === "bicubic",
+    })),
+  ].sort((a, b) => (Number(b.psnr) || -Infinity) - (Number(a.psnr) || -Infinity));
+  bodyEl.innerHTML = rows.map((r) => {
+    const cls = r.isBest ? "is-best" : (r.isBicubic ? "is-bicubic" : "");
+    const psnrCell = Number.isFinite(r.psnr) ? `${Number(r.psnr).toFixed(2)}` : "—";
+    const lpipsCell = Number.isFinite(r.lpips) ? `${Number(r.lpips).toFixed(3)}` : "—";
+    return `<tr class="${cls}"><td>${escapeHtml(r.method)}</td><td class="num">${psnrCell}</td><td class="num">${lpipsCell}</td></tr>`;
+  }).join("");
+}
+
+// ETA banner: show only for active, non-stopped runs that have a computable
+// ETA. Sponsor CTA stays visible to convert curious onlookers into backers.
+function renderHeroEtaBanner(run) {
+  const banner = document.getElementById("hero-eta-banner");
+  const valEl = document.getElementById("hero-eta-value");
+  const ctxEl = document.getElementById("hero-eta-context");
+  if (!banner || !valEl || !ctxEl) return;
+  const stoppedReg = (typeof STOPPED_EARLY_REASONS !== "undefined") ? STOPPED_EARLY_REASONS : {};
+  const eta = run && run.active && !stoppedReg[run.name] ? computeEtaInfo(run) : null;
+  if (!eta || !Number.isFinite(eta.hours) || eta.hours <= 0) {
+    banner.hidden = true;
+    return;
+  }
+  banner.hidden = false;
+  const h = eta.hours;
+  let text;
+  if (h < 1) text = `~${Math.round(h * 60)} minutes`;
+  else if (h < 24) text = `~${h.toFixed(1)} hours`;
+  else text = `~${(h / 24).toFixed(1)} days`;
+  valEl.textContent = text + (eta.estimated ? " (est.)" : "");
+  const target = targetStepsForRun(run);
+  ctxEl.textContent = target > 0
+    ? `to step ${target.toLocaleString()} on local 3080 Ti`
+    : "to current target on local 3080 Ti";
 }
 
 function renderRun(run, index, openByRun = new Map()) {
@@ -5842,7 +6030,14 @@ function renderRun(run, index, openByRun = new Map()) {
       </div>
       <div class="flex min-w-0 flex-col gap-4">
         <article class="chart-card min-w-0 rounded-md border border-zinc-800 bg-zinc-950/25 p-4" ${chartCardAttrs(heldoutChartId)} data-muted-surface>
-          <h3 class="title-with-info text-base font-semibold text-zinc-50" data-text><span>Held-out scores</span>${infoButtonHtml("held-out-psnr")}</h3>
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <h3 class="title-with-info text-base font-semibold text-zinc-50" data-text><span>Held-out scores</span>${infoButtonHtml("held-out-psnr")}</h3>
+            <label class="chart-toggle text-xs">
+              <input class="show-industry-refs" type="checkbox">
+              <span>Industry refs</span>
+              <button class="info-btn" data-info-key="industry-refs" type="button" aria-label="What is this?">(i)</button>
+            </label>
+          </div>
           <div class="metric-direction" data-direction="mixed">PSNR ↑ higher is better / LPIPS ↓ lower is better / temporal ratio ↓ lower is better</div>
           ${heldoutChartBody}
           <div id="${scoreId}" class="mt-3"></div>
@@ -6030,6 +6225,16 @@ function setRetryingState(error, hasLastKnownData) {
 }
 
 function renderDashboard(data, options = {}) {
+  // Normalize: any run in STOPPED_EARLY_REASONS cannot be "active". Source-of-truth
+  // is build_public_dashboard.py RUN_CONFIG, but data.json can lag a few cycles
+  // when a run is stopped — force the override so UI never lies.
+  if (data && Array.isArray(data.runs) && typeof STOPPED_EARLY_REASONS !== "undefined") {
+    for (const run of data.runs) {
+      if (run && STOPPED_EARLY_REASONS[run.name] && run.active) {
+        run.active = false;
+      }
+    }
+  }
   updateTrainingPulseState(data, Boolean(options.preserveTrainingState));
   latestGeneratedAt = data.generated_at;
   lastKnownData = data;
@@ -6058,18 +6263,21 @@ function renderDashboard(data, options = {}) {
 // Persists across page reloads via localStorage. On change, full re-render so
 // every visible run accordion picks up the toggle in its held-out chart.
 function bindIndustryRefsCheckbox() {
-  const cb = document.getElementById("show-industry-refs");
-  if (!cb) return;
-  cb.checked = showIndustryRefs;
-  if (cb._oss_bound) return;
-  cb._oss_bound = true;
-  cb.addEventListener("change", () => {
-    showIndustryRefs = cb.checked;
-    try { window.localStorage.setItem("oss-show-industry-refs", showIndustryRefs ? "1" : "0"); }
-    catch {}
-    if (lastKnownData) {
-      renderDashboard(lastKnownData, { skipUrlState: true, preserveTrainingState: true });
-    }
+  // Per-chart checkboxes (class .show-industry-refs) — all share the same
+  // localStorage-backed flag. Setting one updates all + triggers re-render.
+  const cbs = document.querySelectorAll(".show-industry-refs");
+  cbs.forEach((cb) => {
+    cb.checked = showIndustryRefs;
+    if (cb._oss_bound) return;
+    cb._oss_bound = true;
+    cb.addEventListener("change", () => {
+      showIndustryRefs = cb.checked;
+      try { window.localStorage.setItem("oss-show-industry-refs", showIndustryRefs ? "1" : "0"); }
+      catch {}
+      if (lastKnownData) {
+        renderDashboard(lastKnownData, { skipUrlState: true, preserveTrainingState: true });
+      }
+    });
   });
 }
 

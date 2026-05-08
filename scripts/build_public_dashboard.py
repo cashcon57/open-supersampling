@@ -36,16 +36,16 @@ DASHBOARD_PITCH = (
 
 RUN_CONFIG = {
     "srcnn-v6.1-pico-001": {
-        "active": True,
-        "default_open": True,
+        "active": False,
+        "default_open": False,
         "history_title": "v6.1 Pico",
-        "status": "active, training now",
-        "summary": "current v6.1 Pico run from the 3080 Ti training host",
-        "note": "",
+        "status": "stopped early — stippling regression",
+        "summary": "v6.1 Pico stopped at ~step 14k after stippling artifact got worse during training. Restart as v6.2-pico-002 with v4 spawn architecture.",
+        "note": "Stopped early on 2026-05-08. See memo: docs/superpowers/experiments/2026-05-08-v6.1-pico-001-stopped-stippling-not-fixable-mid-flight.md.",
         "headline": [
-            {"label": "Status", "value": "training now", "caption": "live run"},
-            {"label": "Latest step", "value_from": "latest_step", "caption": "from metrics.json"},
-            {"label": "Loss", "value_from": "loss_total", "caption": "latest total"},
+            {"label": "Status", "value": "stopped", "caption": "early stop, see memo"},
+            {"label": "Last step", "value_from": "latest_step", "caption": "from metrics.json"},
+            {"label": "Loss at stop", "value_from": "loss_total", "caption": "latest total"},
         ],
     },
     "srcnn-v5-pixel-temporal-validated": {
