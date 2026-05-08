@@ -128,7 +128,7 @@ GPU_REMOTE_HOST="${GPU_REMOTE_HOST:-3080ti-windows}"
 GPU_SSH_OPTS="${GPU_SSH_OPTS:--o BatchMode=yes -o ConnectTimeout=5}"
 
 capture_gpu_status() {
-  local active="srcnn-v6.1-pico-001"
+  local active="${OSS_ACTIVE_RUN:-srcnn-v6.2-pico-002}"
   local dst="${STAGING_DIR}/runs/${active}"
   [[ -d "$dst" ]] || return 0
   local csv=""
