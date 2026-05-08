@@ -1698,6 +1698,7 @@ const colors = {
   gold: "#c8a960",
   v4: "#f0b56f",
   v5: "#fbbf24",
+  v62: "#5eead4",
   nvidia: "#8cffc1",
   amd: "#ff7b7b",
   intel: "#7dd3fc",
@@ -4180,6 +4181,13 @@ function comparisonTrajectorySeries(data, options = {}) {
     manifest: "TartanAir oldtown, 64 frames",
     color: colors.psnr,
   });
+  const v62Run = byName.get("srcnn-v6.2-pico-002");
+  const v62 = comparisonPointsFromScoreLog(v62Run, {
+    name: "v6.2",
+    label_full: "v6.2 Pico on TartanAir oldtown",
+    manifest: "TartanAir oldtown, 64 frames",
+    color: colors.v62,
+  });
   const series = [
     {
       id: "v4-srgd",
@@ -4216,12 +4224,22 @@ function comparisonTrajectorySeries(data, options = {}) {
       active: Boolean(v61Run?.active),
       points: v61,
     },
+    {
+      id: "v62",
+      label: "v6.2",
+      color: colors.v62,
+      active: Boolean(v62Run?.active),
+      points: v62,
+    },
   ].filter((item) => item.points.length);
   const visibleSeries = includeBadData
     ? series
     : series.filter((item) => !isBadDataSeries(item));
   if (v61Run?.active && v61.length) {
     v61[v61.length - 1].live = true;
+  }
+  if (v62Run?.active && v62.length) {
+    v62[v62.length - 1].live = true;
   }
   if (v5.length === 1) {
     v5[0].markerLabel = `v5 final · ${formatStepTick(v5[0].step)} steps`;
