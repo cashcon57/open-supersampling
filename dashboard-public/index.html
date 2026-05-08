@@ -163,6 +163,67 @@
     .viz-button:hover { transform: translateY(-3px); filter: saturate(1.08); }
     .viz-overlay { position: absolute; inset: auto 0 0 0; display: flex; justify-content: center; background: linear-gradient(to top, rgba(0,0,0,0.78), rgba(0,0,0,0)); padding: 1.3rem 0.5rem 0.45rem; color: #ecfeff; opacity: 0; transition: opacity 160ms ease; pointer-events: none; }
     .viz-button:hover .viz-overlay, .viz-button:focus-visible .viz-overlay { opacity: 1; }
+    .viz-compare-controls {
+      display: grid;
+      gap: 0.5rem;
+    }
+    .viz-compare-chip-row {
+      display: flex;
+      gap: 0.35rem;
+      overflow-x: auto;
+      padding-bottom: 0.1rem;
+      scrollbar-width: thin;
+    }
+    .viz-column-chip {
+      display: inline-flex;
+      min-height: 2rem;
+      flex: 0 0 auto;
+      align-items: center;
+      gap: 0.35rem;
+      border: 1px solid rgba(113, 113, 122, 0.55);
+      border-radius: 4px;
+      background: rgba(4, 8, 5, 0.82);
+      padding: 0 0.55rem;
+      color: #d4d4d8;
+      font-family: "JetBrains Mono", ui-monospace, monospace;
+      font-size: 0.7rem;
+      line-height: 1;
+      white-space: nowrap;
+    }
+    .viz-column-chip[aria-checked="true"] {
+      border-color: rgba(110, 231, 183, 0.72);
+      background: rgba(6, 78, 59, 0.35);
+      color: var(--neutral);
+      box-shadow: inset 0 0 0 1px rgba(110, 231, 183, 0.15);
+    }
+    .viz-chip-box {
+      display: inline-grid;
+      width: 0.78rem;
+      height: 0.78rem;
+      place-items: center;
+      border: 1px solid currentColor;
+      border-radius: 2px;
+      font-size: 0.65rem;
+      line-height: 1;
+    }
+    .viz-column-chip[aria-checked="true"] .viz-chip-box::before { content: "✓"; }
+    .viz-compare-cta {
+      width: fit-content;
+      min-height: 2rem;
+      border-radius: 4px;
+      border: 1px solid rgba(110, 231, 183, 0.65);
+      background: rgba(6, 78, 59, 0.28);
+      padding: 0 0.75rem;
+      color: var(--neutral);
+      font-family: "JetBrains Mono", ui-monospace, monospace;
+      font-size: 0.72rem;
+    }
+    .viz-compare-cta:disabled {
+      cursor: not-allowed;
+      border-color: rgba(113, 113, 122, 0.48);
+      background: rgba(24, 24, 27, 0.55);
+      color: #a1a1aa;
+    }
     .metric-card { transform-origin: center; transition: border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease, background-color 180ms ease; }
     .metric-card:hover { border-color: rgba(34,211,238,0.65); transform: translateY(-1px); }
     .metric-card.expanded { border-color: rgba(34,211,238,0.8); box-shadow: 0 0 0 1px rgba(34,211,238,0.2), 0 16px 44px rgba(8,145,178,0.12); transform: scale(1.015); }
@@ -601,6 +662,138 @@
       font-size: 0.72rem;
       line-height: 1.25;
     }
+    .viz-compare-dialog {
+      width: 100vw;
+      max-width: none;
+      height: 100dvh;
+      max-height: none;
+      margin: 0;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: inherit;
+    }
+    .viz-compare-dialog::backdrop { background: rgba(0, 0, 0, 0.88); }
+    .viz-compare-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 9000;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      gap: 12px;
+      padding: max(1rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right)) max(1rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
+      background: rgba(0, 0, 0, 0.92);
+      backdrop-filter: blur(8px);
+    }
+    .viz-compare-toolbar {
+      display: flex;
+      min-width: 0;
+      align-items: center;
+      gap: 0.75rem;
+      padding-right: 4rem;
+      color: #d4d4d8;
+    }
+    .viz-compare-title {
+      min-width: 0;
+      flex: 1 1 auto;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-family: "JetBrains Mono", ui-monospace, monospace;
+      font-size: 0.8rem;
+    }
+    .viz-compare-row-toggle {
+      display: inline-flex;
+      border: 1px solid rgba(113, 113, 122, 0.7);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    .viz-compare-row-button {
+      min-height: 2rem;
+      border: 0;
+      background: rgba(24, 24, 27, 0.8);
+      padding: 0 0.65rem;
+      color: #d4d4d8;
+      font-family: "JetBrains Mono", ui-monospace, monospace;
+      font-size: 0.72rem;
+    }
+    .viz-compare-row-button[aria-pressed="true"] {
+      background: rgba(6, 78, 59, 0.6);
+      color: var(--neutral);
+    }
+    .viz-compare-grid {
+      display: grid;
+      min-height: 0;
+      gap: 12px;
+    }
+    .viz-compare-grid[data-cols="2"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .viz-compare-grid[data-cols="3"] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .viz-compare-grid[data-cols="4"] { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); }
+    .viz-compare-grid[data-cols="5"] { grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); }
+    .viz-compare-grid[data-cols="6"],
+    .viz-compare-grid[data-cols="7"] { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+    .viz-compare-panel {
+      position: relative;
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+      border: 1px solid #404040;
+      border-radius: 6px;
+      background: #0a0a0a;
+    }
+    .viz-compare-panel-stage {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      touch-action: none;
+    }
+    .viz-compare-panel-image {
+      width: 100%;
+      height: 100%;
+      cursor: grab;
+      background-repeat: no-repeat;
+      image-rendering: auto;
+      transform-origin: center center;
+      transition: transform 80ms ease-out;
+      user-select: none;
+      will-change: transform;
+    }
+    .viz-compare-panel-stage:active .viz-compare-panel-image { cursor: grabbing; }
+    .viz-compare-panel-label {
+      position: absolute;
+      top: 8px;
+      left: 12px;
+      z-index: 1;
+      max-width: calc(100% - 24px);
+      overflow: hidden;
+      border: 1px solid rgba(212, 212, 216, 0.22);
+      border-radius: 4px;
+      background: rgba(0, 0, 0, 0.65);
+      color: #d4d4d8;
+      padding: 4px 10px;
+      font-family: "JetBrains Mono", ui-monospace, monospace;
+      font-size: 12px;
+      line-height: 1.2;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .viz-compare-dismiss {
+      position: fixed;
+      top: max(16px, env(safe-area-inset-top));
+      right: max(16px, env(safe-area-inset-right));
+      z-index: 9001;
+      min-width: 3rem;
+      min-height: 3rem;
+      border-radius: 9999px;
+      border: 1px solid rgba(212, 212, 216, 0.45);
+      background: rgba(24, 24, 27, 0.85);
+      color: #f4f4f5;
+      font-size: 1.75rem;
+      line-height: 1;
+    }
     .score-scroll { scrollbar-width: thin; }
     .live-indicator { display: inline-flex; align-items: center; gap: 0.35rem; border: 1px solid rgba(113,113,122,0.55); padding: 0.08rem 0.42rem; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; font-size: 0.72rem; font-weight: 600; line-height: 1.2; vertical-align: middle; }
     .live-indicator.live { border-color: rgba(52,211,153,0.7); color: #6ee7b7; }
@@ -682,6 +875,24 @@
       .viz-frame, .viz-frame img { width: 18rem; }
       .lightbox-tool { min-height: 3rem; }
       .magnifier-readout { display: none; }
+      .viz-compare-backdrop {
+        overflow-y: auto;
+        padding-top: max(4rem, env(safe-area-inset-top));
+      }
+      .viz-compare-toolbar {
+        align-items: flex-start;
+        flex-direction: column;
+        padding-right: 0;
+      }
+      .viz-compare-grid,
+      .viz-compare-grid[data-cols] {
+        grid-template-columns: 1fr;
+        grid-template-rows: none;
+        overflow: visible;
+      }
+      .viz-compare-panel {
+        min-height: min(72dvh, 34rem);
+      }
       .info-tooltip.is-sheet {
         left: 0 !important;
         right: 0;
@@ -856,8 +1067,21 @@
       <div id="lightbox-caption" class="lightbox-caption"></div>
     </div>
   </dialog>
+  <dialog id="viz-compare-modal" class="viz-compare-dialog" aria-label="Visualization column comparison viewer">
+    <div id="viz-compare-backdrop" class="viz-compare-backdrop">
+      <div class="viz-compare-toolbar">
+        <div id="viz-compare-title" class="viz-compare-title"></div>
+        <div class="viz-compare-row-toggle" aria-label="Comparison row">
+          <button class="viz-compare-row-button" type="button" data-viz-compare-row="0" aria-pressed="true">seq A</button>
+          <button class="viz-compare-row-button" type="button" data-viz-compare-row="1" aria-pressed="false">seq B</button>
+        </div>
+      </div>
+      <div id="viz-compare-grid" class="viz-compare-grid"></div>
+      <button id="viz-compare-dismiss" class="viz-compare-dismiss" type="button" aria-label="Close comparison viewer">&times;</button>
+    </div>
+  </dialog>
 
-<script>
+  <script>
 "use strict";
 
 const colors = {
@@ -923,6 +1147,23 @@ let selectedCompareB = "";
 const gesturePointers = new Map();
 let imageTransform = { scale: 1, x: 0, y: 0 };
 let gestureStart = null;
+const vizCompareSelections = new Map();
+const compareState = {
+  panX: 0,
+  panY: 0,
+  zoom: 1,
+  minZoom: 1,
+  maxZoom: 8,
+  selectedColumns: [],
+  rowIndex: 0,
+  rowCount: 2,
+  columnCount: 7,
+  vizUrl: null,
+  naturalWidth: 0,
+  naturalHeight: 0,
+  pointers: new Map(),
+  gestureStart: null,
+};
 let lastTap = { time: 0, x: 0, y: 0 };
 let lastActiveStep = null;
 let trainingPulseState = {
@@ -3011,6 +3252,92 @@ function renderScoreTable(host, run) {
   host.innerHTML = `<div class="score-scroll overflow-x-auto rounded border border-zinc-800"><table class="min-w-full text-sm text-zinc-300"><thead class="bg-zinc-950/50 text-xs uppercase text-zinc-500"><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
+function vizColumnChipLabel(label) {
+  const normalized = String(label || "").replace(/\|/g, "").trim();
+  const lower = normalized.toLowerCase();
+  if (lower === "lr-bilinear" || lower === "lr") return "LR";
+  if (lower === "v5-pixel-temporal") return "v5";
+  if (lower.startsWith("err v5") || lower.includes("err-v5")) return "err-v5";
+  if (lower.startsWith("err v6.1") || lower.includes("err-v6.1")) return "err-v6.1";
+  if (lower.startsWith("err v6") || lower.includes("err-v6")) return "err-v6";
+  return normalized;
+}
+
+function vizCompareSelectionKey(run, file) {
+  return `${run?.name || "run"}::${file || "latest"}`;
+}
+
+function latestVizFile(run) {
+  return (run?.viz_pngs || []).slice().sort((a, b) => stepFromName(a) - stepFromName(b)).at(-1) || "";
+}
+
+function renderVizCompareControls(host, run) {
+  if (!host) return;
+  host.replaceChildren();
+  const columns = (run?.viz_columns || []).filter(Boolean);
+  const file = latestVizFile(run);
+  if (columns.length < 2 || !file) return;
+  const key = vizCompareSelectionKey(run, file);
+  const selected = vizCompareSelections.get(key) || new Set();
+  vizCompareSelections.set(key, selected);
+
+  const chipRow = document.createElement("div");
+  chipRow.className = "viz-compare-chip-row";
+  chipRow.dataset.vizCompareChips = "true";
+  chipRow.setAttribute("aria-label", "Viz columns to compare");
+
+  const cta = document.createElement("button");
+  cta.type = "button";
+  cta.className = "viz-compare-cta";
+  cta.dataset.vizCompareCta = "true";
+
+  const sync = () => {
+    chipRow.querySelectorAll(".viz-column-chip").forEach((button) => {
+      const checked = selected.has(Number(button.dataset.columnIndex));
+      button.setAttribute("aria-checked", checked ? "true" : "false");
+    });
+    cta.disabled = selected.size < 2;
+    cta.textContent = `Compare ${selected.size} selected`;
+  };
+
+  columns.forEach((column, index) => {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "viz-column-chip";
+    chip.dataset.columnIndex = String(index);
+    chip.dataset.columnLabel = column;
+    chip.setAttribute("role", "checkbox");
+    chip.setAttribute("aria-label", `Compare ${column}`);
+    const box = document.createElement("span");
+    box.className = "viz-chip-box";
+    box.setAttribute("aria-hidden", "true");
+    const text = document.createElement("span");
+    text.textContent = vizColumnChipLabel(column);
+    chip.append(box, text);
+    chip.addEventListener("click", () => {
+      if (selected.has(index)) selected.delete(index);
+      else selected.add(index);
+      sync();
+    });
+    chipRow.appendChild(chip);
+  });
+
+  cta.addEventListener("click", () => {
+    if (selected.size < 2) return;
+    const selectedColumns = Array.from(selected)
+      .sort((a, b) => a - b)
+      .map((index) => ({ index, label: columns[index], shortLabel: vizColumnChipLabel(columns[index]) }));
+    openCompareModal(selectedColumns, runUrl(run, file), {
+      runLabel: run.label || run.name,
+      file,
+      columnCount: columns.length,
+    });
+  });
+
+  host.append(chipRow, cta);
+  sync();
+}
+
 function renderVizStrip(host, run, limit) {
   const files = (run && run.viz_pngs ? run.viz_pngs : []).slice(-limit).reverse();
   const orderedFiles = (run && run.viz_pngs ? run.viz_pngs : [])
@@ -3055,6 +3382,222 @@ function renderVizStrip(host, run, limit) {
       openLightbox(run, orderedFiles, button.dataset.file || orderedFiles[0]);
     });
   });
+}
+
+function cssUrl(value) {
+  return String(value || "").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+function compareTransform() {
+  return `translate3d(${compareState.panX}px, ${compareState.panY}px, 0) scale(${compareState.zoom})`;
+}
+
+function applyCompareTransform() {
+  document.querySelectorAll(".viz-compare-panel-image").forEach((image) => {
+    image.style.transform = compareTransform();
+  });
+}
+
+function compareBackgroundPosition(columnIndex) {
+  const x = compareState.columnCount > 1 ? (columnIndex / (compareState.columnCount - 1)) * 100 : 0;
+  const y = compareState.rowCount > 1 ? (compareState.rowIndex / (compareState.rowCount - 1)) * 100 : 0;
+  return `${x}% ${y}%`;
+}
+
+function updateCompareRow() {
+  document.querySelectorAll("[data-viz-compare-row]").forEach((button) => {
+    button.setAttribute("aria-pressed", Number(button.dataset.vizCompareRow) === compareState.rowIndex ? "true" : "false");
+  });
+  document.querySelectorAll(".viz-compare-panel-image").forEach((image) => {
+    image.style.backgroundPosition = compareBackgroundPosition(Number(image.dataset.columnIndex || 0));
+  });
+}
+
+function updateCompareImageSizing() {
+  const cropWidth = compareState.naturalWidth / compareState.columnCount;
+  const cropHeight = compareState.naturalHeight / compareState.rowCount;
+  const cropAspect = cropWidth && cropHeight ? cropWidth / cropHeight : 1;
+  document.querySelectorAll(".viz-compare-panel-stage").forEach((stage) => {
+    const image = stage.querySelector(".viz-compare-panel-image");
+    const rect = stage.getBoundingClientRect();
+    if (!image || !rect.width || !rect.height) return;
+    const stageAspect = rect.width / rect.height;
+    if (stageAspect > cropAspect) {
+      image.style.height = `${rect.height}px`;
+      image.style.width = `${rect.height * cropAspect}px`;
+    } else {
+      image.style.width = `${rect.width}px`;
+      image.style.height = `${rect.width / cropAspect}px`;
+    }
+  });
+}
+
+function resetCompareTransform() {
+  compareState.panX = 0;
+  compareState.panY = 0;
+  compareState.zoom = 1;
+  compareState.pointers.clear();
+  compareState.gestureStart = null;
+  applyCompareTransform();
+}
+
+function openCompareModal(selectedColumns, vizUrl, meta = {}) {
+  const dialog = document.getElementById("viz-compare-modal");
+  const grid = document.getElementById("viz-compare-grid");
+  const title = document.getElementById("viz-compare-title");
+  compareState.selectedColumns = selectedColumns;
+  compareState.rowIndex = 0;
+  compareState.columnCount = Math.max(1, Number(meta.columnCount || selectedColumns.length || 7));
+  compareState.rowCount = 2;
+  compareState.vizUrl = vizUrl;
+  compareState.naturalWidth = 0;
+  compareState.naturalHeight = 0;
+  resetCompareTransform();
+  grid.replaceChildren();
+  grid.dataset.cols = String(selectedColumns.length);
+  title.textContent = `${meta.runLabel || "viz"} / step ${stepFromName(meta.file).toLocaleString()} / ${selectedColumns.length} columns`;
+
+  selectedColumns.forEach((column) => {
+    const panel = document.createElement("section");
+    panel.className = "viz-compare-panel";
+    panel.dataset.columnIndex = String(column.index);
+    panel.dataset.columnLabel = column.label;
+    const stage = document.createElement("div");
+    stage.className = "viz-compare-panel-stage";
+    const image = document.createElement("div");
+    image.className = "viz-compare-panel-image";
+    image.dataset.columnIndex = String(column.index);
+    image.style.backgroundImage = `url("${cssUrl(vizUrl)}")`;
+    image.style.backgroundSize = `${compareState.columnCount * 100}% ${compareState.rowCount * 100}%`;
+    image.style.backgroundPosition = compareBackgroundPosition(column.index);
+    image.style.transform = compareTransform();
+    const label = document.createElement("div");
+    label.className = "viz-compare-panel-label";
+    label.textContent = column.shortLabel || column.label;
+    stage.appendChild(image);
+    panel.append(stage, label);
+    grid.appendChild(panel);
+  });
+
+  updateCompareRow();
+  const probe = new Image();
+  probe.onload = () => {
+    compareState.naturalWidth = probe.naturalWidth;
+    compareState.naturalHeight = probe.naturalHeight;
+    updateCompareImageSizing();
+  };
+  probe.src = vizUrl;
+
+  if (!dialog.open) {
+    dialog.showModal();
+    document.body.classList.add("lightbox-open");
+  }
+  requestAnimationFrame(updateCompareImageSizing);
+}
+
+function closeCompareModal() {
+  const dialog = document.getElementById("viz-compare-modal");
+  if (dialog.open) dialog.close();
+}
+
+function setCompareGestureStart() {
+  const points = Array.from(compareState.pointers.values());
+  if (points.length === 1) {
+    compareState.gestureStart = {
+      mode: "pan",
+      pointer: { clientX: points[0].clientX, clientY: points[0].clientY },
+      transform: { panX: compareState.panX, panY: compareState.panY, zoom: compareState.zoom },
+    };
+  } else if (points.length >= 2) {
+    compareState.gestureStart = {
+      mode: "pinch",
+      distance: pointerDistance(points[0], points[1]) || 1,
+      center: pointerCenter(points[0], points[1]),
+      transform: { panX: compareState.panX, panY: compareState.panY, zoom: compareState.zoom },
+    };
+  }
+}
+
+function handleComparePointerDown(event) {
+  if (event.pointerType === "mouse" && event.button !== 0) return;
+  event.preventDefault();
+  if (event.currentTarget.setPointerCapture) {
+    try { event.currentTarget.setPointerCapture(event.pointerId); } catch (_error) {}
+  }
+  compareState.pointers.set(event.pointerId, { clientX: event.clientX, clientY: event.clientY });
+  setCompareGestureStart();
+}
+
+function handleComparePointerMove(event) {
+  if (!compareState.pointers.has(event.pointerId)) return;
+  event.preventDefault();
+  const point = compareState.pointers.get(event.pointerId);
+  point.clientX = event.clientX;
+  point.clientY = event.clientY;
+  const points = Array.from(compareState.pointers.values());
+  if (points.length >= 2 && compareState.gestureStart?.mode === "pinch") {
+    const center = pointerCenter(points[0], points[1]);
+    compareState.zoom = clamp(compareState.gestureStart.transform.zoom * (pointerDistance(points[0], points[1]) / compareState.gestureStart.distance), compareState.minZoom, compareState.maxZoom);
+    compareState.panX = compareState.gestureStart.transform.panX + (center.x - compareState.gestureStart.center.x);
+    compareState.panY = compareState.gestureStart.transform.panY + (center.y - compareState.gestureStart.center.y);
+    applyCompareTransform();
+  } else if (points.length === 1 && compareState.gestureStart?.mode === "pan") {
+    compareState.panX = compareState.gestureStart.transform.panX + (event.clientX - compareState.gestureStart.pointer.clientX);
+    compareState.panY = compareState.gestureStart.transform.panY + (event.clientY - compareState.gestureStart.pointer.clientY);
+    applyCompareTransform();
+  }
+}
+
+function handleComparePointerUp(event) {
+  if (!compareState.pointers.has(event.pointerId)) return;
+  event.preventDefault();
+  compareState.pointers.delete(event.pointerId);
+  setCompareGestureStart();
+}
+
+function handleCompareWheel(event) {
+  const stage = event.target.closest(".viz-compare-panel-stage");
+  if (!stage) return;
+  event.preventDefault();
+  const factor = Math.exp(-event.deltaY * 0.0015);
+  compareState.zoom = clamp(compareState.zoom * factor, compareState.minZoom, compareState.maxZoom);
+  if (compareState.zoom < 1.02) {
+    compareState.zoom = 1;
+    compareState.panX = 0;
+    compareState.panY = 0;
+  }
+  applyCompareTransform();
+}
+
+function initCompareModal() {
+  const dialog = document.getElementById("viz-compare-modal");
+  const backdrop = document.getElementById("viz-compare-backdrop");
+  const grid = document.getElementById("viz-compare-grid");
+  document.getElementById("viz-compare-dismiss").addEventListener("click", closeCompareModal);
+  document.querySelectorAll("[data-viz-compare-row]").forEach((button) => {
+    button.addEventListener("click", () => {
+      compareState.rowIndex = Number(button.dataset.vizCompareRow || 0);
+      resetCompareTransform();
+      updateCompareRow();
+    });
+  });
+  grid.addEventListener("pointerdown", handleComparePointerDown);
+  grid.addEventListener("pointermove", handleComparePointerMove);
+  grid.addEventListener("pointerup", handleComparePointerUp);
+  grid.addEventListener("pointercancel", handleComparePointerUp);
+  grid.addEventListener("wheel", handleCompareWheel, { passive: false });
+  backdrop.addEventListener("click", (event) => {
+    if (event.target === backdrop) closeCompareModal();
+  });
+  dialog.addEventListener("close", () => {
+    document.body.classList.remove("lightbox-open");
+    resetCompareTransform();
+    grid.replaceChildren();
+  });
+  dialog.addEventListener("cancel", () => {
+    document.body.classList.remove("lightbox-open");
+  });
+  window.addEventListener("resize", updateCompareImageSizing);
 }
 
 function lightboxCaption(item) {
@@ -3639,7 +4182,8 @@ function renderRun(run, index, openByRun = new Map()) {
             <h3 class="text-base font-semibold text-zinc-50" data-text>Viz strips</h3>
             <span class="text-sm text-zinc-500" data-dim>${(run.viz_pngs || []).length} images</span>
           </div>
-          <div id="${vizId}" class="viz-strip mt-3 flex gap-3 overflow-x-auto pb-2"></div>
+          <div id="${vizId}-compare" class="viz-compare-controls mt-3"></div>
+          <div id="${vizId}" class="viz-strip mt-2 flex gap-3 overflow-x-auto pb-2"></div>
         </article>
       </div>
     </div>
@@ -3682,6 +4226,7 @@ function renderRuns(data) {
       if (chart) charts.push(chart);
     }
     renderScoreTable(document.getElementById(`score-table-${index}`), run);
+    renderVizCompareControls(document.getElementById(`viz-strip-${index}-compare`), run);
     renderVizStrip(document.getElementById(`viz-strip-${index}`), run, 4);
   });
   activeCharts = charts;
@@ -3907,6 +4452,7 @@ document.addEventListener("DOMContentLoaded", () => {
     setTheme(document.documentElement.classList.contains("dark"));
   });
   initLightbox();
+  initCompareModal();
   initMetricCards();
   initComparisonControls();
   setupInfoTooltips();
