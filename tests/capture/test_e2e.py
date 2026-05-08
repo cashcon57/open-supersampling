@@ -87,7 +87,8 @@ def test_uploader_fake_server_roundtrip_deletes_terminal_and_exhausted_frames(tm
     assert len(ScriptedIngestHandler.requests_seen) == 9
     first_body = ScriptedIngestHandler.requests_seen[0]
     assert b'name="frame"; filename="000-0-ok.exr"' in first_body
-    assert b'name="meta"; filename="000-0-ok.json"' in first_body
+    assert b'name="meta"' in first_body
+    assert b'name="meta"; filename=' not in first_body
     assert b'"schema_version": 1' in first_body
     assert b'"burst_uuid": "11111111-1111-4111-8111-111111111111"' in first_body
     assert b'"burst_index": 0' in first_body

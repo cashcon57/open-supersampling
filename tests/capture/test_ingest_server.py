@@ -7,9 +7,7 @@ and R2 write side-effect (with R2 mocked via moto).
 from __future__ import annotations
 
 import json
-import uuid
-
-import pytest
+from pathlib import Path
 
 
 def _register(reset_state, *, token: str = "test-token-001"):
@@ -53,6 +51,27 @@ def test_ingest_revoked_token_returns_401(client, make_meta_fn, reset_state):
         data={"meta": json.dumps(make_meta_fn())},
     )
     assert resp.status_code == 401
+
+
+def test_token_registry_reloads_external_token_without_clobbering_live_stats(
+    tmp_path: Path,
+) -> None:
+    from server.oss_capture_ingest.auth import TokenRegistry
+
+    store = tmp_path / "tokens.json"
+    running = TokenRegistry(store_path=store)
+    running.register_token("live-token", label="live")
+    running.record_upload("live-token", 123, capture_mode="lite")
+
+    external = TokenRegistry(store_path=store)
+    external.register_token("external-token", label="minted-elsewhere")
+
+    assert running.get("external-token") is not None
+    live = running.get("live-token")
+    assert live is not None
+    assert live.total_frames == 1
+    assert live.total_bytes == 123
+    assert live.frames_by_mode == {"lite": 1}
 
 
 # ---- happy path ------------------------------------------------------------

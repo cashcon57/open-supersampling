@@ -154,14 +154,13 @@ def _multipart_body(frame: CaptureFrame, boundary: str) -> bytes:
     meta_bytes = frame.meta_path.read_bytes()
     frame_bytes = frame.frame_path.read_bytes()
     frame_name = frame.frame_path.name
-    meta_name = frame.meta_path.name
     frame_type = mimetypes.guess_type(frame_name)[0] or "application/octet-stream"
 
     parts: list[bytes] = []
     parts.append(
         (
             f"--{boundary}\r\n"
-            f'Content-Disposition: form-data; name="meta"; filename="{meta_name}"\r\n'
+            'Content-Disposition: form-data; name="meta"\r\n'
             "Content-Type: application/json\r\n\r\n"
         ).encode("utf-8")
         + meta_bytes

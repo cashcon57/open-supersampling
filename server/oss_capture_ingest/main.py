@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 import time
 import uuid
@@ -138,6 +139,8 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
+    if args.r2_bucket_test:
+        os.environ["R2_BUCKET"] = args.r2_bucket_test
     app = create_app()
     uvicorn.run(app, host=args.host, port=args.port, log_level=args.log_level)
     return 0
@@ -169,6 +172,11 @@ def _build_parser() -> argparse.ArgumentParser:
     p_serve.add_argument("--host", default="0.0.0.0")
     p_serve.add_argument("--port", type=int, default=8080)
     p_serve.add_argument("--log-level", default="info")
+    p_serve.add_argument(
+        "--r2-bucket-test",
+        default="",
+        help="Override R2_BUCKET for local operator tests.",
+    )
     p_serve.set_defaults(func=_cmd_serve)
 
     p_mint = sub.add_parser(

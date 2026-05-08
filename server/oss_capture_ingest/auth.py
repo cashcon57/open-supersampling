@@ -131,6 +131,30 @@ class TokenRegistry:
             tok = entry.get("token")
             if not isinstance(tok, str) or not tok:
                 continue
+            existing = self._tokens.get(tok)
+            if existing is not None:
+                if entry.get("label") and not existing.label:
+                    existing.label = str(entry.get("label", ""))
+                existing.revoked = bool(entry.get("revoked", existing.revoked))
+                existing.total_frames = max(
+                    existing.total_frames,
+                    int(entry.get("total_frames", 0)),
+                )
+                existing.total_bytes = max(
+                    existing.total_bytes,
+                    int(entry.get("total_bytes", 0)),
+                )
+                for mode, value in (entry.get("frames_by_mode") or {}).items():
+                    existing.frames_by_mode[str(mode)] = max(
+                        existing.frames_by_mode.get(str(mode), 0),
+                        int(value),
+                    )
+                for mode, value in (entry.get("bytes_by_mode") or {}).items():
+                    existing.bytes_by_mode[str(mode)] = max(
+                        existing.bytes_by_mode.get(str(mode), 0),
+                        int(value),
+                    )
+                continue
             rec = TokenRecord(
                 token=tok,
                 label=str(entry.get("label", "")),
@@ -188,7 +212,11 @@ class TokenRegistry:
 
     def get(self, token: str) -> Optional[TokenRecord]:
         with self._lock:
-            return self._tokens.get(token)
+            rec = self._tokens.get(token)
+            if rec is None and self.store_path is not None:
+                self._load_from_disk()
+                rec = self._tokens.get(token)
+            return rec
 
     def all_tokens(self) -> Dict[str, TokenRecord]:
         with self._lock:
