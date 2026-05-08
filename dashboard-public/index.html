@@ -1463,6 +1463,7 @@
         <div class="flex items-center gap-2 text-sm">
           <label for="global-viz-run-select" class="text-zinc-400" data-dim>Run:</label>
           <select id="global-viz-run-select" class="rounded border border-zinc-700 bg-zinc-950 px-2 py-1 font-mono text-xs text-zinc-100 focus:outline-none focus:ring-1 focus:ring-cyan-400"></select>
+          <button id="global-viz-compare-btn" type="button" class="viz-compare-cta" disabled>Side-by-side</button>
         </div>
       </header>
       <div id="global-viz-strip" class="viz-strip mt-4 flex gap-3 overflow-x-auto pb-2"></div>
@@ -6333,9 +6334,70 @@ function renderGlobalVizStrip(data) {
       _globalVizSelectedRun = select.value;
       const r = (lastKnownData?.runs || []).find((x) => x.name === select.value);
       if (r) renderVizStrip(host, r, 12);
+      updateGlobalVizCompareBtn();
     });
     select._oss_bound = true;
   }
+  updateGlobalVizCompareBtn();
+}
+
+// Pick 2-3 sensible default columns to compare for the global side-by-side
+// button. Priority: model output (whichever version this run produces) +
+// ground truth + bicubic baseline. Falls back to first/last column if those
+// labels can't be matched.
+function pickDefaultCompareColumns(columns) {
+  if (!Array.isArray(columns) || columns.length < 2) return [];
+  const lower = columns.map((c) => String(c || "").toLowerCase());
+  const findBy = (...needles) => {
+    for (const needle of needles) {
+      const idx = lower.findIndex((c) => c.includes(needle));
+      if (idx >= 0) return idx;
+    }
+    return -1;
+  };
+  const idxs = new Set();
+  // GT-ish (most important reference column)
+  const gt = findBy("gt", "ground", "target", "hr");
+  if (gt >= 0) idxs.add(gt);
+  // Model output — try the version-specific label first, fall back to "model"
+  const model = findBy("v6.1", "v6", "v5", "model");
+  if (model >= 0 && model !== gt) idxs.add(model);
+  // Bicubic third (anchor)
+  const bicubic = findBy("bicubic");
+  if (bicubic >= 0 && !idxs.has(bicubic)) idxs.add(bicubic);
+  // Backfill if we got fewer than 2
+  if (idxs.size < 2) {
+    for (let i = 0; i < columns.length && idxs.size < 2; i++) idxs.add(i);
+  }
+  return Array.from(idxs).sort((a, b) => a - b)
+    .map((index) => ({ index, label: columns[index], shortLabel: vizColumnChipLabel(columns[index]) }));
+}
+
+function updateGlobalVizCompareBtn() {
+  const btn = document.getElementById("global-viz-compare-btn");
+  if (!btn) return;
+  const runs = (lastKnownData?.runs || []).filter((r) => (r.viz_pngs || []).length > 0);
+  const sel = runs.find((r) => r.name === _globalVizSelectedRun);
+  const cols = (sel?.viz_columns || []).filter(Boolean);
+  const file = latestVizFile(sel);
+  const ok = sel && cols.length >= 2 && file;
+  btn.disabled = !ok;
+  if (btn._oss_bound) return;
+  btn._oss_bound = true;
+  btn.addEventListener("click", () => {
+    const r = (lastKnownData?.runs || []).find((x) => x.name === _globalVizSelectedRun);
+    if (!r) return;
+    const cols2 = (r.viz_columns || []).filter(Boolean);
+    const file2 = latestVizFile(r);
+    if (cols2.length < 2 || !file2) return;
+    const selected = pickDefaultCompareColumns(cols2);
+    if (selected.length < 2) return;
+    openCompareModal(selected, runUrl(r, file2), {
+      runLabel: r.label || r.name,
+      file: file2,
+      columnCount: cols2.length,
+    });
+  });
 }
 
 async function fetchDashboardData() {
