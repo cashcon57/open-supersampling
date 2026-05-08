@@ -186,6 +186,7 @@ class V6Model(nn.Module):
             nn.GELU(),
             nn.Conv2d(hidden, 3, 3, padding=1),
         )
+        nn.init.zeros_(self.composite_head[-1].weight)
         nn.init.zeros_(self.composite_head[-1].bias)
 
         # Per-rank-local stateful pieces. NOT registered as buffers so DDP

@@ -73,6 +73,12 @@ def _realistic_lr(
     return torch.cat([rgb, gbuffers], dim=1)
 
 
+def _activate_residual_head_for_gradient_check(model: V6Model) -> None:
+    """Nudge the zero-init RGB residual head so wiring tests see gradients."""
+    with torch.no_grad():
+        model.composite_head[-1].weight.fill_(1.0e-3)
+
+
 # ---------------------------------------------------------------------------
 # Construction
 # ---------------------------------------------------------------------------
@@ -127,6 +133,7 @@ def test_v6model_empty_canvas_tokens_short_circuit():
 def test_v6model_forward_with_nonempty_canvas():
     m = _tiny_model()
     m.train()
+    _activate_residual_head_for_gradient_check(m)
     m._canvas_state = _canvas_state(count=8, token_dim=m.cfg.token_dim)
     lr = torch.randn(1, 9, 32, 32)
 
@@ -177,6 +184,7 @@ def test_v6model_multiframe_canvas_warps_and_stays_bounded():
 def test_v6model_gradient_flows_through_stage2_path():
     m = _tiny_model(tile_size_lr=16)
     m.train()
+    _activate_residual_head_for_gradient_check(m)
     lr0 = torch.randn(1, 9, 32, 32)
     lr1 = torch.randn(1, 9, 32, 32)
 
