@@ -71,11 +71,36 @@ __global__ void preprocess_gaussians(
         return;
     }
 
-    const float radius = 3.0f * fmaxf(raw_scale.x, raw_scale.y);
-    const int tx_min = clamp_int(static_cast<int>(floorf((center.x - radius) / tile_size)), 0, num_tiles_x);
-    const int tx_max = clamp_int(static_cast<int>(ceilf((center.x + radius) / tile_size)), 0, num_tiles_x);
-    const int ty_min = clamp_int(static_cast<int>(floorf((center.y - radius) / tile_size)), 0, num_tiles_y);
-    const int ty_max = clamp_int(static_cast<int>(ceilf((center.y + radius) / tile_size)), 0, num_tiles_y);
+    // Tight-ellipse AABB. Replaces the prior conservative scale-radius bound
+    // 3 * max(sx, sy), which overestimates the per-axis extent of rotated
+    // anisotropic Gaussians. The conic (a, b, d) directly implies per-axis
+    // radii via the Mahalanobis ellipse q = tau:
+    //
+    //   r_x = sqrt(tau * d / (a*d - b*b))
+    //   r_y = sqrt(tau * a / (a*d - b*b))
+    //
+    // Use tau = 9.0f (3-sigma; matches the prior 3*scale convention and the
+    // 1.11% feature-mass loss bound validated in Phase 4 elegance D).
+    //
+    // Fallback: if (a*d - b*b) is non-positive (near-singular / numerical
+    // degeneracy on FP32), revert to the safe scale-radius bound so that
+    // a degenerate conic still gets binned somewhere.
+    float r_x;
+    float r_y;
+    const float det_inv = a * d - b * b;
+    if (det_inv > 1e-12f) {
+        const float tau = 9.0f;
+        r_x = sqrtf(tau * d / det_inv);
+        r_y = sqrtf(tau * a / det_inv);
+    } else {
+        const float fallback_radius = 3.0f * fmaxf(raw_scale.x, raw_scale.y);
+        r_x = fallback_radius;
+        r_y = fallback_radius;
+    }
+    const int tx_min = clamp_int(static_cast<int>(floorf((center.x - r_x) / tile_size)), 0, num_tiles_x);
+    const int tx_max = clamp_int(static_cast<int>(ceilf((center.x + r_x) / tile_size)), 0, num_tiles_x);
+    const int ty_min = clamp_int(static_cast<int>(floorf((center.y - r_y) / tile_size)), 0, num_tiles_y);
+    const int ty_max = clamp_int(static_cast<int>(ceilf((center.y + r_y) / tile_size)), 0, num_tiles_y);
 
     const int count_x = tx_max > tx_min ? tx_max - tx_min : 0;
     const int count_y = ty_max > ty_min ? ty_max - ty_min : 0;

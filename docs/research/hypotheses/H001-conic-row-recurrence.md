@@ -1,6 +1,6 @@
 # H001 — Conic Row-Recurrence for EWA Gaussian Weights
 
-**Status:** `untested`
+**Status:** `partial` — math identity VALIDATED at fp64 (Python reference + 8/8 unit tests, 2026-05-08); CUDA port pending
 **Class:** Algorithmic identity (no quality loss claimed; pure performance)
 **Filed:** 2026-05-08
 **Source:** GPT-5.5 individual response (Phase 4 council 1-4ms ask)
@@ -9,7 +9,7 @@
 
 For an EWA Gaussian with conic `Λ = [a b; b d]` and quadratic form `q(x,y) = a·dx² + 2b·dx·dy + d·dy²`, the per-pixel weight `w(x,y) = exp(−q/2)` along a fixed scanline can be evaluated by recurrence with **constant second difference**.
 
-```
+```text
 Δq_x  = q(x+1,y) − q(x,y) = a(2·dx + 1) + 2b·dy
 Δ²q_x = 2a   (constant along the row)
 
@@ -54,4 +54,22 @@ On Ada/Ampere, transcendentals run at ~1/4 the rate of FMAs. Direct wall-clock w
 
 ## Lab notes
 
-(empty — untested as of 2026-05-08)
+### 2026-05-08 — math identity VALIDATED at fp64
+
+**Test:** `tests/perf/test_h001_conic_row_recurrence.py` (8 unit tests)
+
+- 100 random conic+center configurations × 5 seeds: max abs error vs naïve `np.exp` per-pixel evaluation < `1e-10` over 16×16 tile
+- `Δ²q_x = 2a` constant-second-difference identity exact within `1e-12` for all sampled configs
+- Isotropic-Gaussian column symmetry preserved exactly
+- Wider 32×32 tile stress test: no negative-drift, no underflow→0 issues for `a ∈ [0.05, 0.5]`
+
+**Conclusion:** the math is bit-exact at fp64. Hypothesis transitions `untested` → `partial`. CUDA port still pending — fp32/bf16 accumulation and SFU `__expf` rounding could change the absolute error band, but math identity itself is sound.
+
+**Next step:** the existing forward kernel (`oss/cuda/src/rasterizer_fwd.cu` lines 203-227) currently does per-pixel `expf` inside the WMMA weight setup. The recurrence variant requires:
+
+1. Compute `q0`, `w0 = __expf(-0.5f * q0)`, `r0 = __expf(-0.5f * delta_q0)`, `s = __expf(-a)` once per Gaussian-row
+2. March the row with multiplies: `w *= r; r *= s`
+3. Add CUDA test matching recurrence kernel against existing within fp32 tol on real Gaussian batches
+4. nvbench microbench for ≥1.5× speedup
+
+**Risks unchanged:** cumulative float drift on long scanlines (we tile-bound naturally → low risk), register pressure increase, dispatch overhead if conditional with LUT kernel.
