@@ -40,7 +40,9 @@ def test_rasterizer_backward_equivalence(cuda_device, kernels_built, N, H, W, F)
     xy_kernel = xy.detach().clone().requires_grad_(True)
     xy_ref = xy.detach().clone().requires_grad_(True)
     scale_kernel = scale.detach().clone().requires_grad_(True)
+    scale_ref = scale.detach().clone().requires_grad_(True)
     rot_kernel = rot.detach().clone().requires_grad_(True)
+    rot_ref = rot.detach().clone().requires_grad_(True)
     feat_kernel = torch.randn(N, F, device=cuda_device, requires_grad=True)
     feat_ref = feat_kernel.detach().clone().requires_grad_(True)
 
@@ -50,7 +52,7 @@ def test_rasterizer_backward_equivalence(cuda_device, kernels_built, N, H, W, F)
 
     rast = Rasterizer(tile_size=16, topk_norm=True)
     out_ref = rast._render_reference(
-        GaussianBatch(xy=xy_ref, scale=scale, rot=rot, feat=feat_ref), H, W
+        GaussianBatch(xy=xy_ref, scale=scale_ref, rot=rot_ref, feat=feat_ref), H, W
     )
     assert out_kernel.shape == out_ref.shape == (F, H, W)
 
@@ -62,11 +64,25 @@ def test_rasterizer_backward_equivalence(cuda_device, kernels_built, N, H, W, F)
     assert xy_ref.grad is not None
     assert feat_kernel.grad is not None
     assert feat_ref.grad is not None
-    assert scale_kernel.grad is None
-    assert rot_kernel.grad is None
+    assert scale_kernel.grad is not None
+    assert scale_ref.grad is not None
+    assert rot_kernel.grad is not None
+    assert rot_ref.grad is not None
     torch.testing.assert_close(
         xy_kernel.grad,
         xy_ref.grad,
+        atol=1e-4,
+        rtol=1e-4,
+    )
+    torch.testing.assert_close(
+        scale_kernel.grad,
+        scale_ref.grad,
+        atol=1e-4,
+        rtol=1e-4,
+    )
+    torch.testing.assert_close(
+        rot_kernel.grad,
+        rot_ref.grad,
         atol=1e-4,
         rtol=1e-4,
     )
@@ -127,3 +143,33 @@ def test_rasterizer_backward_dconic_matches_reference(cuda_device, kernels_built
         atol=1e-4,
         rtol=1e-4,
     )
+
+
+def test_kernel_does_not_reenter_python_backward(cuda_device, kernels_built):
+    from oss.cuda.oss_cuda import rasterizer as oss_rast
+
+    old_ref_forward_symbol = "_phase1" + "_ref_forward"
+    saved = getattr(oss_rast, old_ref_forward_symbol, None)
+    if saved is not None:
+        setattr(oss_rast, old_ref_forward_symbol, None)
+    try:
+        xy = torch.tensor(
+            [[16.0, 16.0]], device=cuda_device, dtype=torch.float32, requires_grad=True
+        )
+        scale = torch.tensor(
+            [[3.0, 4.0]], device=cuda_device, dtype=torch.float32, requires_grad=True
+        )
+        rot = torch.tensor([0.25], device=cuda_device, dtype=torch.float32, requires_grad=True)
+        feat = torch.tensor(
+            [[1.0, -0.5]], device=cuda_device, dtype=torch.float32, requires_grad=True
+        )
+        out = oss_rast.rasterize_gaussians(xy, scale, rot, feat, 32, 32, 16, True)
+        out.sum().backward()
+        assert out.shape == (2, 32, 32)
+        assert xy.grad is not None
+        assert scale.grad is not None
+        assert rot.grad is not None
+        assert feat.grad is not None
+    finally:
+        if saved is not None:
+            setattr(oss_rast, old_ref_forward_symbol, saved)

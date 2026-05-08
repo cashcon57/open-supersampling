@@ -58,3 +58,12 @@ void rasterize_backward(
     float3*       __restrict__ d_conic,
     float*        __restrict__ d_feat
 );
+
+__global__ void conic_to_scale_rot_grad(
+    int N,
+    const float2* __restrict__ scale,
+    const float*  __restrict__ rot,
+    const float3* __restrict__ d_conic,
+    float2*       __restrict__ d_scale,
+    float*        __restrict__ d_rot
+);

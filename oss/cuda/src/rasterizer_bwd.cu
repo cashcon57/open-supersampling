@@ -112,6 +112,47 @@ void rasterize_backward(
     }
 }
 
+__global__ void conic_to_scale_rot_grad(
+    int N,
+    const float2* __restrict__ scale,
+    const float*  __restrict__ rot,
+    const float3* __restrict__ d_conic,
+    float2*       __restrict__ d_scale,
+    float*        __restrict__ d_rot
+) {
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= N) {
+        return;
+    }
+
+    const float2 sxy = scale[i];
+    const float theta = rot[i];
+    const float3 dc = d_conic[i];
+
+    const float sx = fmaxf(sxy.x, kMinScale);
+    const float sy = fmaxf(sxy.y, kMinScale);
+    const float inv_sx2 = 1.0f / (sx * sx);
+    const float inv_sy2 = 1.0f / (sy * sy);
+    const float diff = inv_sx2 - inv_sy2;
+
+    const float c = cosf(theta);
+    const float s = sinf(theta);
+    const float cc = c * c;
+    const float ss = s * s;
+    const float cs = c * s;
+
+    const float d_inv_sx2 = cc * dc.x + cs * dc.y + ss * dc.z;
+    const float d_inv_sy2 = ss * dc.x - cs * dc.y + cc * dc.z;
+    const float d_sx = sxy.x > kMinScale ? d_inv_sx2 * (-2.0f / (sxy.x * sxy.x * sxy.x)) : 0.0f;
+    const float d_sy = sxy.y > kMinScale ? d_inv_sy2 * (-2.0f / (sxy.y * sxy.y * sxy.y)) : 0.0f;
+
+    d_scale[i] = make_float2(d_sx, d_sy);
+    d_rot[i] =
+        dc.x * (-2.0f * cs * diff) +
+        dc.y * (diff * (cc - ss)) +
+        dc.z * (2.0f * cs * diff);
+}
+
 #ifndef OSS_CUDA_KERNELS_ONLY
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_backward_cuda(
     torch::Tensor xy,
@@ -203,5 +244,47 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_backward_cuda(
     }
 
     return std::make_tuple(d_xy, d_conic, d_feat);
+}
+
+std::tuple<torch::Tensor, torch::Tensor> conic_to_scale_rot_grad_cuda(
+    torch::Tensor scale,
+    torch::Tensor rot,
+    torch::Tensor d_conic
+) {
+    check_float_cuda_contiguous(scale, "scale");
+    check_float_cuda_contiguous(rot, "rot");
+    check_float_cuda_contiguous(d_conic, "d_conic");
+
+    TORCH_CHECK(scale.dim() == 2 && scale.size(1) == 2, "scale must be (N,2)");
+    TORCH_CHECK(rot.dim() == 1, "rot must be (N,)");
+    TORCH_CHECK(d_conic.dim() == 2 && d_conic.size(1) == 3, "d_conic must be (N,3)");
+    TORCH_CHECK(scale.size(0) == rot.size(0), "scale/rot N mismatch");
+    TORCH_CHECK(scale.size(0) == d_conic.size(0), "scale/d_conic N mismatch");
+
+    const int64_t N64 = scale.size(0);
+    TORCH_CHECK(N64 <= std::numeric_limits<int>::max(), "N exceeds int32 range");
+    const int N = static_cast<int>(N64);
+
+    auto f32_options = scale.options().dtype(torch::kFloat32);
+    torch::Tensor d_scale = torch::zeros({N, 2}, f32_options);
+    torch::Tensor d_rot = torch::zeros({N}, f32_options);
+
+    if (N == 0) {
+        return std::make_tuple(d_scale, d_rot);
+    }
+
+    const dim3 block(OSS_PREPROCESS_BLOCK);
+    const dim3 grid((N + OSS_PREPROCESS_BLOCK - 1) / OSS_PREPROCESS_BLOCK);
+    conic_to_scale_rot_grad<<<grid, block>>>(
+        N,
+        reinterpret_cast<const float2*>(scale.data_ptr<float>()),
+        rot.data_ptr<float>(),
+        reinterpret_cast<const float3*>(d_conic.data_ptr<float>()),
+        reinterpret_cast<float2*>(d_scale.data_ptr<float>()),
+        d_rot.data_ptr<float>()
+    );
+    C10_CUDA_CHECK(cudaGetLastError());
+
+    return std::make_tuple(d_scale, d_rot);
 }
 #endif

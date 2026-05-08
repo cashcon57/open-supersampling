@@ -42,12 +42,24 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_backward(
     );
 }
 
+std::tuple<torch::Tensor, torch::Tensor> conic_to_scale_rot_grad_cuda(
+    torch::Tensor scale, torch::Tensor rot, torch::Tensor d_conic
+);
+
+std::tuple<torch::Tensor, torch::Tensor> conic_to_scale_rot_grad(
+    torch::Tensor scale, torch::Tensor rot, torch::Tensor d_conic
+) {
+    return conic_to_scale_rot_grad_cuda(scale, rot, d_conic);
+}
+
 PYBIND11_MODULE(_C, m) {
-    m.doc() = "OSS custom CUDA extension (Phase 3b rasterizer)";
+    m.doc() = "OSS custom CUDA extension (Phase 3c rasterizer)";
     m.def("rasterize_forward", &rasterize_forward,
-          "Rasterize Gaussians (Phase 3b CUDA forward)");
+          "Rasterize Gaussians (Phase 3c CUDA forward)");
     m.def("rasterize_backward", &rasterize_backward,
-          "Rasterize Gaussians backward (Phase 3b dxy+dconic+dfeat)");
+          "Rasterize Gaussians backward (Phase 3c dxy+dconic+dfeat)");
+    m.def("conic_to_scale_rot_grad", &conic_to_scale_rot_grad,
+          "Convert d_conic to d_scale and d_rot (Phase 3c)");
     m.def("preprocess_only", &preprocess_gaussians_cuda,
           "Preprocess Gaussian conics and tile AABBs (Phase 2a)");
     m.def("pair_construction_only", &pair_construction_cuda,

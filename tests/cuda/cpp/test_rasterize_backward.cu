@@ -205,3 +205,50 @@ TEST(RasterizeBackward, DxyAnalytic) {
     cudaFree(gids_d);
     cudaFree(offsets_d);
 }
+
+TEST(ConicToScaleRot, AnalyticAtZeroRot) {
+    constexpr int N = 1;
+
+    const std::vector<float2> scale_h{make_float2(2.0f, 4.0f)};
+    const std::vector<float> rot_h{0.0f};
+    const std::vector<float3> d_conic_h{make_float3(3.0f, 5.0f, 7.0f)};
+
+    float2* scale_d = nullptr;
+    float* rot_d = nullptr;
+    float3* d_conic_d = nullptr;
+    float2* d_scale_d = nullptr;
+    float* d_rot_d = nullptr;
+
+    ASSERT_EQ(cudaMalloc(&scale_d, N * sizeof(float2)), cudaSuccess);
+    ASSERT_EQ(cudaMalloc(&rot_d, N * sizeof(float)), cudaSuccess);
+    ASSERT_EQ(cudaMalloc(&d_conic_d, N * sizeof(float3)), cudaSuccess);
+    ASSERT_EQ(cudaMalloc(&d_scale_d, N * sizeof(float2)), cudaSuccess);
+    ASSERT_EQ(cudaMalloc(&d_rot_d, N * sizeof(float)), cudaSuccess);
+
+    ASSERT_EQ(cudaMemcpy(scale_d, scale_h.data(), N * sizeof(float2), cudaMemcpyHostToDevice), cudaSuccess);
+    ASSERT_EQ(cudaMemcpy(rot_d, rot_h.data(), N * sizeof(float), cudaMemcpyHostToDevice), cudaSuccess);
+    ASSERT_EQ(cudaMemcpy(d_conic_d, d_conic_h.data(), N * sizeof(float3), cudaMemcpyHostToDevice), cudaSuccess);
+    ASSERT_EQ(cudaMemset(d_scale_d, 0, N * sizeof(float2)), cudaSuccess);
+    ASSERT_EQ(cudaMemset(d_rot_d, 0, N * sizeof(float)), cudaSuccess);
+
+    conic_to_scale_rot_grad<<<1, OSS_PREPROCESS_BLOCK>>>(
+        N, scale_d, rot_d, d_conic_d, d_scale_d, d_rot_d
+    );
+    ASSERT_EQ(cudaGetLastError(), cudaSuccess);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    float2 d_scale_h{};
+    float d_rot_h = 0.0f;
+    ASSERT_EQ(cudaMemcpy(&d_scale_h, d_scale_d, sizeof(float2), cudaMemcpyDeviceToHost), cudaSuccess);
+    ASSERT_EQ(cudaMemcpy(&d_rot_h, d_rot_d, sizeof(float), cudaMemcpyDeviceToHost), cudaSuccess);
+
+    EXPECT_NEAR(d_scale_h.x, -0.75f, 1e-6f);
+    EXPECT_NEAR(d_scale_h.y, -0.21875f, 1e-6f);
+    EXPECT_NEAR(d_rot_h, 0.9375f, 1e-6f);
+
+    cudaFree(scale_d);
+    cudaFree(rot_d);
+    cudaFree(d_conic_d);
+    cudaFree(d_scale_d);
+    cudaFree(d_rot_d);
+}

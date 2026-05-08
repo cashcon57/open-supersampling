@@ -1,4 +1,4 @@
-"""Compute Sanitizer smoke for the Phase 3b rasterizer."""
+"""Compute Sanitizer smoke for the Phase 3c rasterizer."""
 
 from pathlib import Path
 import sys
@@ -39,8 +39,8 @@ def _run_shape(n: int, h: int, w: int, f: int) -> None:
 
     device = torch.device("cuda:0")
     xy = xy_cpu.to(device).requires_grad_(True)
-    scale = scale_cpu.to(device)
-    rot = rot_cpu.to(device)
+    scale = scale_cpu.to(device).requires_grad_(True)
+    rot = rot_cpu.to(device).requires_grad_(True)
     feat = feat_cpu.to(device).requires_grad_(True)
 
     from oss.cuda.oss_cuda import rasterize_gaussians
@@ -55,9 +55,17 @@ def _run_shape(n: int, h: int, w: int, f: int) -> None:
     assert torch.isfinite(xy.grad.cpu()).all()
     assert feat.grad is not None
     assert torch.isfinite(feat.grad.cpu()).all()
+    assert scale.grad is not None
+    assert torch.isfinite(scale.grad.cpu()).all()
+    assert rot.grad is not None
+    assert torch.isfinite(rot.grad.cpu()).all()
     d_xy_sum = xy.grad.detach().cpu().sum().item()
+    d_scale_sum = scale.grad.detach().cpu().sum().item()
+    d_rot_sum = rot.grad.detach().cpu().sum().item()
     d_feat_sum = feat.grad.detach().cpu().sum().item()
     print(f"smoke backward d_xy sum: {d_xy_sum:.6f}")
+    print(f"smoke backward d_scale sum: {d_scale_sum:.6f}")
+    print(f"smoke backward d_rot sum: {d_rot_sum:.6f}")
     print(f"smoke backward d_feat sum: {d_feat_sum:.6f}")
 
 
