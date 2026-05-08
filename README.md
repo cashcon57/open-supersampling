@@ -28,6 +28,26 @@ This is the pitch. The rest of the README is the evidence and counter-evidence �
 
 ---
 
+## Versioning convention
+
+OSS uses **three independent naming layers**. They're easy to confuse — especially when reading commits or training logs — so spelling them out:
+
+| Layer | Where it appears | Format | Example | Mutable? |
+| --- | --- | --- | --- | --- |
+| **Project semver** | `pyproject.toml`, GitHub releases, `pip install`, `CHANGELOG.md` | `0.x.y[.devN]` per [SemVer pre-1.0](https://semver.org/#spec-item-4) | `0.6.0.dev0` (current) | Bumps with each release |
+| **Architecture iteration** | research / design docs, this README, `docs/architecture/` | unprefixed `vN[.M]` (research-tradition) | `v6.2 architecture` | Bumps with each architecture rewrite |
+| **Training-run identifier** | dashboard rows, checkpoint paths, viz strip filenames | `srcnn-vX.Y-tier-NNN` | `srcnn-v6.2-pico-002` | **Frozen forever** once a run starts |
+
+The three layers move at different rates and are deliberately decoupled:
+
+- A given **architecture iteration** (e.g. `v6.2`) may ship across multiple project releases. The `v6.2` architecture is currently slated for the `0.6.0` release.
+- A given **project release** may include changes to multiple architecture iterations (e.g. infrastructure fixes that touch the v6, v6.1, and v6.2 code paths simultaneously).
+- A **training run identifier** is permanent — `srcnn-v6.2-pico-002` keeps that name forever, even after `v6.3` lands or the project ships `1.0`. Renaming would break dashboard data continuity and git history.
+
+If a sentence touches more than one layer, name them explicitly: *"the v6.2 architecture work to be packaged in the 0.6.0 release; the first run on v6.2 is `srcnn-v6.2-pico-002`."*
+
+---
+
 ## Status at a glance
 
 State vocabulary (used in the column below): **Measured** = code shipped, training run, numbers published. **Training now** = code shipped, model consuming GPU as you read this. **Wired** = code runs end-to-end on synthetic input, no notable training result yet. **In implementation** = code being written, not runnable end-to-end. **Designed only** = memo + spec exist, zero code. **Parked / Superseded** = explicitly stopped or replaced by a successor.

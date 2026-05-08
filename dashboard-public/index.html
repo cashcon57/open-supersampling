@@ -1422,8 +1422,11 @@
     <section class="deferred-section flex flex-col gap-3" aria-labelledby="run-history-title">
       <div class="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h2 id="run-history-title" class="text-xl font-semibold text-zinc-50" data-text>Inspect training lineage</h2>
-          <p class="text-sm text-zinc-400" data-subtext>Open a run to compare training, measurement, and superseded references.</p>
+          <h2 id="run-history-title" class="title-with-info text-xl font-semibold text-zinc-50" data-text>
+            <span>Inspect training lineage</span>
+            <button class="info-btn" data-info-key="versioning-convention" type="button" aria-label="What do the v6.X / 0.x.y / pico-NNN names mean?">(i)</button>
+          </h2>
+          <p class="text-sm text-zinc-400" data-subtext>Open a run to compare training, measurement, and superseded references. Run names like <code class="text-zinc-200">srcnn-v6.2-pico-002</code> are frozen forever — see the (i) button for the three-layer versioning convention (project semver / architecture iteration / run identifier).</p>
         </div>
       </div>
       <div id="initial-loader" class="initial-loader">
@@ -1665,6 +1668,7 @@ const INFO_COPY = {
   "bad-data": "Off by default. Hides runs that aren't apples-to-apples with the current models — different test sets, failure modes. Toggle on for transparency.",
   "v4-two-points": "v4 was the first single-frame model. It looks fine on its training data but fails badly when you change the content (~22 dB cliff). v5 and v6 were designed to NOT do this.",
   "stopped-early-v61-pico-001": "Stopped early at ~step 12k on 2026-05-08. λ=2px stippling artifact (per-pixel checkerboard) was getting WORSE during training, not recovering. Root cause: spawner regresses Δxy with integer-pixel-aligned bias, and the in-flight `spawn_subpixel_jitter` fix in commit 221a325 was (a) defaulted off and (b) wrong-period (per-batch tile-grid offset, not per-Gaussian sub-pixel offset). Restart from scratch as v6.2-pico-002 with the v4 architecture: disocclusion-pixel-center spawn + DGP dictionary covariance + per-Gaussian (not per-batch) jitter. Memo: docs/superpowers/experiments/2026-05-08-v6.1-pico-001-stopped-stippling-not-fixable-mid-flight.md.",
+  "versioning-convention": "OSS uses THREE independent naming layers, each with its own format and rate of change. (1) Project semver (e.g. 0.6.0.dev0) — what pyproject.toml, GitHub releases, and pip install see. Bumps per release. (2) Architecture iteration (e.g. v6.2 architecture) — research-tradition naming used in design docs and memos. Bumps per architecture rewrite. (3) Training-run identifier (e.g. srcnn-v6.2-pico-002) — what you see on this dashboard, in checkpoint paths, and in viz strip filenames. FROZEN FOREVER once a run starts; renaming would break dashboard data continuity. The three layers move at different rates and are deliberately decoupled — a v6.2 architecture might ship across the 0.6.0, 0.6.1, etc. releases; a single 0.x.y release might touch v6, v6.1, AND v6.2 code paths. Run names never change.",
 };
 
 // Static metadata for runs stopped early. Keyed by exact run.name. Each entry
