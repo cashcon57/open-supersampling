@@ -2742,17 +2742,18 @@ function chartZoomOptions() {
     pan: {
       enabled: true,
       mode: "xy",
-      modifierKey: "shift",
+      modifierKey: null,    // plain drag = pan (was: shift+drag)
       onPanComplete({ chart }) {
         updateDashboardZoomState(chart);
         scheduleChartEventDots(chart);
       },
     },
     zoom: {
-      wheel: { enabled: true, modifierKey: null },
-      pinch: { enabled: true },
+      wheel: { enabled: true, modifierKey: null },     // wheel/scroll = zoom
+      pinch: { enabled: true },                          // pinch = zoom (touch)
       drag: {
         enabled: true,
+        modifierKey: "shift",  // shift+drag = rect-zoom (advanced)
         backgroundColor: "rgba(56, 189, 248, 0.15)",
         borderColor: "rgba(56, 189, 248, 0.6)",
         borderWidth: 1,
@@ -2912,7 +2913,7 @@ function ensureChartHint(card, toolbar, chartId) {
   hint.className = "chart-hint";
   hint.dataset.chartHint = chartId;
   hint.setAttribute("data-text", "");
-  hint.textContent = "drag axes to scale · drag chart to zoom · scroll to zoom · shift+drag to pan";
+  hint.textContent = "drag to pan · scroll to zoom · drag axes to scale · shift+drag to zoom-rect";
   const header = toolbar.parentElement;
   if (header?.classList?.contains("flex") && header.querySelector("h3")) {
     header.insertAdjacentElement("afterend", hint);
