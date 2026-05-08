@@ -68,11 +68,14 @@ while :; do
     > "/tmp/codex-queue-${slug}.dispatch.log" 2>&1 &
   disown
 
-  # Move prompt to done dir to prevent re-dispatch
-  mv "$next" "$DONE_DIR/"
-
-  # Brief grace period for codex to spawn
+  # Brief grace period for dispatch_codex.sh to slurp the prompt file
+  # synchronously into FULL_PROMPT (line 73 of that script). If we move
+  # the file too soon, dispatch fails with "prompt file not found" and
+  # no codex actually spawns. 5s is plenty for `cat <prompt>`.
   sleep 5
+
+  # Now safe to archive the prompt — dispatch_codex has already read it.
+  mv "$next" "$DONE_DIR/"
 
   # Wait for this codex to actually start (codex exec process visible)
   attempts=0
