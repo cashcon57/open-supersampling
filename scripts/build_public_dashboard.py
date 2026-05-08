@@ -185,7 +185,9 @@ GPU_CLASS_PROJECTION = {
 
 
 def utc_now_iso() -> str:
-    return _dt.datetime.now(_dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    # Use timezone.utc for back-compat with Python <3.11 (the watcher on
+    # 3080 Ti runs Git Bash's system python which is 3.10 and lacks _dt.UTC).
+    return _dt.datetime.now(_dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def configure_paths(runs_dir: Path, out_dir: Path) -> None:
