@@ -128,14 +128,11 @@ RUN_CONFIG = {
     },
 }
 
-RUN_ORDER = [
-    "srcnn-v6.1-pico-001",
-    "srcnn-v6-pico-001",
-    "srcnn-v6-heavy-001",
-    "srcnn-v5-pixel-temporal-validated",
-    "srcnn-v5-pixel-temporal-clean-restart-override",
-    "srcnn-prod-v4-lpips",
-]
+# RUN_ORDER is derived from RUN_CONFIG insertion order so the canonical run
+# list lives in exactly one place. To add a new run: insert it in RUN_CONFIG
+# at the desired display position. The lineage section then renders runs in
+# that order (top-to-bottom).
+RUN_ORDER = list(RUN_CONFIG.keys())
 DENY_RE = re.compile(
     r"(aborted|smoke|sanity|test|leak|preflight|paramprobe|init-fix|diag)",
     re.IGNORECASE,
@@ -1506,15 +1503,38 @@ document.addEventListener("DOMContentLoaded", () => {
 """
 
 
+def active_run_name() -> str | None:
+    """Return the name of the run flagged active=True in RUN_CONFIG, or
+    None if no active run is configured. When multiple are flagged active
+    the first in insertion order wins."""
+    for name, config in RUN_CONFIG.items():
+        if config.get("active"):
+            return name
+    return None
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--runs-dir", type=Path, default=RUNS_DIR)
     parser.add_argument("--out", type=Path, default=PUBLIC_DIR)
+    parser.add_argument("--print-active-run", action="store_true",
+                        help="Print the canonical active run name (RUN_CONFIG with active=True) and exit. Used by watcher + viz-daemon supervisors.")
+    parser.add_argument("--print-run-names", action="store_true",
+                        help="Print the canonical run-name list (RUN_CONFIG keys, one per line) and exit.")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    if args.print_active_run:
+        name = active_run_name()
+        if name:
+            print(name)
+        return
+    if args.print_run_names:
+        for name in RUN_CONFIG.keys():
+            print(name)
+        return
     configure_paths(args.runs_dir, args.out)
     data = build_data()
     write_data(data)

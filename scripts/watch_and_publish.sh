@@ -83,16 +83,35 @@ upload_one() {
 
 stage_run_files() {
   # Mirror the curated allow-list of run dirs into the staging tree
-  # the build script expects. Skip if nothing changed.
-  local allow_list=(
-    srcnn-v6.2-pico-002
-    srcnn-v6.1-pico-001
-    srcnn-v6-pico-001
-    srcnn-v6-heavy-001
-    srcnn-v5-pixel-temporal-validated
-    srcnn-v5-pixel-temporal-clean-restart-override
-    srcnn-prod-v4-lpips
-  )
+  # the build script expects. The list is derived from RUN_CONFIG in
+  # build_public_dashboard.py so there is exactly ONE source of truth
+  # for which runs the dashboard publishes — adding a run there auto-
+  # propagates here. Falls back to a static list if Python import fails.
+  local -a allow_list=()
+  local _names
+  _names="$(python3 -c "
+import sys
+sys.path.insert(0, '${REPO_ROOT}/scripts')
+from build_public_dashboard import RUN_CONFIG
+print('\n'.join(RUN_CONFIG.keys()))
+" 2>/dev/null)" || _names=""
+  if [[ -n "$_names" ]]; then
+    while IFS= read -r line; do
+      [[ -n "$line" ]] && allow_list+=("$line")
+    done <<< "$_names"
+  fi
+  if [[ ${#allow_list[@]} -eq 0 ]]; then
+    echo "[watch_and_publish] WARN: could not load RUN_CONFIG; using fallback allow-list" >&2
+    allow_list=(
+      srcnn-v6.2-pico-002
+      srcnn-v6.1-pico-001
+      srcnn-v6-pico-001
+      srcnn-v6-heavy-001
+      srcnn-v5-pixel-temporal-validated
+      srcnn-v5-pixel-temporal-clean-restart-override
+      srcnn-prod-v4-lpips
+    )
+  fi
   for run in "${allow_list[@]}"; do
     local src_run="${SOURCE_DIR}/${run}"
     local dst_run="${STAGING_DIR}/runs/${run}"
@@ -128,7 +147,14 @@ GPU_REMOTE_HOST="${GPU_REMOTE_HOST:-3080ti-windows}"
 GPU_SSH_OPTS="${GPU_SSH_OPTS:--o BatchMode=yes -o ConnectTimeout=5}"
 
 capture_gpu_status() {
-  local active="${OSS_ACTIVE_RUN:-srcnn-v6.2-pico-002}"
+  # Active run derives from the same RUN_CONFIG used by the build script,
+  # so launching a new training run only requires editing RUN_CONFIG (one
+  # place). OSS_ACTIVE_RUN env var still wins for ad-hoc overrides.
+  local active="${OSS_ACTIVE_RUN:-}"
+  if [[ -z "$active" ]]; then
+    active="$(python3 "${REPO_ROOT}/scripts/build_public_dashboard.py" --print-active-run 2>/dev/null)"
+  fi
+  [[ -n "$active" ]] || active="srcnn-v6.2-pico-002"
   local dst="${STAGING_DIR}/runs/${active}"
   [[ -d "$dst" ]] || return 0
   local csv=""

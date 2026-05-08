@@ -1,8 +1,16 @@
 # Dashboard Run Allow-List
 
-The public dashboard intentionally shows runs that explain the current model
-lineage without flooding the run history with failed smoke tests, data-leak
-runs, or pre-v4 prototypes.
+> **Source of truth:** `RUN_CONFIG` in `scripts/build_public_dashboard.py`.
+> The watcher's `stage_run_files` allow-list, the build script's
+> `RUN_ORDER`, the GPU-status active-run pointer, and the viz daemon's
+> active run all derive from `RUN_CONFIG` at runtime — editing this
+> markdown file does NOT change the dashboard. Edit `RUN_CONFIG`, commit,
+> push, and within one watcher cycle (~30s) the change propagates.
+
+This memo describes the curated set in human-readable form. The public
+dashboard intentionally shows runs that explain the current model lineage
+without flooding the run history with failed smoke tests, data-leak runs,
+or pre-v4 prototypes.
 
 ## Public Runs
 
