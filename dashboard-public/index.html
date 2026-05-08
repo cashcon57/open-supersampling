@@ -5859,12 +5859,41 @@ function renderHero(data) {
 // Equal prominence for PSNR + LPIPS; on hover, show industry-reference table
 // with the best run highlighted in its computed band.
 //
-// Important: candidate runs must be evaluated on the canonical OSS held-out
-// batch (TartanAir oldtown, 64 frames). v4's score_log is on SRGD which is
-// in-distribution to v4's training data — including it would surface
-// 33.67 dB as "current best" which is apples-to-oranges with v5/v6's TartanAir
-// numbers. We exclude v4 by name prefix; future runs add themselves to the
-// pool by simply training on the canonical batch.
+// Candidate sources (in priority order):
+//   1. run.score_log[].model_psnr_mean — live training-time held-out evals
+//   2. run.history.headline — measured baseline values for runs that
+//      shipped pre-score_log (e.g. v5-pixel-temporal-validated, whose
+//      25.703 dB / 0.1666 LPIPS only live in the static headline array).
+//
+// All candidates must be on the canonical OSS held-out batch (TartanAir
+// oldtown). v4's score_log is SRGD held-out — apples-to-oranges with
+// v5/v6 — so we exclude it by name prefix.
+function _bestCardCandidatesFromRun(run) {
+  if (/^srcnn-prod-v4/.test(run.name)) return [];
+  const out = [];
+  for (const row of (run.score_log || [])) {
+    const psnr = Number(row.model_psnr_mean);
+    const lpips = Number(row.model_lpips_mean);
+    if (Number.isFinite(psnr)) out.push({ run, psnr, lpips: Number.isFinite(lpips) ? lpips : null, step: Number(row.step) || null, source: "score_log" });
+  }
+  // Headline-array fallback: only used when no score_log exists for this run.
+  if (out.length === 0) {
+    const headline = run.history?.headline || [];
+    let psnr = null, lpips = null;
+    for (const item of headline) {
+      const lbl = String(item.label || "").toLowerCase();
+      const val = Number(item.value);
+      if (!Number.isFinite(val)) continue;
+      if (lbl === "psnr") psnr = val;
+      else if (lbl === "lpips") lpips = val;
+    }
+    if (Number.isFinite(psnr)) {
+      out.push({ run, psnr, lpips, step: Number(run.latest_step) || null, source: "headline" });
+    }
+  }
+  return out;
+}
+
 function renderHeroBestCard(data) {
   const titleEl = document.getElementById("hero-best-title");
   const psnrEl = document.getElementById("hero-best-psnr");
@@ -5872,22 +5901,14 @@ function renderHeroBestCard(data) {
   const metaEl = document.getElementById("hero-best-meta");
   const bodyEl = document.getElementById("hero-best-compare-body");
   if (!titleEl || !psnrEl || !lpipsEl || !metaEl || !bodyEl) return;
-  const isCanonicalCandidate = (run) =>
-    Array.isArray(run.score_log) && run.score_log.length &&
-    !/^srcnn-prod-v4/.test(run.name); // v4's score_log is SRGD, not TartanAir
-  const runs = (data?.runs || []).filter(isCanonicalCandidate);
-  let bestRun = null;
-  let bestRow = null;
-  for (const run of runs) {
-    for (const row of run.score_log) {
-      const psnr = Number(row.model_psnr_mean);
-      if (!Number.isFinite(psnr)) continue;
-      if (!bestRow || psnr > Number(bestRow.model_psnr_mean)) {
-        bestRow = row;
-        bestRun = run;
-      }
-    }
+  const candidates = (data?.runs || []).flatMap(_bestCardCandidatesFromRun);
+  let best = null;
+  for (const c of candidates) {
+    if (!best || c.psnr > best.psnr) best = c;
   }
+  // Adapt to the existing renderer below by binding the legacy variable names.
+  const bestRun = best ? best.run : null;
+  const bestRow = best ? { model_psnr_mean: best.psnr, model_lpips_mean: best.lpips, step: best.step } : null;
   if (!bestRun || !bestRow) {
     titleEl.textContent = "Current best model run";
     psnrEl.textContent = "— dB";
@@ -5898,12 +5919,13 @@ function renderHeroBestCard(data) {
   }
   const psnr = Number(bestRow.model_psnr_mean);
   const lpips = Number(bestRow.model_lpips_mean);
-  const label = bestRun.label || bestRun.name;
+  const label = bestRun.history?.title || bestRun.label || bestRun.name;
   const step = Number(bestRow.step || bestRun.latest_step || 0);
   titleEl.textContent = `Current best · ${label}`;
   psnrEl.textContent = `${psnr.toFixed(2)} dB`;
   lpipsEl.textContent = Number.isFinite(lpips) ? lpips.toFixed(4) : "—";
-  metaEl.textContent = `held-out TartanAir oldtown · step ${step.toLocaleString()}`;
+  const metaSuffix = best?.source === "headline" ? "validated baseline" : `step ${step.toLocaleString()}`;
+  metaEl.textContent = `held-out TartanAir oldtown · ${metaSuffix}`;
   // Build comparison table — OSS row + every comparisonReferenceLines entry,
   // sorted by PSNR descending. Highlight OSS best + bicubic anchor.
   const rows = [
