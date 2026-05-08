@@ -35,6 +35,19 @@ DASHBOARD_PITCH = (
 )
 
 RUN_CONFIG = {
+    "srcnn-v6.2-pico-002": {
+        "active": True,
+        "default_open": True,
+        "history_title": "v6.2 Pico",
+        "status": "active, training now",
+        "summary": "v6.2 Pico-002 — disocclusion spawner + ConcatFusion + R=16 (v4 spawn arch fix for stippling)",
+        "note": "Launched 2026-05-08 after v6.1-pico-001 stopped early on the stippling regression. Architecture per arch-v4 spec: DisocclusionSpawner + DGP dictionary (kills the integer-pixel-aligned spawn basin), ConcatFusion (replaces global cross-attention), latent rank R=16 (passes the H002 SVD energy gate at 0.9918).",
+        "headline": [
+            {"label": "Status", "value": "training now", "caption": "live run"},
+            {"label": "Latest step", "value_from": "latest_step", "caption": "from metrics.json"},
+            {"label": "Loss", "value_from": "loss_total", "caption": "latest total"},
+        ],
+    },
     "srcnn-v6.1-pico-001": {
         "active": False,
         "default_open": False,
