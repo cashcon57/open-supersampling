@@ -22,6 +22,7 @@
 #define OSS_GAUSSIAN_BUILDING_DLL 1
 
 #include "../include/oss_gaussian_interception.h"
+#include "d3d12_hooks.h"
 #include "dxgi_proxy.h"
 #include "log.h"
 
@@ -59,11 +60,19 @@ void OnAttach(HMODULE self) {
                        "DXGI proxy attach failed; forwarded exports will return E_NOTIMPL");
     }
 
-    // TODO(T2.2): DetourTransactionBegin() / DetourUpdateThread(GetCurrentThread()).
+    // T2.2/T2.8: Vtable-probe IDXGISwapChain::Present and ID3D12CommandQueue::
+    // ExecuteCommandLists, then Detours-attach. See d3d12_hooks.cpp for the
+    // probe + attach implementation. Failure is non-fatal: the DLL still loads
+    // and the C API works; just no frames flow through capture.
+    if (InstallD3D12Hooks()) {
+        OSSG_LOG_INFO("dll", "D3D12 hooks installed (Present + ExecuteCommandLists)");
+    } else {
+        OSSG_LOG_ERROR("dll", "D3D12 hook install failed; capture path inactive");
+    }
+
     // TODO(T2.5): LoadLibrary detour for nvngx_dlss.dll → our HMODULE.
-    // TODO(T2.8): Hook IDXGIFactory::CreateSwapChain* → vtable-patch Present.
+    // TODO(T2.6): Hook NVSDK_NGX_D3D12_EvaluateFeature param-dict unpack.
     // TODO(T2.9): SetWindowsHookExW(WH_KEYBOARD_LL, ...) for F11 toggle.
-    // TODO(T2.x): DetourTransactionCommit().
 
     g_dll_attached.store(true, std::memory_order_release);
 }
@@ -71,8 +80,7 @@ void OnAttach(HMODULE self) {
 void OnDetach() {
     g_dll_attached.store(false, std::memory_order_release);
 
-    // TODO(T2.x): Detach all Detours (DetourTransactionBegin/Commit with
-    // DetourDetach for every fn-ptr installed in OnAttach).
+    UninstallD3D12Hooks();
 
     OssGaussianDxgiProxyDetach();
 

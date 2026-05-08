@@ -79,6 +79,8 @@ set(INTERCEPTION_SOURCES
     exr_writer.cpp
     perceptual_hash.cpp
     src/dllmain.cpp
+    src/d3d12_hooks.cpp
+    src/staging_copy.cpp
     src/dxgi_proxy.cpp
     src/ngx_exports.cpp
     src/g_buffer_extractor.cpp
@@ -87,6 +89,8 @@ set(INTERCEPTION_SOURCES
 set(INTERCEPTION_HEADERS
     oss_capture.h
     include/oss_gaussian_interception.h
+    src/d3d12_hooks.h
+    src/staging_copy.h
     src/dxgi_proxy.h
     src/g_buffer_extractor.h
     src/log.h)
