@@ -143,6 +143,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    default=None,
                    help="Randomize v6 spawner tile offsets during training. "
                         "Defaults on for output dirs containing v6.1.")
+    p.add_argument("--spawn-subpixel-jitter", action=argparse.BooleanOptionalAction,
+                   default=False,
+                   help="Add continuous [0,1) HR-pixel spawner jitter during training. "
+                        "Opt-in for v6.1-pico-002 stippling-ablation runs.")
     p.add_argument("--rasterizer-overlap", type=int, default=None,
                    help="HR-pixel overlap for v6 rasterizer feathering. "
                         "Defaults to 8 for output dirs containing v6.1, else 0.")
@@ -1292,11 +1296,11 @@ def main(argv: list[str] | None = None) -> int:
         log.info(
             "v6 trainer starting | device=%s rank=%d world=%d steps=%d smoke=%s "
             "backbone=%s patch=%d batch=%d accum=%d traj=%d lr=%.2e "
-            "spawn_offset_random=%s rasterizer_overlap=%d",
+            "spawn_offset_random=%s spawn_subpixel_jitter=%s rasterizer_overlap=%d",
             device, rank, world_size, args.max_steps, args.smoke, args.backbone,
             args.patch_size, args.batch_size, args.grad_accum,
             args.trajectory_length, args.base_lr,
-            args.spawn_offset_random, args.rasterizer_overlap,
+            args.spawn_offset_random, args.spawn_subpixel_jitter, args.rasterizer_overlap,
         )
         log.info("output_dir=%s", args.output_dir)
 
@@ -1306,6 +1310,7 @@ def main(argv: list[str] | None = None) -> int:
         cfg = V6Config(
             backbone=args.backbone,
             spawn_offset_random=bool(args.spawn_offset_random),
+            spawn_subpixel_jitter=bool(args.spawn_subpixel_jitter),
             rasterizer_overlap=int(args.rasterizer_overlap),
         )
         generator = V6Model(cfg).to(device)

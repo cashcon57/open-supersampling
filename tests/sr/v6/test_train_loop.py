@@ -174,6 +174,18 @@ def test_smoke_no_bf16_flag_recognized(tmp_path):
     assert res.returncode == 0, res.stdout + res.stderr
 
 
+def test_spawn_subpixel_jitter_flag_recognized(tmp_path):
+    args = train_v6.parse_args([
+        "--output-dir", str(tmp_path),
+        "--smoke",
+        "--spawn-subpixel-jitter",
+    ])
+    args = train_v6.normalize_args(args)
+
+    assert args.spawn_subpixel_jitter is True
+    assert args.spawn_offset_random is False
+
+
 def test_smoke_ddp_singleprocess_path(tmp_path, cheap_trainer, monkeypatch):
     for name in ("WORLD_SIZE", "RANK", "LOCAL_RANK", "MASTER_ADDR", "MASTER_PORT"):
         monkeypatch.delenv(name, raising=False)

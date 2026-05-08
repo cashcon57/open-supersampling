@@ -137,6 +137,32 @@ def test_spawner_offset_constant_within_trajectory():
     assert not torch.equal(resampled, offsets[0])
 
 
+def test_spawner_subpixel_jitter_is_fractional_and_opt_in():
+    torch.manual_seed(2027)
+    legacy = _tiny_v6_1_model(canvas_capacity=32, tile_size_lr=16).train()
+    jittered = _tiny_v6_1_model(
+        canvas_capacity=32,
+        tile_size_lr=16,
+        spawn_subpixel_jitter=True,
+    ).train()
+    lr = _constant_lr(h=16, w=16)
+
+    with torch.no_grad():
+        legacy.reset_state()
+        legacy(lr, motion_lr=None, frame_index=0)
+        assert legacy._spawn_offset_xy is not None
+        legacy_frac = torch.frac(legacy._spawn_offset_xy)
+
+        jittered.reset_state()
+        jittered(lr, motion_lr=None, frame_index=0)
+        assert jittered._spawn_offset_xy is not None
+        jittered_frac = torch.frac(jittered._spawn_offset_xy)
+
+    torch.testing.assert_close(legacy_frac, torch.zeros_like(legacy_frac))
+    assert bool((jittered_frac > 0.0).all().item())
+    assert bool((jittered_frac < 1.0).all().item())
+
+
 class _SyntheticSeamRenderer:
     """Renderer double that exposes full-frame 16px seams only on legacy path."""
 

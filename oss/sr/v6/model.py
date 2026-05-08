@@ -114,6 +114,7 @@ class V6Config:
     tile_size_lr: int = 8
     tile_size_hr: int = 16
     spawn_offset_random: bool = False
+    spawn_subpixel_jitter: bool = False
     rasterizer_overlap: int = 0
     keyframe_interval: int = 10
     prune_every: int = 200
@@ -533,7 +534,10 @@ class V6Model(nn.Module):
         )
 
     def _spawn_offset_for(self, features: torch.Tensor) -> Optional[torch.Tensor]:
-        if not bool(self.cfg.spawn_offset_random) or not self.training:
+        if (
+            not bool(self.cfg.spawn_offset_random)
+            and not bool(self.cfg.spawn_subpixel_jitter)
+        ) or not self.training:
             return None
         b = int(features.shape[0])
         device = features.device
@@ -542,13 +546,18 @@ class V6Model(nn.Module):
             or self._spawn_offset_xy.shape != (b, 2)
             or self._spawn_offset_xy.device != device
         ):
-            self._spawn_offset_xy = torch.randint(
-                low=0,
-                high=int(self.cfg.tile_size_hr),
-                size=(b, 2),
-                device=device,
-                dtype=torch.int64,
-            ).to(dtype=torch.float32)
+            offset = torch.zeros((b, 2), device=device, dtype=torch.float32)
+            if bool(self.cfg.spawn_offset_random):
+                offset = offset + torch.randint(
+                    low=0,
+                    high=int(self.cfg.tile_size_hr),
+                    size=(b, 2),
+                    device=device,
+                    dtype=torch.int64,
+                ).to(dtype=torch.float32)
+            if bool(self.cfg.spawn_subpixel_jitter):
+                offset = offset + torch.rand((b, 2), device=device, dtype=torch.float32)
+            self._spawn_offset_xy = offset
         return self._spawn_offset_xy
 
     def _concat_canvas(
