@@ -52,6 +52,16 @@ std::tuple<torch::Tensor, torch::Tensor> conic_to_scale_rot_grad(
     return conic_to_scale_rot_grad_cuda(scale, rot, d_conic);
 }
 
+std::tuple<torch::Tensor, torch::Tensor> tile_bin_counting_sort_cuda(
+    torch::Tensor tile_id, torch::Tensor gid, int64_t num_tiles
+);
+
+std::tuple<torch::Tensor, torch::Tensor> tile_bin_counting_sort(
+    torch::Tensor tile_id, torch::Tensor gid, int64_t num_tiles
+) {
+    return tile_bin_counting_sort_cuda(tile_id, gid, num_tiles);
+}
+
 PYBIND11_MODULE(_C, m) {
     m.doc() = "OSS custom CUDA extension (Phase 3c rasterizer)";
     m.def("rasterize_forward", &rasterize_forward,
@@ -64,4 +74,6 @@ PYBIND11_MODULE(_C, m) {
           "Preprocess Gaussian conics and tile AABBs (Phase 2a)");
     m.def("pair_construction_only", &pair_construction_cuda,
           "Build sorted Gaussian/tile pairs and tile offsets (Phase 2b)");
+    m.def("tile_bin_counting_sort", &tile_bin_counting_sort,
+          "Counting-sort tile ids into grouped gid bins");
 }

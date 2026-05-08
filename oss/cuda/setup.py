@@ -38,6 +38,7 @@ setup(
                 "src/bindings.cpp",
                 "src/rasterizer_fwd.cu",
                 "src/rasterizer_bwd.cu",
+                "src/tile_bin_counting_sort.cu",
             ],
             include_dirs=INCLUDE_DIRS,
             extra_compile_args={
