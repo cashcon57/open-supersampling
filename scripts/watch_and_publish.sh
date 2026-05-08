@@ -57,6 +57,7 @@ mkdir -p "$STAGING_DIR/runs" "$STAGING_DIR/viz" || true
 content_type_for() {
   case "$1" in
     *.html|*.htm) echo "text/html; charset=utf-8" ;;
+    *.js) echo "application/javascript; charset=utf-8" ;;
     *.json) echo "application/json" ;;
     *.png)  echo "image/png" ;;
     *.txt|*.log) echo "text/plain; charset=utf-8" ;;
@@ -179,6 +180,9 @@ while :; do
       continue
     fi
   fi
+  python3 "${REPO_ROOT}/scripts/status_probe.py" \
+    --staging-dir "${STAGING_DIR}" \
+    --state-file /tmp/oss_status_probe_state.json || true
   # Canonical index.html lives in dashboard-public/ (edited by codex/hand).
   # build_public_dashboard.py only regenerates it when __PITCH_HTML__ marker
   # is still present, which means once the staging copy has been substituted

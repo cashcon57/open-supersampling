@@ -5,11 +5,14 @@ import argparse
 import copy
 import json
 import math
+from datetime import datetime, timezone
 from pathlib import Path
 import sys
 
 
 SCHEMA_VERSION = "2026-05-07"
+STATUS_SERVICE_IDS = {"trainer", "watcher", "worker", "r2", "dns"}
+STATUS_VALUES = {"healthy", "degraded", "offline"}
 
 
 def type_name(value: object) -> str:
@@ -38,6 +41,16 @@ def is_utc_iso8601(value: str) -> bool:
     if "." in sec:
         sec = sec.split(".", 1)[0]
     return time_parts[0].isdigit() and time_parts[1].isdigit() and sec.isdigit()
+
+
+def is_utc_iso8601_datetime(value: str) -> bool:
+    if not value.endswith("Z") or "T" not in value:
+        return False
+    try:
+        parsed = datetime.fromisoformat(value[:-1] + "+00:00")
+    except ValueError:
+        return False
+    return parsed.tzinfo is not None and parsed.utcoffset() == timezone.utc.utcoffset(parsed)
 
 
 def add_error(errors: list[str], path: str, expected: str, value: object) -> None:
@@ -345,6 +358,67 @@ def validate(data: object) -> tuple[int, list[str], list[str]]:
     return (1 if errors else 0), errors, warnings
 
 
+def validate_status_service(service: object, index: int, errors: list[str]) -> None:
+    path = f"services[{index}]"
+    if not isinstance(service, dict):
+        add_error(errors, path, "object", service)
+        return
+
+    for key in ("id", "name", "status", "detail", "tooltip"):
+        require_str(service, key, path, errors)
+
+    service_id = service.get("id")
+    if isinstance(service_id, str) and service_id not in STATUS_SERVICE_IDS:
+        errors.append(f"{path}.id: expected one of {sorted(STATUS_SERVICE_IDS)}, got {service_id}")
+
+    status = service.get("status")
+    if isinstance(status, str) and status not in STATUS_VALUES:
+        errors.append(f"{path}.status: expected one of {sorted(STATUS_VALUES)}, got {status}")
+
+
+def validate_status(data: object) -> tuple[int, list[str], list[str]]:
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    if not isinstance(data, dict):
+        return 1, ["root: expected object, got " + type_name(data)], warnings
+
+    if "schema_version" not in data:
+        errors.append("schema_version: missing required key")
+    elif not isinstance(data["schema_version"], str):
+        add_error(errors, "schema_version", "str", data["schema_version"])
+    elif data["schema_version"] != SCHEMA_VERSION:
+        return 2, [f"schema_version: expected {SCHEMA_VERSION}, got {data['schema_version']}"], warnings
+
+    if "checked_at" not in data:
+        errors.append("checked_at: missing required key")
+    elif not isinstance(data["checked_at"], str):
+        add_error(errors, "checked_at", "str", data["checked_at"])
+    elif not is_utc_iso8601_datetime(data["checked_at"]):
+        errors.append("checked_at: expected ISO-8601 UTC string ending in Z")
+
+    if "services" not in data:
+        errors.append("services: missing required key")
+    elif not isinstance(data["services"], list):
+        add_error(errors, "services", "list[Service]", data["services"])
+    else:
+        if len(data["services"]) != len(STATUS_SERVICE_IDS):
+            errors.append(f"services: expected length {len(STATUS_SERVICE_IDS)}, got {len(data['services'])}")
+        seen_ids: list[str] = []
+        for index, service in enumerate(data["services"]):
+            validate_status_service(service, index, errors)
+            if isinstance(service, dict) and isinstance(service.get("id"), str):
+                seen_ids.append(service["id"])
+        seen_id_set = set(seen_ids)
+        if seen_id_set != STATUS_SERVICE_IDS:
+            errors.append(f"services: expected ids {sorted(STATUS_SERVICE_IDS)}, got {sorted(seen_id_set)}")
+        duplicate_ids = sorted({service_id for service_id in seen_ids if seen_ids.count(service_id) > 1})
+        if duplicate_ids:
+            errors.append(f"services: duplicate ids {duplicate_ids}")
+
+    return (1 if errors else 0), errors, warnings
+
+
 def self_test() -> int:
     data = {
         "schema_version": SCHEMA_VERSION,
@@ -422,7 +496,8 @@ def main() -> int:
         print(f"{args.data_json}: not readable: {exc}", file=sys.stderr)
         return 3
 
-    code, errors, warnings = validate(data)
+    is_status_json = args.data_json.name == "status.json"
+    code, errors, warnings = validate_status(data) if is_status_json else validate(data)
     for warning in warnings:
         print(warning, file=sys.stderr)
     if errors:
@@ -430,11 +505,14 @@ def main() -> int:
             print(error, file=sys.stderr)
         return code
 
-    print(
-        f"OK schema_version={data['schema_version']} "
-        f"runs={len(data['runs'])} models={len(data['models'])} "
-        f"generated_at={data['generated_at']}"
-    )
+    if is_status_json:
+        print(f"OK schema_version={data['schema_version']} services={len(data['services'])} checked_at={data['checked_at']}")
+    else:
+        print(
+            f"OK schema_version={data['schema_version']} "
+            f"runs={len(data['runs'])} models={len(data['models'])} "
+            f"generated_at={data['generated_at']}"
+        )
     return 0
 
 

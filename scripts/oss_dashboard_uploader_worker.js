@@ -23,6 +23,7 @@ const MAX_PUT_BYTES = 8 * 1024 * 1024;  // 8 MiB
 
 const KEY_PREFIX_ALLOWLIST = [
   'data.json',
+  'status.json',
   'index.html',
   'oss-logo.svg',
   'crt-shader.js',
@@ -57,9 +58,15 @@ export default {
     const path = url.pathname;
     const method = request.method;
 
+    if (method === 'GET' && path === '/health') {
+      return new Response(JSON.stringify({ ok: true, ts: Date.now() }), {
+        headers: { 'content-type': 'application/json', 'cache-control': 'no-store' }
+      });
+    }
+
     if (method === 'GET' || method === 'HEAD') {
       if (path === '/health') {
-        return new Response('ok', { status: 200, headers: { 'cache-control': 'no-store' } });
+        return new Response(null, { status: 200, headers: { 'cache-control': 'no-store' } });
       }
       const key = path === '/' ? 'index.html' : path.slice(1);
       const obj = await env.BUCKET.get(key);

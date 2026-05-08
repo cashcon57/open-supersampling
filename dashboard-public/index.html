@@ -185,6 +185,61 @@
       padding: 0 4px;
     }
     .visit-banner-close:hover { color: #e4e4e7; }
+    .status-strip {
+      display: flex;
+      gap: 14px;
+      flex-wrap: wrap;
+      align-items: center;
+      padding: 8px 12px;
+      margin: 8px 0 12px;
+      border-radius: 8px;
+      background: #18181b;
+      border: 1px solid #27272a;
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      font-size: 12px;
+      color: #a1a1aa;
+    }
+    .status-strip-label { color: #71717a; }
+    .status-dot {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      cursor: help;
+      outline: none;
+    }
+    .status-dot .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #3f3f46;
+      box-shadow: 0 0 0 0 rgba(34,211,238,0);
+      transition: background 200ms, box-shadow 200ms;
+    }
+    .status-dot[data-status="healthy"] .dot { background: #22d3ee; box-shadow: 0 0 6px rgba(34,211,238,0.5); }
+    .status-dot[data-status="degraded"] .dot { background: #facc15; box-shadow: 0 0 6px rgba(250,204,21,0.5); }
+    .status-dot[data-status="offline"] .dot { background: #ef4444; box-shadow: 0 0 6px rgba(239,68,68,0.5); }
+    .status-dot .status-tip {
+      position: absolute;
+      bottom: calc(100% + 8px);
+      left: 0;
+      min-width: 220px;
+      max-width: 320px;
+      background: #09090b;
+      border: 1px solid #3f3f46;
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-size: 11px;
+      line-height: 1.4;
+      color: #e4e4e7;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 150ms;
+      z-index: 50;
+      white-space: normal;
+    }
+    .status-dot:hover .status-tip,
+    .status-dot:focus-visible .status-tip { opacity: 1; }
     .viz-strip-new {
       outline: 1px solid #22d3ee;
       outline-offset: 1px;
@@ -212,6 +267,9 @@
     }
     @media (max-width: 480px) {
       .visit-banner { font-size: 12px; padding: 6px 10px; }
+      .status-strip { font-size: 11px; gap: 10px; }
+      .status-dot .status-name { display: none; }
+      .status-dot .status-tip { left: auto; right: 0; }
     }
     .accordion-body { max-height: 0; overflow: hidden; opacity: 0.65; transition: max-height 320ms ease, opacity 220ms ease; }
     details[open] .accordion-body { max-height: 5000px; opacity: 1; }
@@ -1007,6 +1065,30 @@
         </div>
       </div>
     </header>
+
+    <div class="status-strip" id="status-strip" aria-label="Service health">
+      <span class="status-strip-label">Status:</span>
+      <span class="status-dot" data-service="trainer" tabindex="0" role="img" aria-label="Trainer">
+        <span class="dot"></span><span class="status-name">Trainer</span>
+        <span class="status-tip" role="tooltip"></span>
+      </span>
+      <span class="status-dot" data-service="watcher" tabindex="0" role="img" aria-label="Watcher">
+        <span class="dot"></span><span class="status-name">Watcher</span>
+        <span class="status-tip" role="tooltip"></span>
+      </span>
+      <span class="status-dot" data-service="worker" tabindex="0" role="img" aria-label="CF Worker">
+        <span class="dot"></span><span class="status-name">CF Worker</span>
+        <span class="status-tip" role="tooltip"></span>
+      </span>
+      <span class="status-dot" data-service="r2" tabindex="0" role="img" aria-label="R2 origin">
+        <span class="dot"></span><span class="status-name">R2 origin</span>
+        <span class="status-tip" role="tooltip"></span>
+      </span>
+      <span class="status-dot" data-service="dns" tabindex="0" role="img" aria-label="DNS">
+        <span class="dot"></span><span class="status-name">DNS</span>
+        <span class="status-tip" role="tooltip"></span>
+      </span>
+    </div>
 
     <div class="terminal-divider" aria-hidden="true"><span class="td-corner">┌─ signal ─</span><span class="td-rule"></span><span class="td-corner">─┐</span></div>
     <section class="grid items-start gap-4 lg:grid-cols-[1.4fr_1fr_1fr]" aria-label="At a glance">
@@ -4697,6 +4779,36 @@ async function fetchDashboardData() {
   return response.json();
 }
 
+async function loadStatus() {
+  try {
+    const response = await fetch(`status.json?ts=${Date.now()}`, { cache: "no-store" });
+    if (!response.ok) return;
+    const statusPayload = await response.json();
+    for (const svc of statusPayload.services || []) {
+      const el = document.querySelector(`.status-dot[data-service="${svc.id}"]`);
+      if (!el) continue;
+      el.dataset.status = svc.status;
+      const tip = el.querySelector(".status-tip");
+      if (!tip) continue;
+      tip.textContent = "";
+      const head = document.createElement("strong");
+      head.textContent = `${svc.name} — ${svc.status}`;
+      const det = document.createElement("div");
+      det.style.color = "#a1a1aa";
+      det.textContent = svc.detail || "";
+      const desc = document.createElement("div");
+      desc.style.color = "#a1a1aa";
+      desc.style.marginTop = "6px";
+      desc.textContent = svc.tooltip || "";
+      tip.appendChild(head);
+      tip.appendChild(det);
+      tip.appendChild(desc);
+    }
+  } catch (error) {
+    // Status is non-critical; data.json drives the dashboard load state.
+  }
+}
+
 async function pollDashboard() {
   try {
     renderDashboard(await fetchDashboardData());
@@ -4777,6 +4889,8 @@ document.addEventListener("DOMContentLoaded", () => {
   startAsciiSpinner();
   fillTerminalRules();
   pollDashboard();
+  loadStatus();
+  window.setInterval(loadStatus, 30_000);
   startLiveUpdates();
 });
 
