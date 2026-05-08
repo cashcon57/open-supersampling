@@ -14,6 +14,7 @@ import html
 import json
 import math
 import re
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -465,6 +466,21 @@ def read_gpu_status(run_dir: Path) -> dict[str, Any] | None:
     return {key: primitive_value(payload.get(key)) for key in allowed if key in payload}
 
 
+def read_events(run_dir: Path) -> list[Any]:
+    events_file = run_dir / "events.json"
+    if not events_file.exists():
+        return []
+    try:
+        events_payload = json.loads(events_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"warn: events.json read failed for {run_dir}: {exc}", file=sys.stderr)
+        return []
+    if not isinstance(events_payload, dict):
+        return []
+    events = events_payload.get("events", [])
+    return list(events) if isinstance(events, list) else []
+
+
 def load_previous_runs() -> dict[str, dict[str, Any]]:
     if not DATA_JSON.is_file():
         return {}
@@ -487,6 +503,7 @@ def build_run(name: str, previous: dict[str, Any] | None) -> dict[str, Any] | No
     metrics = read_rows(run_dir / "metrics.json")
     scores = read_rows(run_dir / "score_log.json")
     viz_pngs = list_viz_pngs(run_dir)
+    events = read_events(run_dir)
 
     previous_has_data = bool(
         previous
@@ -515,6 +532,7 @@ def build_run(name: str, previous: dict[str, Any] | None) -> dict[str, Any] | No
         cached["history"] = history_for_run(name, config)
         cached["gpu_status"] = read_gpu_status(run_dir) or cached.get("gpu_status")
         cached["viz_columns"] = viz_columns_for_run(name) or cached.get("viz_columns", [])
+        cached["events"] = events if events else cached.get("events", [])
         cached["max_target_steps"] = max_steps_for_run(name, [], cached)
         cached["cross_version_points"] = cross_version_points_for_run(name)
         return cached
@@ -531,6 +549,7 @@ def build_run(name: str, previous: dict[str, Any] | None) -> dict[str, Any] | No
             "score_log": [],
             "viz_pngs": [],
             "viz_columns": viz_columns_for_run(name),
+            "events": events,
             "max_target_steps": max_steps_for_run(name, [], previous),
             "gpu_status": read_gpu_status(run_dir),
             "cross_version_points": cross_version_points_for_run(name),
@@ -552,6 +571,7 @@ def build_run(name: str, previous: dict[str, Any] | None) -> dict[str, Any] | No
         "score_log": [slim_row(row, enrich_score=True) for row in scores],
         "viz_pngs": viz_pngs,
         "viz_columns": viz_columns,
+        "events": events,
         "max_target_steps": max_steps_for_run(name, metrics, previous),
         "gpu_status": read_gpu_status(run_dir),
         "cross_version_points": cross_version_points_for_run(name),

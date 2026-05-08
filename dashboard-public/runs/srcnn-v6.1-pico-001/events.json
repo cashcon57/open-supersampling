@@ -1,0 +1,14 @@
+{
+  "schema_version": "events-2026-05-08",
+  "events": [
+    {
+      "step": 8000,
+      "ts": "2026-05-08T05:25:00Z",
+      "kind": "lambda-retune",
+      "label": "λ retune — charb 1→5, vgg 1→0.15, lpips 1→2, wavelet 0.5→1.5, sobel 0.2→1, tc 0.5→2",
+      "detail": "Plateau audit (4-agent triangulation) found msvgg dominating 87% of gradient signal while charbonnier was at 1.4%. All pixel-fidelity terms (charb/tc/wavelet) had flatlined at step ~400. Retune lifts pixel signal ~5x and rebalances each major term to ~10-25% of total gradient. See docs/coordination/v6.1-plateau-audit-2026-05-08.md. Trainer restarted from step-00008000.pt with retuned λ; expect 1-2% transient noise as Adam moments re-adapt.",
+      "commit": "96e5349",
+      "doc": "docs/coordination/v6.1-plateau-audit-2026-05-08.md"
+    }
+  ]
+}

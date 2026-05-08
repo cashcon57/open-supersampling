@@ -2,6 +2,7 @@
 """Validate the public dashboard data.json contract."""
 
 import argparse
+import copy
 import json
 import math
 from pathlib import Path
@@ -53,6 +54,16 @@ def require_key(obj: dict[str, object], key: str, path: str, errors: list[str]) 
 def require_str(obj: dict[str, object], key: str, path: str, errors: list[str]) -> None:
     if require_key(obj, key, path, errors) and not isinstance(obj[key], str):
         add_error(errors, f"{path}.{key}", "str", obj[key])
+
+
+def require_non_empty_str(obj: dict[str, object], key: str, path: str, errors: list[str]) -> None:
+    if not require_key(obj, key, path, errors):
+        return
+    value = obj[key]
+    if not isinstance(value, str):
+        add_error(errors, f"{path}.{key}", "non-empty str", value)
+    elif not value.strip():
+        errors.append(f"{path}.{key}: expected non-empty str")
 
 
 def require_bool(obj: dict[str, object], key: str, path: str, errors: list[str]) -> None:
@@ -241,6 +252,21 @@ def validate_model(model: object, index: int, errors: list[str]) -> None:
     require_bool(model, "active", path, errors)
 
 
+def validate_event(event: object, path: str, errors: list[str]) -> None:
+    if not isinstance(event, dict):
+        add_error(errors, path, "Event", event)
+        return
+    require_int_ge_zero(event, "step", path, errors)
+    require_non_empty_str(event, "kind", path, errors)
+    require_non_empty_str(event, "label", path, errors)
+    for key in ("ts", "detail", "commit", "doc"):
+        if key not in event:
+            continue
+        value = event[key]
+        if value is not None and not isinstance(value, str):
+            add_error(errors, f"{path}.{key}", "str | null", value)
+
+
 def validate_run(run: object, index: int, errors: list[str], warnings: list[str]) -> None:
     path = f"runs[{index}]"
     if not isinstance(run, dict):
@@ -258,6 +284,12 @@ def validate_run(run: object, index: int, errors: list[str], warnings: list[str]
     require_object_list(run, "score_log", path, errors)
     require_str_list(run, "viz_pngs", path, errors)
     require_str_list(run, "viz_columns", path, errors)
+    if require_key(run, "events", path, errors):
+        if not isinstance(run["events"], list):
+            add_error(errors, f"{path}.events", "list[Event]", run["events"])
+        else:
+            for event_index, event in enumerate(run["events"]):
+                validate_event(event, f"{path}.events[{event_index}]", errors)
     require_object_list(run, "cross_version_points", path, errors)
     require_optional_object(run, "gpu_status", path, errors)
 
@@ -313,14 +345,77 @@ def validate(data: object) -> tuple[int, list[str], list[str]]:
     return (1 if errors else 0), errors, warnings
 
 
+def self_test() -> int:
+    data = {
+        "schema_version": SCHEMA_VERSION,
+        "generated_at": "2026-05-07T00:00:00Z",
+        "runs": [
+            {
+                "name": "self-test-run",
+                "label": "self-test",
+                "active": False,
+                "latest_step": 1,
+                "max_target_steps": None,
+                "latest_metrics": {},
+                "history": {},
+                "loss_curve": [],
+                "score_log": [],
+                "viz_pngs": [],
+                "viz_columns": [],
+                "events": [
+                    {
+                        "step": 1,
+                        "kind": "note",
+                        "label": "self-test event",
+                        "ts": "2026-05-07T00:00:00Z",
+                        "detail": None,
+                        "commit": "abc1234",
+                        "doc": None,
+                        "extra": {"preserved": True},
+                    }
+                ],
+                "cross_version_points": [],
+                "gpu_status": None,
+            }
+        ],
+        "models": [],
+    }
+
+    code, errors, _warnings = validate(data)
+    if code != 0:
+        print("self-test valid event payload failed unexpectedly:", file=sys.stderr)
+        for error in errors:
+            print(error, file=sys.stderr)
+        return 1
+
+    broken = copy.deepcopy(data)
+    del broken["runs"][0]["events"][0]["kind"]
+    code, errors, _warnings = validate(broken)
+    expected = "runs[0].events[0].kind: missing required key"
+    if code == 0 or expected not in errors:
+        print("self-test failed to reject event without kind clearly", file=sys.stderr)
+        for error in errors:
+            print(error, file=sys.stderr)
+        return 1
+
+    print("OK self-test event validation rejects missing kind")
+    return 0
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("data_json", type=Path)
+    parser.add_argument("data_json", type=Path, nargs="?")
+    parser.add_argument("--self-test", action="store_true", help="run validator self-tests")
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
+    if args.self_test:
+        return self_test()
+    if args.data_json is None:
+        print("data_json is required unless --self-test is set", file=sys.stderr)
+        return 3
     try:
         data = load_json(args.data_json)
     except (OSError, json.JSONDecodeError) as exc:

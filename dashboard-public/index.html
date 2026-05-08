@@ -174,8 +174,52 @@
       font-size: 11px;
       line-height: 1.25;
     }
-    .chart-wrap { height: 18rem; min-height: 16rem; max-width: 100%; overflow: hidden; }
+    .chart-wrap { position: relative; height: 18rem; min-height: 16rem; max-width: 100%; overflow: hidden; }
     .chart-wrap canvas { max-width: 100% !important; touch-action: none; }
+    .event-dot-layer { position: absolute; inset: 0; z-index: 5; pointer-events: none; }
+    .event-dot {
+      position: absolute;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #fbbf24, #f97316);
+      border: 1.5px solid rgba(0,0,0,0.4);
+      cursor: help;
+      transition: transform 120ms ease, box-shadow 120ms ease;
+      z-index: 5;
+      pointer-events: auto;
+      transform: translate(-50%, -50%);
+    }
+    .event-dot:hover,
+    .event-dot:focus-visible {
+      outline: none;
+      transform: translate(-50%, -50%) scale(1.4);
+      box-shadow: 0 0 12px rgba(251,191,36,0.7);
+    }
+    .event-dot[data-event-kind="lambda-retune"] { background: linear-gradient(135deg, #34d399, #10b981); }
+    .event-dot[data-event-kind="lr-drop"]       { background: linear-gradient(135deg, #60a5fa, #2563eb); }
+    .event-dot[data-event-kind="abort"]         { background: linear-gradient(135deg, #f87171, #dc2626); }
+    .event-dot[data-event-kind="resume"]        { background: linear-gradient(135deg, #a78bfa, #7c3aed); }
+    .event-tooltip-copy {
+      display: grid;
+      gap: 0.45rem;
+      white-space: normal;
+    }
+    .event-tooltip-title {
+      color: var(--oss-text);
+      font-weight: 700;
+    }
+    .event-tooltip-detail {
+      max-width: 34ch;
+    }
+    .event-tooltip-links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.4rem;
+    }
+    .event-tooltip-links a {
+      border-bottom: 1px solid rgba(140, 255, 193, 0.45);
+    }
     .comparison-chart-wrap { height: 20rem; min-height: 18rem; }
     .chart-card { position: relative; scroll-margin-top: 1rem; }
     .title-with-info {
@@ -921,6 +965,7 @@ const CHART_SLUGS = new Set([
   "cross-version-lpips",
 ]);
 const FOCUS_SLUGS = new Set([...CHART_SLUGS, "comparison", "viz", "model-card", "gpu"]);
+const EVENT_CHART_SLUGS = new Set(["loss", "loss-decomp", "psnr-live", "lpips-live"]);
 
 const stepReferencePlugin = {
   id: "ossUrlStateStepReference",
@@ -987,8 +1032,21 @@ const stepReferencePlugin = {
   },
 };
 
+const eventAnnotationPlugin = {
+  id: "ossEventAnnotations",
+  afterRender(chart) {
+    renderChartEventDots(chart);
+  },
+  resize(chart) {
+    scheduleChartEventDots(chart);
+  },
+  afterDestroy(chart) {
+    removeChartEventDots(chart);
+  },
+};
+
 if (window.Chart?.register) {
-  Chart.register(stepReferencePlugin);
+  Chart.register(stepReferencePlugin, eventAnnotationPlugin);
 }
 
 const comparisonReferenceLines = [
@@ -1073,17 +1131,22 @@ function scheduleTooltipHide() {
 
 function showTooltip(button, copy, mode = "hover-shown") {
   if (!button || !copy) return;
+  showHtmlTooltip(button, tooltipHtml(copy), mode);
+}
+
+function showHtmlTooltip(anchor, html, mode = "hover-shown") {
+  if (!anchor || !html) return;
   if (infoHoverTimer) window.clearTimeout(infoHoverTimer);
   cancelTooltipHide();
   infoHoverTimer = null;
   ensureInfoTooltip();
   lastInfoOpenedAt = performance.now();
-  activeInfoButton = button;
+  activeInfoButton = anchor;
   activeInfoMode = mode;
-  pinnedInfoButton = mode === "click-stuck" ? button : null;
-  button.setAttribute("aria-describedby", "chart-info-tooltip");
+  pinnedInfoButton = mode === "click-stuck" ? anchor : null;
+  anchor.setAttribute("aria-describedby", "chart-info-tooltip");
   infoTooltip.className = "info-tooltip";
-  infoTooltip.innerHTML = tooltipHtml(copy);
+  infoTooltip.innerHTML = html;
   infoTooltip.style.visibility = "hidden";
   infoTooltip.style.left = "0px";
   infoTooltip.style.top = "0px";
@@ -1092,7 +1155,7 @@ function showTooltip(button, copy, mode = "hover-shown") {
   if (isMobileTooltip()) {
     infoTooltip.classList.add("is-sheet");
   } else {
-    const rect = button.getBoundingClientRect();
+    const rect = anchor.getBoundingClientRect();
     const tooltipRect = infoTooltip.getBoundingClientRect();
     const width = tooltipRect.width || Math.min(360, window.innerWidth - 24);
     const height = tooltipRect.height || 240;
@@ -1161,6 +1224,176 @@ function setupInfoTooltips() {
     if (event.key === "Escape") hideAllTooltips();
   });
   window.addEventListener("resize", hideAllTooltips);
+}
+
+function eventStep(event) {
+  const step = Number(event?.step ?? event?.training_step ?? event?.global_step ?? event?.at_step);
+  return Number.isFinite(step) ? step : null;
+}
+
+function eventText(event, keys, fallback = "") {
+  for (const key of keys) {
+    const value = event?.[key];
+    if (value !== undefined && value !== null && String(value).trim()) return String(value).trim();
+  }
+  return fallback;
+}
+
+function eventKind(event) {
+  return eventText(event, ["kind", "type", "category"], "default").toLowerCase();
+}
+
+function eventKindClass(kind) {
+  const slug = String(kind || "default").toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
+  return `kind-${slug || "default"}`;
+}
+
+function eventSha(event) {
+  const raw = eventText(event, ["sha", "commit", "commit_sha", "commitSha"]);
+  const match = raw.match(/[0-9a-f]{7,40}/i);
+  return match ? match[0] : "";
+}
+
+function eventDocPath(event) {
+  const raw = eventText(event, ["doc_path", "docPath", "doc", "file", "path", "repo_path", "repoPath"]);
+  if (!raw || /^[a-z][a-z0-9+.-]*:/i.test(raw)) return "";
+  return raw.replace(/^\.?\//, "").replace(/^\/+/, "");
+}
+
+function repoFileUrl(path) {
+  const clean = String(path || "").trim();
+  if (!clean) return "";
+  return `https://github.com/cashcon57/open-supersampling/blob/main/${clean.split("/").map(encodeURIComponent).join("/")}`;
+}
+
+function eventTooltipHtml(event) {
+  const step = eventStep(event);
+  const label = eventText(event, ["label", "title", "name"], `step ${formatStepTick(step)}`);
+  const detail = eventText(event, ["detail", "details", "description", "summary", "note"]);
+  const sha = eventSha(event);
+  const docPath = eventDocPath(event);
+  const links = [
+    sha ? `<a href="https://github.com/cashcon57/open-supersampling/commit/${encodeURIComponent(sha)}" target="_blank" rel="noopener noreferrer">commit ${escapeHtml(sha.slice(0, 7))}</a>` : "",
+    docPath ? `<a href="${repoFileUrl(docPath)}" target="_blank" rel="noopener noreferrer">${escapeHtml(docPath)}</a>` : "",
+  ].filter(Boolean).join("");
+  return `<button class="info-close" type="button" aria-label="Close tooltip">&times;</button>
+    <div class="event-tooltip-copy">
+      <strong class="event-tooltip-title">${escapeHtml(label)}</strong>
+      ${detail ? `<div class="event-tooltip-detail">${escapeHtml(detail)}</div>` : ""}
+      ${links ? `<div class="event-tooltip-links">${links}</div>` : ""}
+    </div>`;
+}
+
+function removeChartEventDots(chart) {
+  chart?.$eventDotLayer?.remove();
+  if (chart) chart.$eventDotLayer = null;
+}
+
+function scheduleChartEventDots(chart) {
+  if (!chart) return;
+  window.requestAnimationFrame(() => renderChartEventDots(chart));
+}
+
+function bindEventDotTooltip(dot, event) {
+  dot.addEventListener("pointerenter", () => {
+    if (!canHoverTooltips() || activeInfoMode === "click-stuck") return;
+    cancelTooltipHide();
+    infoHoverTimer = window.setTimeout(() => showHtmlTooltip(dot, eventTooltipHtml(event), "hover-shown"), 120);
+  });
+  dot.addEventListener("pointerleave", () => {
+    if (infoHoverTimer) window.clearTimeout(infoHoverTimer);
+    infoHoverTimer = null;
+    scheduleTooltipHide();
+  });
+  dot.addEventListener("focus", () => showHtmlTooltip(dot, eventTooltipHtml(event), "hover-shown"));
+  dot.addEventListener("blur", scheduleTooltipHide);
+  dot.addEventListener("click", (clickEvent) => {
+    clickEvent.preventDefault();
+    clickEvent.stopPropagation();
+    const isSameStuck = activeInfoButton === dot
+      && activeInfoMode === "click-stuck"
+      && infoTooltip?.classList.contains("is-open");
+    if (isSameStuck) {
+      hideAllTooltips();
+      return;
+    }
+    showHtmlTooltip(dot, eventTooltipHtml(event), "click-stuck");
+  });
+}
+
+function renderChartEventDots(chart) {
+  const slug = chart?.$eventChartSlug || chart?.$urlStateChartId || chartSlugForId(chart?.canvas?.id || "");
+  const events = Array.isArray(chart?.$eventRun?.events) ? chart.$eventRun.events : [];
+  const canvas = chart?.canvas;
+  const wrap = canvas?.closest?.(".chart-wrap");
+  const xScale = chart?.scales?.x;
+  const area = chart?.chartArea;
+  if (!EVENT_CHART_SLUGS.has(slug) || !events.length || !canvas || !wrap || !xScale || !area) {
+    removeChartEventDots(chart);
+    return;
+  }
+
+  const min = Number(xScale.min);
+  const max = Number(xScale.max);
+  if (!Number.isFinite(min) || !Number.isFinite(max) || min > max) {
+    removeChartEventDots(chart);
+    return;
+  }
+
+  const visibleEvents = events
+    .map((event) => ({ event, step: eventStep(event) }))
+    .filter((item) => item.step !== null && item.step >= min && item.step <= max)
+    .sort((a, b) => a.step - b.step);
+
+  if (!visibleEvents.length) {
+    removeChartEventDots(chart);
+    return;
+  }
+
+  let layer = chart.$eventDotLayer;
+  if (!layer || layer.parentElement !== wrap) {
+    layer?.remove();
+    layer = document.createElement("div");
+    layer.className = "event-dot-layer";
+    layer.setAttribute("aria-hidden", "false");
+    wrap.appendChild(layer);
+    chart.$eventDotLayer = layer;
+  }
+  layer.replaceChildren();
+
+  const canvasRect = canvas.getBoundingClientRect();
+  const wrapRect = wrap.getBoundingClientRect();
+  const xOffset = canvasRect.left - wrapRect.left;
+  const yOffset = canvasRect.top - wrapRect.top;
+  const stackByStep = new Map();
+
+  visibleEvents.forEach(({ event, step }) => {
+    const x = xScale.getPixelForValue(step);
+    if (!Number.isFinite(x) || x < area.left || x > area.right) return;
+    const stackIndex = stackByStep.get(step) || 0;
+    stackByStep.set(step, stackIndex + 1);
+    const kind = eventKind(event);
+    const dot = document.createElement("button");
+    dot.type = "button";
+    dot.className = `event-dot ${eventKindClass(kind)}`;
+    dot.dataset.eventKind = kind;
+    dot.dataset.eventStep = String(step);
+    dot.style.left = `${xOffset + x}px`;
+    dot.style.top = `${yOffset + area.top + 6 + stackIndex * 10}px`;
+    dot.setAttribute("aria-label", `${eventText(event, ["label", "title", "name"], "training event")} at step ${formatStepTick(step)}`);
+    bindEventDotTooltip(dot, event);
+    layer.appendChild(dot);
+  });
+
+  if (!layer.children.length) removeChartEventDots(chart);
+}
+
+function attachEventAnnotations(chart, run, canvas) {
+  if (!chart) return chart;
+  chart.$eventRun = run;
+  chart.$eventChartSlug = chartSlugForId(canvas?.id || "");
+  scheduleChartEventDots(chart);
+  return chart;
 }
 
 function fmtNumber(value, digits = 4) {
@@ -1486,6 +1719,7 @@ function chartZoomOptions() {
       modifierKey: "shift",
       onPanComplete({ chart }) {
         updateDashboardZoomState(chart);
+        scheduleChartEventDots(chart);
       },
     },
     zoom: {
@@ -1501,6 +1735,7 @@ function chartZoomOptions() {
       mode: "xy",
       onZoomComplete({ chart }) {
         updateDashboardZoomState(chart);
+        scheduleChartEventDots(chart);
       },
     },
     limits: {
@@ -1641,6 +1876,7 @@ function bindResetZoom(chart, chartId) {
   btn.dataset.resetZoomBound = "true";
   btn.addEventListener("click", () => {
     btn._resetZoomChart?.resetZoom?.("none");
+    scheduleChartEventDots(btn._resetZoomChart);
     setDashboardState({ zoom: null, chart: null });
   });
 }
@@ -1649,7 +1885,10 @@ function enterFullscreen(card, chart) {
   if (!card || card.classList.contains("fullscreen")) return;
   const resizeAfterLayout = () => {
     window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => chart.resize());
+      window.requestAnimationFrame(() => {
+        chart.resize();
+        scheduleChartEventDots(chart);
+      });
     });
   };
   const backdrop = document.createElement("div");
@@ -1753,6 +1992,7 @@ function applyChartScaleRange(chart, scaleId, range) {
   chart.options.scales[scaleId].min = range.min;
   chart.options.scales[scaleId].max = range.max;
   chart.update("none");
+  scheduleChartEventDots(chart);
   if (scaleId === "x") updateDashboardZoomState(chart);
 }
 
@@ -2640,7 +2880,7 @@ function renderLossChart(canvas, run) {
       },
     },
   };
-  return bindChartControls(new Chart(canvas, { type: "line", data: { datasets }, options }), canvas);
+  return bindChartControls(attachEventAnnotations(new Chart(canvas, { type: "line", data: { datasets }, options }), run, canvas), canvas);
 }
 
 function renderLossDecompositionChart(canvas, run) {
@@ -2676,7 +2916,7 @@ function renderLossDecompositionChart(canvas, run) {
       },
     },
   };
-  return bindChartControls(new Chart(canvas, { type: "line", data: { datasets }, options }), canvas);
+  return bindChartControls(attachEventAnnotations(new Chart(canvas, { type: "line", data: { datasets }, options }), run, canvas), canvas);
 }
 
 function referenceLine(rows, value) {
@@ -2702,7 +2942,7 @@ function renderTrainingPsnrChart(canvas, run) {
     { label: `${run.history?.title || run.label || "run"} ${usesProxy ? "PSNR proxy" : "PSNR"}`, data: series, borderColor: colors.psnr, backgroundColor: colors.psnr, pointRadius: 0, pointHitRadius: 6, pointHoverRadius: 4, borderWidth: 2, tension: 0 },
     { label: "v5 held-out PSNR ref 25.703 dB", data: ref, borderColor: colors.gold, backgroundColor: colors.gold, pointRadius: 0, pointHitRadius: 6, borderWidth: 1.5, borderDash: [5, 4], tension: 0 },
   ].filter((dataset) => dataset.data.length);
-  return bindChartControls(new Chart(canvas, { type: "line", data: { datasets }, options: chartOptions({ yTitle: "training-crop PSNR dB" }) }), canvas);
+  return bindChartControls(attachEventAnnotations(new Chart(canvas, { type: "line", data: { datasets }, options: chartOptions({ yTitle: "training-crop PSNR dB" }) }), run, canvas), canvas);
 }
 
 function renderTrainingLpipsChart(canvas, run) {
@@ -2717,7 +2957,7 @@ function renderTrainingLpipsChart(canvas, run) {
     { label: `${run.history?.title || run.label || "run"} LPIPS`, data: series, borderColor: colors.lpips, backgroundColor: colors.lpips, pointRadius: 0, pointHitRadius: 6, pointHoverRadius: 4, borderWidth: 2, tension: 0 },
     { label: "v5 held-out LPIPS ref 0.1666", data: ref, borderColor: colors.gold, backgroundColor: colors.gold, pointRadius: 0, pointHitRadius: 6, borderWidth: 1.5, borderDash: [5, 4], tension: 0 },
   ].filter((dataset) => dataset.data.length);
-  return bindChartControls(new Chart(canvas, { type: "line", data: { datasets }, options }), canvas);
+  return bindChartControls(attachEventAnnotations(new Chart(canvas, { type: "line", data: { datasets }, options }), run, canvas), canvas);
 }
 
 function renderHeldoutChart(canvas, run) {
@@ -3679,6 +3919,7 @@ document.addEventListener("DOMContentLoaded", () => {
 window.addEventListener("resize", () => {
   clearTimeout(fillTerminalRules._t);
   fillTerminalRules._t = setTimeout(fillTerminalRules, 100);
+  activeCharts.forEach((chart) => scheduleChartEventDots(chart));
 });
 
 if (document.fonts && document.fonts.ready) {

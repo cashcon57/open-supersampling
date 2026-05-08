@@ -99,6 +99,7 @@ stage_run_files() {
     # rsync (portable Mac + WSL + Linux); -a archive, -u update-only-newer
     rsync -au "$src_run/metrics.json" "$dst_run/" 2>/dev/null || true
     rsync -au "$src_run/score_log.json" "$dst_run/" 2>/dev/null || true
+    rsync -au "$src_run/events.json" "$dst_run/" 2>/dev/null || true
     rsync -au "$src_run/gpu_status.json" "$dst_run/" 2>/dev/null || true
     if [[ -d "$src_run/viz" ]]; then
       rsync -au --include='*.png' --exclude='*' "$src_run/viz/" "$dst_run/viz/" 2>/dev/null || true
