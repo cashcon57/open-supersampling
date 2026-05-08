@@ -7,7 +7,6 @@ import argparse
 from datetime import datetime, timezone
 import json
 from pathlib import Path
-import socket
 import sys
 import time
 import urllib.request
@@ -18,8 +17,7 @@ DATA_FILE = "data.json"
 STATUS_FILE = "status.json"
 WORKER_HEALTH_URL = "https://upload.opensupersampling.com/health"
 R2_DATA_URL = "https://opensupersampling.com/data.json"
-DNS_HOST = "opensupersampling.com"
-SERVICE_ORDER = ("trainer", "watcher", "worker", "r2", "dns")
+SERVICE_ORDER = ("trainer", "watcher", "worker", "r2")
 
 TOOLTIPS = {
     "trainer": (
@@ -38,7 +36,6 @@ TOOLTIPS = {
         "Cloudflare R2 bucket served at opensupersampling.com - the CDN origin "
         "every visitor hits."
     ),
-    "dns": "Public DNS resolution for opensupersampling.com via Cloudflare nameservers.",
 }
 
 NAMES = {
@@ -46,7 +43,6 @@ NAMES = {
     "watcher": "Watcher",
     "worker": "CF Worker",
     "r2": "R2 origin",
-    "dns": "DNS",
 }
 
 
@@ -326,26 +322,6 @@ def probe_r2() -> dict[str, str]:
     return service("r2", "healthy", "HTTP 200")
 
 
-def probe_dns() -> dict[str, str]:
-    old_timeout = socket.getdefaulttimeout()
-    start = time.monotonic()
-    try:
-        socket.setdefaulttimeout(2)
-        ip = socket.gethostbyname(DNS_HOST)
-        elapsed = time.monotonic() - start
-    except Exception as exc:
-        return service("dns", "offline", exc.__class__.__name__)
-    finally:
-        socket.setdefaulttimeout(old_timeout)
-
-    detail = f"resolved {ip} in {int(round(elapsed * 1000))}ms"
-    if elapsed < 2:
-        return service("dns", "healthy", detail)
-    if elapsed < 5:
-        return service("dns", "degraded", detail)
-    return service("dns", "offline", detail)
-
-
 def build_status(staging_dir: Path, state_file: Path) -> tuple[dict[str, object], dict[str, str]]:
     data, data_error = load_json(staging_dir / DATA_FILE)
     state = load_state(state_file)
@@ -357,7 +333,6 @@ def build_status(staging_dir: Path, state_file: Path) -> tuple[dict[str, object]
         probe_watcher(data, data_error, now),
         probe_worker(),
         probe_r2(),
-        probe_dns(),
     ]
 
     if trainer_state is not None:
@@ -403,5 +378,5 @@ if __name__ == "__main__":
             raise
         sys.exit(0)
     except Exception:
-        print("[status_probe] trainer=offline watcher=offline worker=offline r2=offline dns=offline")
+        print("[status_probe] trainer=offline watcher=offline worker=offline r2=offline")
         sys.exit(0)
