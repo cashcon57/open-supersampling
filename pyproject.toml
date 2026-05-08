@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "oss"
-version = "0.2.0.dev0"
+version = "0.6.0.dev0"
 description = "OpenSuperSampling"
 readme = "README.md"
 license = { text = "Apache-2.0" }

@@ -63,6 +63,7 @@ The MIT license is **irrevocable for already-distributed copies**. Standard MIT 
 This is settled MIT-license interpretation — it is the same principle that allows old MIT-licensed software (e.g., XFree86, BSD networking utilities) to remain freely usable indefinitely even after upstream relicensing or deprecation.
 
 AMD's force-push:
+
 - Does not delete the orphan commit (it remains in AMD's repository, reachable via direct SHA query)
 - Does not retroactively unmake the MIT grant on the orphan commit
 - Does not affect copies that were obtained between 2025-08-18 (push) and ~2025-08-20 (force-push)
@@ -91,6 +92,7 @@ The full SDK 2.0.0 tarball is ~129 MB. To keep OSS repo size manageable, this ve
 - `Kits/FidelityFX/api/` (the FidelityFX API headers needed to integrate)
 
 Excluded for size (all available from the upstream tarball if needed later):
+
 - `.pdb` debug symbols (~11 MB)
 - `Kits/Cauldron2/` (the framework — only needed if we build the sample app for benchmarking; can be added later)
 - `Samples/` (sample apps; same as above)
@@ -127,5 +129,5 @@ OSS may NOT:
 
 ## Followups (not blocking)
 
-- **Archival mirror:** consider cloning AMD's repo to a private OSS-controlled mirror (cashcon57 GitHub org) so even if AMD eventually does prune the orphan commit (e.g., via aggressive `git gc --prune=now` on their server), OSS retains a verifiable upstream copy. As of 2026-05-08, AMD has NOT pruned the orphan commit; it is still reachable via direct SHA query.
+- ~~**Archival mirror**~~ ✅ **Done 2026-05-08.** AMD's repo is mirrored at <https://github.com/cashcon57/fidelityfx-sdk-mit-archive> with the orphan commit reachable via the tag `fsr4-mit-original` (and the post-force-push state via `fsr4-mit-scrubbed`). If AMD ever prunes the orphan from their server (`git gc --prune=now`), OSS retains a verifiable upstream copy with all 11 SDK release tags + the orphan + the scrubbed sibling. Recovery command: `git fetch https://github.com/cashcon57/fidelityfx-sdk-mit-archive.git refs/tags/fsr4-mit-original`.
 - **Vendored tarball checksum:** record the tarball SHA-256 here for additional integrity verification independent of git SHA.
