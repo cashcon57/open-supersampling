@@ -189,7 +189,10 @@ while :; do
   # it freezes. Force-rsync the canonical file every cycle so codex edits to
   # dashboard-public/index.html actually land on R2.
   if [[ -f "${REPO_ROOT}/dashboard-public/index.html" ]]; then
-    rsync -au "${REPO_ROOT}/dashboard-public/index.html" "${STAGING_DIR}/index.html" 2>/dev/null || true
+    # cwrsync on Windows misparses Cygwin-style paths and tries to resolve
+    # the path as ssh remote (host "c") — using cp -f for this single
+    # local-to-local copy avoids the issue. cp -f forces overwrite.
+    cp -f "${REPO_ROOT}/dashboard-public/index.html" "${STAGING_DIR}/index.html" 2>/dev/null || true
   fi
   publish_changed
   sleep "$INTERVAL"
