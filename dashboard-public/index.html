@@ -311,6 +311,18 @@
       outline: none;
       box-shadow: 0 0 0 2px rgba(140, 255, 193, 0.16);
     }
+    .glossary-term {
+      border-bottom: 1px dotted #71717a;
+      cursor: help;
+      position: relative;
+    }
+    .glossary-term:hover,
+    .glossary-term:focus-visible,
+    .glossary-term[aria-expanded="true"] {
+      border-bottom-color: #22d3ee;
+      color: #e4e4e7;
+      outline: none;
+    }
     .info-tooltip {
       position: fixed;
       z-index: 10000;
@@ -923,6 +935,7 @@
           <p class="mt-4 text-xs font-semibold uppercase tracking-wide text-cyan-300">OpenSuperSampling</p>
           <h1 class="mt-2 text-3xl font-semibold tracking-normal text-zinc-50 sm:text-4xl" data-text>v6.1 Pico is training right now</h1>
           <p class="mt-3 max-w-3xl text-sm leading-6 text-zinc-300" data-subtext>OpenSuperSampling is training a unified game reconstruction pipeline for super-resolution and frame extrapolation from one temporal model.</p>
+          <p class="mt-2 max-w-3xl text-xs leading-5 text-zinc-500" data-dim>v6 notes: HAT-Tiny is the small HAT backbone; GS-STVSR and EWA describe the temporal canvas math; Net2Net is the expansion path; Charbonnier trains regression; Bicubic, DLSS, FSR, and XeSS are comparison anchors; PSNR and LPIPS stay as quality gauges; SDR ships first, HDR follows.</p>
           <div class="mt-4 flex flex-wrap items-center gap-3 text-sm text-zinc-400" data-subtext>
             <a class="font-medium text-cyan-300 hover:text-cyan-200" href="https://github.com/cashcon57/open-supersampling">GitHub repo</a>
             <span class="hidden text-zinc-700 sm:inline">/</span>
@@ -1116,6 +1129,45 @@ const INFO_COPY = {
   "bad-data": "Off by default. Hides runs that aren't apples-to-apples with the current models — different test sets, failure modes. Toggle on for transparency.",
   "v4-two-points": "v4 was the first single-frame model. It looks fine on its training data but fails badly when you change the content (~22 dB cliff). v5 and v6 were designed to NOT do this.",
 };
+
+const GLOSSARY = {
+  hat: "Hybrid Attention Transformer. A super-resolution backbone that combines channel attention with windowed self-attention.",
+  "hat-tiny": "Our smaller HAT variant (~3M parameters) used as the v6 backbone. Same architecture, fewer channels.",
+  "gs-stvsr": "Gaussian-Splat Spatial-Temporal Video Super-Resolution. Our temporal-warp method that splats prior frames into the current view.",
+  ewa: "Elliptical Weighted Average. The Gaussian footprint formula used to composite splats onto the output pixel grid.",
+  net2net: "A knowledge-transfer trick that grows a small pretrained network into a larger one without restarting training.",
+  psnr: "Peak Signal-to-Noise Ratio, in decibels. Higher means the output is closer to ground truth.",
+  lpips: "Learned Perceptual Image Patch Similarity. Lower means the output looks more real to a human.",
+  sdr: "Standard Dynamic Range - the normal sRGB color space most games render in.",
+  hdr: "High Dynamic Range. Wider color + brightness range; needs different loss weighting than SDR.",
+  charbonnier: "A smooth-L1 loss variant we use for regression in v6. Less sensitive to outliers than plain MSE.",
+  bicubic: "The simplest super-resolution baseline - interpolating new pixels from a 4x4 neighborhood. Visitors compare other methods against it.",
+  dlss: "NVIDIA's vendor super-resolution. Closed-source; we compare on public-source benchmark numbers, not measured on our data.",
+  fsr: "AMD's vendor super-resolution. Same caveat as DLSS - public-source numbers only.",
+  xess: "Intel's vendor super-resolution. Same caveat - public-source numbers only.",
+};
+
+const GLOSSARY_TERMS = [
+  ["HAT-Tiny", "hat-tiny"],
+  ["GS-STVSR", "gs-stvsr"],
+  ["Charbonnier", "charbonnier"],
+  ["Bicubic", "bicubic"],
+  ["Net2Net", "net2net"],
+  ["LPIPS", "lpips"],
+  ["PSNR", "psnr"],
+  ["DLSS", "dlss"],
+  ["XeSS", "xess"],
+  ["FSR", "fsr"],
+  ["HDR", "hdr"],
+  ["SDR", "sdr"],
+  ["EWA", "ewa"],
+  ["HAT", "hat"],
+];
+const GLOSSARY_TERM_TO_ID = new Map(GLOSSARY_TERMS);
+const GLOSSARY_PATTERN = new RegExp(
+  `(?<![A-Za-z0-9])(?:${GLOSSARY_TERMS.map(([term]) => term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})(?![A-Za-z0-9])`,
+  "g"
+);
 
 const lossComponentDefs = [
   { key: "loss_charbonnier", label: "loss_charbonnier", color: colors.charbonnier, aliases: ["l1", "t_l1"] },
@@ -1382,10 +1434,15 @@ function showHtmlTooltip(anchor, html, mode = "hover-shown") {
   infoHoverTimer = null;
   ensureInfoTooltip();
   lastInfoOpenedAt = performance.now();
+  if (activeInfoButton && activeInfoButton !== anchor) {
+    activeInfoButton.removeAttribute("aria-describedby");
+    activeInfoButton.setAttribute("aria-expanded", "false");
+  }
   activeInfoButton = anchor;
   activeInfoMode = mode;
   pinnedInfoButton = mode === "click-stuck" ? anchor : null;
   anchor.setAttribute("aria-describedby", "chart-info-tooltip");
+  anchor.setAttribute("aria-expanded", "true");
   infoTooltip.className = "info-tooltip";
   infoTooltip.innerHTML = html;
   infoTooltip.style.visibility = "hidden";
@@ -1418,6 +1475,7 @@ function hideAllTooltips() {
   cancelTooltipHide();
   infoHoverTimer = null;
   if (activeInfoButton) activeInfoButton.removeAttribute("aria-describedby");
+  if (activeInfoButton) activeInfoButton.setAttribute("aria-expanded", "false");
   activeInfoButton = null;
   pinnedInfoButton = null;
   activeInfoMode = null;
@@ -1425,46 +1483,110 @@ function hideAllTooltips() {
   infoBackdrop?.classList.remove("is-open");
 }
 
+function attachInfoTooltip(anchor, copy) {
+  if (!anchor || !copy || anchor.dataset.infoBound === "true") return;
+  anchor.dataset.infoBound = "true";
+  if (!anchor.hasAttribute("aria-expanded")) {
+    anchor.setAttribute("aria-expanded", "false");
+  }
+  anchor.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const isSameStuck = activeInfoButton === anchor
+      && activeInfoMode === "click-stuck"
+      && infoTooltip?.classList.contains("is-open");
+    if (isSameStuck) {
+      hideAllTooltips();
+      return;
+    }
+    showTooltip(anchor, copy, "click-stuck");
+  });
+  anchor.addEventListener("pointerenter", () => {
+    if (!canHoverTooltips() || activeInfoMode === "click-stuck") return;
+    cancelTooltipHide();
+    infoHoverTimer = window.setTimeout(() => showTooltip(anchor, copy, "hover-shown"), 200);
+  });
+  anchor.addEventListener("pointerleave", () => {
+    if (infoHoverTimer) window.clearTimeout(infoHoverTimer);
+    infoHoverTimer = null;
+    scheduleTooltipHide();
+  });
+  anchor.addEventListener("focus", () => showTooltip(anchor, copy, "hover-shown"));
+  anchor.addEventListener("blur", scheduleTooltipHide);
+  if (anchor.classList.contains("glossary-term")) {
+    anchor.tabIndex = 0;
+    anchor.setAttribute("role", "button");
+    anchor.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      anchor.click();
+    });
+  }
+}
+
 function setupInfoTooltips() {
   document.querySelectorAll(".info-btn").forEach((button) => {
-    if (button.dataset.infoBound === "true") return;
-    button.dataset.infoBound = "true";
-    button.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      const isSameStuck = activeInfoButton === button
-        && activeInfoMode === "click-stuck"
-        && infoTooltip?.classList.contains("is-open");
-      if (isSameStuck) {
-        hideAllTooltips();
-        return;
-      }
-      showTooltip(button, INFO_COPY[button.dataset.infoKey], "click-stuck");
-    });
-    button.addEventListener("pointerenter", () => {
-      if (!canHoverTooltips() || activeInfoMode === "click-stuck") return;
-      cancelTooltipHide();
-      infoHoverTimer = window.setTimeout(() => showTooltip(button, INFO_COPY[button.dataset.infoKey], "hover-shown"), 200);
-    });
-    button.addEventListener("pointerleave", () => {
-      if (infoHoverTimer) window.clearTimeout(infoHoverTimer);
-      infoHoverTimer = null;
-      scheduleTooltipHide();
-    });
-    button.addEventListener("focus", () => showTooltip(button, INFO_COPY[button.dataset.infoKey], "hover-shown"));
-    button.addEventListener("blur", scheduleTooltipHide);
+    attachInfoTooltip(button, INFO_COPY[button.dataset.infoKey]);
   });
   if (document.body.dataset.infoDocBound === "true") return;
   document.body.dataset.infoDocBound = "true";
   document.addEventListener("click", (event) => {
     if (performance.now() - lastInfoOpenedAt < 250) return;
-    if (event.target.closest(".info-btn, .info-tooltip")) return;
+    if (event.target.closest(".info-btn, .glossary-term, .info-tooltip")) return;
     hideAllTooltips();
   });
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") hideAllTooltips();
   });
   window.addEventListener("resize", hideAllTooltips);
+}
+
+function shouldSkipGlossaryTextNode(node) {
+  const parent = node.parentElement;
+  if (!parent) return true;
+  return Boolean(parent.closest("script, style, noscript, textarea, input, select, option, button, a, canvas, svg, .info-tooltip, .glossary-term, [data-glossary-skip]"));
+}
+
+function wrapGlossaryText(root = document.body) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      const text = node.nodeValue || "";
+      if (!text.trim() || shouldSkipGlossaryTextNode(node)) return NodeFilter.FILTER_REJECT;
+      GLOSSARY_PATTERN.lastIndex = 0;
+      return GLOSSARY_PATTERN.test(text) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+    },
+  });
+  const nodes = [];
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    nodes.push(node);
+  }
+  nodes.forEach((node) => {
+    const text = node.nodeValue || "";
+    const fragment = document.createDocumentFragment();
+    let lastIndex = 0;
+    GLOSSARY_PATTERN.lastIndex = 0;
+    text.replace(GLOSSARY_PATTERN, (match, offset) => {
+      if (offset > lastIndex) fragment.append(document.createTextNode(text.slice(lastIndex, offset)));
+      const term = document.createElement("span");
+      term.className = "glossary-term";
+      term.dataset.glossaryTerm = GLOSSARY_TERM_TO_ID.get(match) || "";
+      term.textContent = match;
+      fragment.append(term);
+      lastIndex = offset + match.length;
+      return match;
+    });
+    if (lastIndex < text.length) fragment.append(document.createTextNode(text.slice(lastIndex)));
+    node.parentNode?.replaceChild(fragment, node);
+  });
+}
+
+function setupGlossaryTooltips() {
+  wrapGlossaryText();
+  document.querySelectorAll(".glossary-term").forEach((term) => {
+    const copy = GLOSSARY[term.dataset.glossaryTerm];
+    if (!copy) return;
+    attachInfoTooltip(term, copy);
+  });
 }
 
 function eventStep(event) {
@@ -4366,6 +4488,7 @@ function renderDashboard(data, options = {}) {
   comparisonCharts.forEach((chart) => {
     if (chart) activeCharts.push(chart);
   });
+  setupGlossaryTooltips();
   setupInfoTooltips();
   initDashboardUrlState();
   setLoadedState();
@@ -4455,6 +4578,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initCompareModal();
   initMetricCards();
   initComparisonControls();
+  setupGlossaryTooltips();
   setupInfoTooltips();
   startAsciiSpinner();
   fillTerminalRules();
