@@ -1,8 +1,7 @@
 """
 OSS custom rasterizer -- autograd Function wrapper around the C++ extension.
 
-Phase 2c: forward calls the native CUDA rasterizer. The Python reference is
-kept as an OSS_CUDA_RASTER_DEBUG=1 fallback through Phase 2d.
+Phase 2c native CUDA forward is the live implementation.
 Backward not yet implemented -- raises NotImplementedError.
 """
 
@@ -25,15 +24,6 @@ except ImportError:
     except ImportError:
         _C = None
         _COMPILED = False
-
-
-def _phase1_ref_forward(xy, scale, rot, feat, h, w, tile_size, topk_norm):
-    """Called from C++ binding only when OSS_CUDA_RASTER_DEBUG=1."""
-    from oss.gaussian.renderer.rasterizer import GaussianBatch, Rasterizer
-
-    batch = GaussianBatch(xy=xy, scale=scale, rot=rot, feat=feat)
-    rast = Rasterizer(tile_size=int(tile_size), topk_norm=bool(topk_norm))
-    return rast._render_reference(batch, int(h), int(w))
 
 
 class _RasterizeGaussians(Function):

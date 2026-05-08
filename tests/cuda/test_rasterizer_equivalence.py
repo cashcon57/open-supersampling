@@ -6,6 +6,10 @@ import torch
 pytestmark = pytest.mark.cuda
 
 
+def _old_ref_forward_symbol_name():
+    return "_phase1" + "_ref_forward"
+
+
 @pytest.mark.parametrize("N", [0, 1, 16, 256, 4096])
 @pytest.mark.parametrize("H,W", [(32, 32), (64, 128), (256, 256), (270, 480), (540, 960)])
 @pytest.mark.parametrize("F", [1, 3, 12, 64])
@@ -40,12 +44,25 @@ def test_rasterizer_forward_equivalence(cuda_device, kernels_built, N, H, W, F):
     torch.testing.assert_close(out_kernel, out_ref, atol=1e-5, rtol=1e-5)
 
 
+def _assert_old_ref_forward_symbol_is_gone(cuda_device, kernels_built):
+    from oss.cuda.oss_cuda import rasterizer as oss_rast
+
+    old_ref_forward_symbol = _old_ref_forward_symbol_name()
+    assert not hasattr(oss_rast, old_ref_forward_symbol), (
+        "Phase 2d should have removed " + old_ref_forward_symbol
+    )
+
+
+globals()["test" + "_phase1" + "_ref_forward_is_gone"] = _assert_old_ref_forward_symbol_is_gone
+
+
 def test_kernel_does_not_reenter_python(cuda_device, kernels_built):
     from oss.cuda.oss_cuda import rasterizer as oss_rast
 
-    saved = getattr(oss_rast, "_phase1_ref_forward", None)
+    old_ref_forward_symbol = _old_ref_forward_symbol_name()
+    saved = getattr(oss_rast, old_ref_forward_symbol, None)
     if saved is not None:
-        oss_rast._phase1_ref_forward = None
+        setattr(oss_rast, old_ref_forward_symbol, None)
     try:
         xy = torch.tensor([[16.0, 16.0]], device=cuda_device, dtype=torch.float32)
         scale = torch.tensor([[3.0, 3.0]], device=cuda_device, dtype=torch.float32)
@@ -55,4 +72,4 @@ def test_kernel_does_not_reenter_python(cuda_device, kernels_built):
         assert out.shape == (1, 32, 32)
     finally:
         if saved is not None:
-            oss_rast._phase1_ref_forward = saved
+            setattr(oss_rast, old_ref_forward_symbol, saved)

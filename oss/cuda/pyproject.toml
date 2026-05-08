@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "oss_cuda"
-version = "0.2.0+phase2c"
+version = "0.2.0"
 description = "OpenSuperSampling custom CUDA extension"
 readme = "README.md"
 license = { text = "Apache-2.0" }

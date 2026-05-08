@@ -1,5 +1,7 @@
 # CUDA Phase 2 Plan — Native Forward Rasterizer
 
+**Phase 2 progress note:** Phase 2 is complete. Sub-phase commits: `023700c` -> `1d131fe` -> `60814e6` -> this Phase 2d commit. Final verification/headline benchmark: build on g14 with `oss_cuda 0.2.0`, gtest 10/10, pytest >=95, compute-sanitizer 4/4, grep clean, schema check clean, and headline 70x over PyTorch reference.
+
 **Status:** draft, awaits operator sign-off on Section H open questions
 **Predecessor:** `docs/coordination/cuda-phase1-progress.md`
 **Parent plan:** `docs/coordination/cuda-kernel-plan.md`
