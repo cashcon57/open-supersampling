@@ -107,11 +107,41 @@ def _load_baseline(ckpt_path: Path, device: str):
 
 
 def _load_temporal(ckpt_path: Path, device: str):
-    """Load a v5-pixel-temporal checkpoint (TemporalSRModel state)."""
+    """Load a v5-pixel-temporal or v6 generator checkpoint."""
     import torch
     from oss.sr.temporal import TemporalSRModel
     ck = torch.load(ckpt_path, map_location=device, weights_only=False)
     saved = ck.get("args", {})
+
+    if any(key in ck for key in ("v6_model", "generator", "model_state_dict")):
+        from oss.sr.v6.model import V6Config, V6Model
+
+        cfg_data = ck.get("v6_config", {})
+        if not isinstance(cfg_data, dict):
+            cfg_data = {}
+        cfg_kwargs = dict(cfg_data)
+        cfg_kwargs.setdefault("backbone", saved.get("backbone", "hat-tiny"))
+        cfg_kwargs.setdefault("in_channels", int(saved.get("in_channels", 9)))
+        cfg_kwargs.setdefault("scale", int(saved.get("scale", 2)))
+        cfg_kwargs.setdefault("color_activation", saved.get("color_activation", "hdr"))
+        cfg_kwargs.setdefault(
+            "spawn_offset_random", bool(saved.get("spawn_offset_random", False))
+        )
+        cfg_kwargs.setdefault(
+            "rasterizer_overlap", int(saved.get("rasterizer_overlap", 0))
+        )
+        model = V6Model(V6Config(**cfg_kwargs)).to(device)
+        state = None
+        for key in ("v6_model", "model", "model_state_dict", "generator", "state_dict"):
+            if key in ck:
+                state = ck[key]
+                break
+        if state is None:
+            raise KeyError(f"checkpoint {ckpt_path} has no v6 state dict")
+        model.load_state_dict(state, strict=False)
+        model.train(False)
+        return model
+
     tier = saved.get("tier", "standard")
     backbone_kind = saved.get("backbone_kind", "simple")
     # Read the conditional channel-zero flag (added in commit d25b3b9). New
@@ -140,6 +170,10 @@ def _load_temporal(ckpt_path: Path, device: str):
         )
     model.train(False)
     return model
+
+
+def _is_v6_model(model: Any) -> bool:
+    return model.__class__.__name__ == "V6Model"
 
 
 # ---------------------------------------------------------------------------
@@ -411,7 +445,7 @@ def _eval_loader(
             p_gt = batch["tp1_gt_hr"].to(device)
 
             H_hr, W_hr = p_gt.shape[-2:]
-            scale = model_temporal.scale
+            scale = int(getattr(model_temporal, "scale", 2))
 
             # Baseline at t (used as cold-start prev_hr for v5 at t+1).
             # The baseline (v4) was trained on SRGD where depth/motion/normals
@@ -437,31 +471,63 @@ def _eval_loader(
             x_tp1 = _make_12ch(p_lr, p_depth, p_motion, p_normals, p_canvas)
             base_out_tp1 = model_baseline(_baseline_input(x_tp1)).clamp(0.0, 1.0)
 
-            # v5 temporal at t (cold-started with bilinear up of t_lr) —
-            # used both for the t+1 prev_hr feed AND the temporal-stability metric.
             depth_hr_t = F.interpolate(
                 t_depth, size=(H_hr, W_hr), mode="bilinear", align_corners=False
             )
             depth_hr_tp1 = F.interpolate(
                 p_depth, size=(H_hr, W_hr), mode="bilinear", align_corners=False
             )
-            prev_hr_t = make_first_frame_prev_hr(t_lr, scale=scale)
-            temp_out_t = model_temporal(
-                lr_inputs=x_t, prev_hr=prev_hr_t,
-                depth_hr_curr=depth_hr_t, depth_hr_prev=depth_hr_t,
-                motion_lr=t_motion,
-            ).clamp(0.0, 1.0)
 
-            # v5 temporal at t+1 with cold-start regime: prev_hr =
-            # baseline_output_at_t.detach() (matches the deployed inference
-            # engine's first-frame behaviour). Motion fed in is ``t_motion``
-            # (forward flow t -> t+1, lives at frame t, used as small-motion
-            # approximation when sampling at frame t+1's grid).
-            temp_out_tp1 = model_temporal(
-                lr_inputs=x_tp1, prev_hr=base_out_t.detach(),
-                depth_hr_curr=depth_hr_tp1, depth_hr_prev=depth_hr_t,
-                motion_lr=t_motion,
-            ).clamp(0.0, 1.0)
+            if _is_v6_model(model_temporal):
+                if hasattr(model_temporal, "reset_state"):
+                    model_temporal.reset_state(device=torch.device(device))
+
+                def _v6_input(x12: "torch.Tensor") -> "torch.Tensor":
+                    in_channels = int(model_temporal.cfg.in_channels)
+                    x9 = x12[:, :9]
+                    if in_channels <= x9.shape[1]:
+                        return x9[:, :in_channels]
+                    if in_channels <= x12.shape[1]:
+                        return x12[:, :in_channels]
+                    raise ValueError(
+                        f"v6 ckpt expects {in_channels} channels, "
+                        f"but eval can supply only {x12.shape[1]}"
+                    )
+
+                temp_out_t = model_temporal(
+                    lr_inputs=_v6_input(x_t),
+                    motion_lr=None,
+                    depth_hr_curr=depth_hr_t,
+                    depth_hr_prev=depth_hr_t,
+                    frame_index=0,
+                ).clamp(0.0, 1.0)
+                temp_out_tp1 = model_temporal(
+                    lr_inputs=_v6_input(x_tp1),
+                    motion_lr=t_motion,
+                    depth_hr_curr=depth_hr_tp1,
+                    depth_hr_prev=depth_hr_t,
+                    frame_index=1,
+                ).clamp(0.0, 1.0)
+            else:
+                # v5 temporal at t (cold-started with bilinear up of t_lr) —
+                # used both for the t+1 prev_hr feed AND the temporal-stability metric.
+                prev_hr_t = make_first_frame_prev_hr(t_lr, scale=scale)
+                temp_out_t = model_temporal(
+                    lr_inputs=x_t, prev_hr=prev_hr_t,
+                    depth_hr_curr=depth_hr_t, depth_hr_prev=depth_hr_t,
+                    motion_lr=t_motion,
+                ).clamp(0.0, 1.0)
+
+                # v5 temporal at t+1 with cold-start regime: prev_hr =
+                # baseline_output_at_t.detach() (matches the deployed inference
+                # engine's first-frame behaviour). Motion fed in is ``t_motion``
+                # (forward flow t -> t+1, lives at frame t, used as small-motion
+                # approximation when sampling at frame t+1's grid).
+                temp_out_tp1 = model_temporal(
+                    lr_inputs=x_tp1, prev_hr=base_out_t.detach(),
+                    depth_hr_curr=depth_hr_tp1, depth_hr_prev=depth_hr_t,
+                    motion_lr=t_motion,
+                ).clamp(0.0, 1.0)
 
             # Bicubic upsample of LR_{t+1}.
             bic_tp1 = F.interpolate(
