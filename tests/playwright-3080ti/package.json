@@ -1,0 +1,11 @@
+{
+  "name": "opensupersampling-playwright-3080ti",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "playwright test --project=3080ti-chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49"
+  }
+}

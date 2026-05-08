@@ -797,7 +797,7 @@ HTML_TEMPLATE = r"""<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>OSS Training Dashboard</title>
+  <title>OpenSuperSampling Training Dashboard</title>
   <link rel="icon" href="data:,">
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
