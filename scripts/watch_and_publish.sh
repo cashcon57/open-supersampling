@@ -85,6 +85,7 @@ stage_run_files() {
   # Mirror the curated allow-list of run dirs into the staging tree
   # the build script expects. Skip if nothing changed.
   local allow_list=(
+    srcnn-v6.2-pico-002
     srcnn-v6.1-pico-001
     srcnn-v6-pico-001
     srcnn-v6-heavy-001
