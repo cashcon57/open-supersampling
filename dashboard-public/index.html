@@ -5996,13 +5996,13 @@ function renderRun(run, index, openByRun = new Map()) {
     <div class="accordion-body border-t border-zinc-800">
     <div class="grid min-w-0 gap-4 p-4 lg:grid-cols-[1.15fr_0.85fr]">
       <div class="flex min-w-0 flex-col gap-4">
+        ${note}
         <div class="grid min-w-0 gap-3 sm:grid-cols-3">${headline}</div>
         ${ticker}
         ${progress}
         ${cost}
         ${gpu}
         ${gpuMemCard}
-        ${note}
         <article class="chart-card min-w-0 rounded-md border border-zinc-800 bg-zinc-950/25 p-4" ${chartCardAttrs(chartId)} data-muted-surface>
           <div class="flex items-center justify-between gap-3">
             <h3 class="title-with-info text-base font-semibold text-zinc-50" data-text><span>Loss curve</span>${infoButtonHtml("loss")}</h3>
