@@ -1121,6 +1121,8 @@
     .score-scroll { scrollbar-width: thin; }
     .live-indicator { display: inline-flex; align-items: center; gap: 0.35rem; border: 1px solid rgba(113,113,122,0.55); padding: 0.08rem 0.42rem; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; font-size: 0.72rem; font-weight: 600; line-height: 1.2; vertical-align: middle; }
     .live-indicator.live { border-color: rgba(52,211,153,0.7); color: #6ee7b7; }
+    .live-indicator.stale { color: #facc15; }
+    .live-indicator.stale .ascii-spinner { color: #fbbf24; }
     .live-indicator.idle { color: #a1a1aa; }
     .terminal-cursor { animation: step-blink 1s steps(1, end) infinite; color: var(--oss-accent); will-change: opacity; }
     .convergence-progress { margin-top: 8px; }
@@ -1605,6 +1607,7 @@ let trainingPulseState = {
   advanced: false,
   fresh: false,
   live: false,
+  dataAgeSeconds: Infinity,
   newStep: null,
   pointFlashRunName: null,
   stagnantPolls: 0,
@@ -2606,6 +2609,7 @@ function updateTrainingPulseState(data, preserve = false) {
     advanced,
     fresh,
     live,
+    dataAgeSeconds: ageSeconds,
     newStep: advanced ? step : null,
     pointFlashRunName: live ? active.name : null,
     stagnantPolls: stagnantActivePolls,
@@ -2624,6 +2628,18 @@ function updateTrainingPulseState(data, preserve = false) {
 function trainingIndicatorHtml(run) {
   if (!run?.active) return "";
   const live = trainingPulseState.activeRunName === run.name && trainingPulseState.live;
+  const stale = trainingPulseState.activeRunName === run.name && trainingPulseState.fresh === false;
+  if (stale) {
+    const age = Math.round(trainingPulseState.dataAgeSeconds);
+    const human = age >= 3600 ? `${Math.round(age / 3600)}h` :
+                  age >= 60 ? `${Math.round(age / 60)}m` :
+                  `${age}s`;
+    const title = `stale = dashboard hasn't received fresh data in ${age} seconds; trainer may still be running; watcher likely paused during Mac sleep or network hiccup.`;
+    return `<span class="live-indicator stale" aria-label="dashboard data is stale" title="${escapeHtml(title)}">
+      <span class="ascii-spinner" data-static="true" aria-hidden="true">[!?!]</span>
+      <span>stale ${human}</span>
+    </span>`;
+  }
   return `<span class="live-indicator ${live ? "live" : "idle"}" aria-label="${live ? "live training" : "idle training"}">
     ${live ? `${spinnerHtml()}<span>live</span><span class="cursor-blink" aria-hidden="true">▋</span>` : `<span class="ascii-spinner" data-static="true" aria-hidden="true">[___]</span><span>idle</span>`}
   </span>`;
