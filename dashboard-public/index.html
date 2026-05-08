@@ -185,6 +185,35 @@
       padding: 0 4px;
     }
     .visit-banner-close:hover { color: #e4e4e7; }
+    .loss-divergence-banner {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 8px 0 0;
+      padding: 10px 12px;
+      background: rgba(185, 28, 28, 0.2);
+      border: 1px solid rgba(248, 113, 113, 0.62);
+      border-radius: 6px;
+      color: #fee2e2;
+      box-shadow: inset 0 0 40px rgba(248, 113, 113, 0.06);
+      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .loss-divergence-banner[hidden] { display: none; }
+    .loss-divergence-banner::before {
+      content: "!";
+      display: inline-flex;
+      width: 18px;
+      height: 18px;
+      flex: 0 0 18px;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid rgba(254, 202, 202, 0.72);
+      color: #fecaca;
+      font-weight: 800;
+      line-height: 1;
+    }
     .status-strip {
       display: flex;
       gap: 14px;
@@ -267,6 +296,7 @@
     }
     @media (max-width: 480px) {
       .visit-banner { font-size: 12px; padding: 6px 10px; }
+      .loss-divergence-banner { align-items: flex-start; font-size: 12px; padding: 8px 10px; }
       .status-strip { font-size: 11px; gap: 10px; }
       .status-dot .status-name { display: none; }
       .status-dot .status-tip { left: auto; right: 0; }
@@ -1300,6 +1330,8 @@
       </span>
     </div>
 
+    <div id="loss-divergence-banner" class="loss-divergence-banner" hidden role="alert" aria-live="assertive"></div>
+
     <div class="terminal-divider" aria-hidden="true"><span class="td-corner">┌─ signal ─</span><span class="td-rule"></span><span class="td-corner">─┐</span></div>
     <section class="grid items-start gap-4 lg:grid-cols-[1.4fr_1fr_1fr]" aria-label="At a glance">
       <article class="rounded-md border border-cyan-900/70 bg-cyan-950/20 p-4" data-surface>
@@ -1633,6 +1665,22 @@ let reproManifestSeq = 0;
 const reproManifestRegistry = new Map();
 const warnedUrlRuns = new Set();
 const warnedUrlTargets = new Set();
+const DASHBOARD_TITLE_BASE = "OpenSuperSampling";
+const LOSS_DIVERGENCE_WINDOW = 100;
+const LOSS_DIVERGENCE_SIGMA = 2;
+const LOSS_DIVERGENCE_RECOVERY_STEPS = 50;
+const lossDivergenceState = {
+  runName: null,
+  active: false,
+  alarmStep: null,
+  latestValue: null,
+  expectedValue: null,
+  recoverySteps: 0,
+  lastProcessedStep: null,
+  titleTimer: null,
+  titleWarnFrame: true,
+  notifiedKeys: new Set(),
+};
 
 const CHART_SLUGS = new Set([
   "loss",
@@ -2433,6 +2481,192 @@ function setDashboardState(partial, { replace = true } = {}) {
 
 window.__getDashboardState = getDashboardState;
 window.__setDashboardState = setDashboardState;
+
+function lossValueFromRow(row) {
+  const value = Number(row?.loss_total ?? row?.loss);
+  return Number.isFinite(value) ? value : null;
+}
+
+function lossStepFromRow(row, fallback) {
+  const step = Number(row?.step);
+  return Number.isFinite(step) ? step : fallback;
+}
+
+function lossRollingStatAt(rows, index) {
+  const start = Math.max(0, index - LOSS_DIVERGENCE_WINDOW + 1);
+  let count = 0;
+  let sum = 0;
+  let sumSquares = 0;
+  for (let i = start; i <= index; i += 1) {
+    const value = lossValueFromRow(rows[i]);
+    if (value === null) continue;
+    count += 1;
+    sum += value;
+    sumSquares += value * value;
+  }
+  const latest = lossValueFromRow(rows[index]);
+  if (latest === null || count < 2) return null;
+  const mean = sum / count;
+  const variance = Math.max(0, sumSquares / count - mean * mean);
+  const std = Math.sqrt(variance);
+  const expected = mean + LOSS_DIVERGENCE_SIGMA * std;
+  return {
+    step: lossStepFromRow(rows[index], index + 1),
+    value: latest,
+    mean,
+    std,
+    expected,
+    diverged: latest > expected,
+  };
+}
+
+function lossDivergenceSamples(run) {
+  const rows = Array.isArray(run?.loss_curve) ? run.loss_curve : [];
+  return rows
+    .map((_, index) => lossRollingStatAt(rows, index))
+    .filter(Boolean);
+}
+
+function lossDivergenceNotificationAllowed() {
+  return Boolean(
+    "Notification" in window &&
+    window.Notification?.permission === "granted" &&
+    (!window.matchMedia || window.matchMedia("(min-width: 768px) and (pointer: fine)").matches)
+  );
+}
+
+function syncLossDivergenceBanner() {
+  const banner = document.getElementById("loss-divergence-banner");
+  if (!banner) return;
+  if (!lossDivergenceState.active) {
+    banner.hidden = true;
+    banner.textContent = "";
+    return;
+  }
+  banner.hidden = false;
+  banner.textContent = `Loss diverged at step ${Number(lossDivergenceState.alarmStep || 0).toLocaleString()} — last value ${fmtNumber(lossDivergenceState.latestValue, 5)}, expected ${fmtNumber(lossDivergenceState.expectedValue, 5)}`;
+}
+
+function syncLossDivergenceTitle() {
+  if (!lossDivergenceState.active) {
+    document.title = DASHBOARD_TITLE_BASE;
+    return;
+  }
+  document.title = lossDivergenceState.titleWarnFrame
+    ? `⚠ DIVERGED at step ${Number(lossDivergenceState.alarmStep || 0).toLocaleString()}`
+    : DASHBOARD_TITLE_BASE;
+}
+
+function startLossDivergenceTitleFlash() {
+  if (lossDivergenceState.titleTimer) return;
+  lossDivergenceState.titleWarnFrame = true;
+  syncLossDivergenceTitle();
+  lossDivergenceState.titleTimer = window.setInterval(() => {
+    lossDivergenceState.titleWarnFrame = !lossDivergenceState.titleWarnFrame;
+    syncLossDivergenceTitle();
+  }, 1000);
+}
+
+function stopLossDivergenceTitleFlash() {
+  if (lossDivergenceState.titleTimer) {
+    window.clearInterval(lossDivergenceState.titleTimer);
+    lossDivergenceState.titleTimer = null;
+  }
+  lossDivergenceState.titleWarnFrame = true;
+  document.title = DASHBOARD_TITLE_BASE;
+}
+
+function notifyLossDivergence(runName, sample) {
+  const key = `${runName}:${sample.step}`;
+  if (lossDivergenceState.notifiedKeys.has(key) || !lossDivergenceNotificationAllowed()) return;
+  lossDivergenceState.notifiedKeys.add(key);
+  try {
+    new Notification(`OSS run ${runName} diverged at step ${Number(sample.step).toLocaleString()}`, {
+      body: `loss_total ${fmtNumber(sample.value, 5)} exceeded ${fmtNumber(sample.expected, 5)}`,
+      tag: `oss-loss-divergence-${runName}`,
+      renotify: true,
+    });
+  } catch (_) {
+    // Notification support varies by browser and embedding context.
+  }
+}
+
+function activateLossDivergenceAlarm(run, sample) {
+  lossDivergenceState.active = true;
+  lossDivergenceState.runName = run?.name || "";
+  lossDivergenceState.alarmStep = sample.step;
+  lossDivergenceState.latestValue = sample.value;
+  lossDivergenceState.expectedValue = sample.expected;
+  lossDivergenceState.recoverySteps = 0;
+  startLossDivergenceTitleFlash();
+  syncLossDivergenceBanner();
+  notifyLossDivergence(lossDivergenceState.runName, sample);
+}
+
+function clearLossDivergenceAlarm() {
+  lossDivergenceState.active = false;
+  lossDivergenceState.alarmStep = null;
+  lossDivergenceState.latestValue = null;
+  lossDivergenceState.expectedValue = null;
+  lossDivergenceState.recoverySteps = 0;
+  stopLossDivergenceTitleFlash();
+  syncLossDivergenceBanner();
+}
+
+function resetLossDivergenceRun(runName) {
+  if (lossDivergenceState.active || lossDivergenceState.titleTimer) {
+    clearLossDivergenceAlarm();
+  }
+  lossDivergenceState.runName = runName || null;
+  lossDivergenceState.lastProcessedStep = null;
+  lossDivergenceState.recoverySteps = 0;
+}
+
+function updateLossDivergenceAlarm(data) {
+  const run = activeRunFrom(data);
+  const runName = run?.name || null;
+  if (!run) {
+    resetLossDivergenceRun(null);
+    return;
+  }
+  if (lossDivergenceState.runName !== runName) {
+    resetLossDivergenceRun(runName);
+  }
+
+  const samples = lossDivergenceSamples(run);
+  const latest = samples[samples.length - 1] || null;
+  if (!latest) {
+    if (lossDivergenceState.active) clearLossDivergenceAlarm();
+    return;
+  }
+
+  if (!lossDivergenceState.active) {
+    lossDivergenceState.lastProcessedStep = latest.step;
+    if (latest.diverged) activateLossDivergenceAlarm(run, latest);
+    else syncLossDivergenceBanner();
+    return;
+  }
+
+  const newSamples = samples.filter((sample) => (
+    lossDivergenceState.lastProcessedStep === null ||
+    Number(sample.step) > Number(lossDivergenceState.lastProcessedStep)
+  ));
+  for (const sample of newSamples) {
+    if (sample.diverged) {
+      activateLossDivergenceAlarm(run, sample);
+    } else {
+      lossDivergenceState.recoverySteps += 1;
+    }
+    lossDivergenceState.lastProcessedStep = sample.step;
+  }
+
+  if (lossDivergenceState.recoverySteps >= LOSS_DIVERGENCE_RECOVERY_STEPS) {
+    clearLossDivergenceAlarm();
+  } else {
+    syncLossDivergenceTitle();
+    syncLossDivergenceBanner();
+  }
+}
 
 function runTokenFromName(name) {
   return String(name || "").replace(/^srcnn-/, "");
@@ -5406,6 +5640,7 @@ function renderDashboard(data, options = {}) {
   latestGeneratedAt = data.generated_at;
   lastKnownData = data;
   window.OSS_DATA = data;
+  updateLossDivergenceAlarm(data);
   if (!getDashboardState().run) dashboardActiveRunNameOverride = null;
   updateStamp();
   renderHero(data);
