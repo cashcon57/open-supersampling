@@ -157,6 +157,62 @@
       -webkit-overflow-scrolling: touch;
     }
     .viz-frame { scroll-snap-align: start; }
+    .visit-banner {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 12px 0;
+      padding: 8px 12px;
+      background: rgba(34, 211, 238, 0.08);
+      border: 1px solid rgba(34, 211, 238, 0.35);
+      border-radius: 6px;
+      color: #e4e4e7;
+      font-size: 13px;
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      transition: opacity 600ms ease-out;
+    }
+    .visit-banner[hidden] { display: none; }
+    .visit-banner.fading { opacity: 0; }
+    .visit-banner-icon { font-size: 16px; line-height: 1; }
+    .visit-banner-msg { flex: 1; }
+    .visit-banner-close {
+      background: transparent;
+      color: #a1a1aa;
+      border: none;
+      font-size: 18px;
+      line-height: 1;
+      cursor: pointer;
+      padding: 0 4px;
+    }
+    .visit-banner-close:hover { color: #e4e4e7; }
+    .viz-strip-new {
+      outline: 1px solid #22d3ee;
+      outline-offset: 1px;
+      position: relative;
+    }
+    .viz-strip-new::after {
+      content: "NEW";
+      position: absolute;
+      top: 4px;
+      right: 4px;
+      background: #22d3ee;
+      color: #0a0a0a;
+      font-size: 9px;
+      font-weight: 700;
+      padding: 1px 4px;
+      border-radius: 2px;
+      letter-spacing: 0.5px;
+    }
+    .score-row-new {
+      animation: scoreFlash 1.6s ease-out 1;
+    }
+    @keyframes scoreFlash {
+      0% { background: rgba(34, 211, 238, 0.35); }
+      100% { background: transparent; }
+    }
+    @media (max-width: 480px) {
+      .visit-banner { font-size: 12px; padding: 6px 10px; }
+    }
     .accordion-body { max-height: 0; overflow: hidden; opacity: 0.65; transition: max-height 320ms ease, opacity 220ms ease; }
     details[open] .accordion-body { max-height: 5000px; opacity: 1; }
     .viz-button { position: relative; cursor: zoom-in; transition: transform 180ms ease, filter 180ms ease; }
@@ -959,6 +1015,11 @@
           <span class="h-2.5 w-2.5 rounded-full bg-emerald-400"></span>
           <span id="hero-active-status">training status loading</span>
         </div>
+        <div class="visit-banner" id="visit-banner" hidden>
+          <span class="visit-banner-icon" data-icon>🆕</span>
+          <span class="visit-banner-msg" data-msg></span>
+          <button type="button" class="visit-banner-close" data-close aria-label="Dismiss">&times;</button>
+        </div>
         <h2 id="hero-active-title" class="mt-2 text-xl font-semibold text-zinc-50" data-text>v6.1 Pico</h2>
         <div class="convergence-progress" id="hero-progress">
           <div class="progress-track" data-track>
@@ -1218,6 +1279,12 @@ const compareState = {
 };
 let lastTap = { time: 0, x: 0, y: 0 };
 let lastActiveStep = null;
+let __visitBaselineRun = null;
+let __visitBaselineStep = null;
+let visitBaselineCaptured = false;
+let visitCurrentActive = null;
+let visitBannerTimer = null;
+let visitBannerCommitDone = false;
 let trainingPulseState = {
   activeRunName: null,
   advanced: false,
@@ -1919,6 +1986,128 @@ function activeRunFrom(data) {
     if (selected) return selected;
   }
   return (data.runs || []).find((run) => run.active) || (data.runs || [])[0] || null;
+}
+
+function visitStorageGet(key) {
+  try {
+    return window.localStorage.getItem(key);
+  } catch (_) {
+    return null;
+  }
+}
+
+function visitStorageSet(key, value) {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch (_) {
+    // Storage can be disabled in private or hardened browser contexts.
+  }
+}
+
+function commitVisit() {
+  if (visitBannerCommitDone || !visitCurrentActive) return;
+  visitBannerCommitDone = true;
+  visitStorageSet("oss_last_visit_run", String(visitCurrentActive.name || ""));
+  visitStorageSet("oss_last_visit_step", String(Number(visitCurrentActive.latest_step || 0)));
+  visitStorageSet("oss_last_visit_at", new Date().toISOString());
+}
+
+function visitStep(value) {
+  if (value === null || value === "") return null;
+  const step = Number(value);
+  return Number.isFinite(step) ? step : null;
+}
+
+function countNewVizStrips(run, storedStep) {
+  return (run?.viz_pngs || []).filter((file) => stepFromName(file) > storedStep).length;
+}
+
+function countNewScoreRows(run, storedStep) {
+  return (run?.score_log || []).filter((row) => Number(row.step || 0) > storedStep).length;
+}
+
+function shouldMarkNewForVisit(run, step) {
+  return Boolean(
+    __visitBaselineRun &&
+    run?.name === __visitBaselineRun &&
+    Number.isFinite(Number(__visitBaselineStep)) &&
+    Number(step) > Number(__visitBaselineStep)
+  );
+}
+
+function setupVisitBanner(active) {
+  const banner = document.getElementById("visit-banner");
+  if (!banner || !active) return;
+
+  visitCurrentActive = active;
+  visitBannerCommitDone = false;
+  if (visitBannerTimer) {
+    window.clearTimeout(visitBannerTimer);
+    visitBannerTimer = null;
+  }
+
+  const storedRun = visitStorageGet("oss_last_visit_run");
+  const storedStepRaw = visitStorageGet("oss_last_visit_step");
+  const storedStep = visitStep(storedStepRaw);
+  if (!visitBaselineCaptured) {
+    __visitBaselineRun = storedRun;
+    __visitBaselineStep = storedStep;
+    visitBaselineCaptured = true;
+  }
+
+  if (!banner.dataset.bound) {
+    banner.querySelector("[data-close]")?.addEventListener("click", () => {
+      commitVisit();
+      banner.hidden = true;
+      banner.classList.remove("fading");
+      if (visitBannerTimer) {
+        window.clearTimeout(visitBannerTimer);
+        visitBannerTimer = null;
+      }
+    });
+    banner.dataset.bound = "true";
+  }
+
+  const activeStep = Number(active.latest_step || 0);
+  const iconEl = banner.querySelector("[data-icon]");
+  const msgEl = banner.querySelector("[data-msg]");
+  let icon = "";
+  let message = "";
+
+  if (!storedRun && storedStep === null) {
+    icon = "👋";
+    message = `First visit — welcome. Active run: ${active.name} at step ${activeStep.toLocaleString()}.`;
+  } else if (storedRun && storedRun !== active.name) {
+    icon = "🆕";
+    message = `New active run: ${active.name} at step ${activeStep.toLocaleString()} (you last saw ${storedRun} at step ${(storedStep ?? 0).toLocaleString()}).`;
+  } else if (storedRun === active.name && storedStep !== null && activeStep > storedStep) {
+    const parts = [`+${(activeStep - storedStep).toLocaleString()} steps`];
+    const vizDelta = countNewVizStrips(active, storedStep);
+    const scoreDelta = countNewScoreRows(active, storedStep);
+    if (vizDelta > 0) parts.push(`${vizDelta.toLocaleString()} new viz strips`);
+    if (scoreDelta > 0) parts.push(`${scoreDelta.toLocaleString()} new score-log entries`);
+    icon = "🆕";
+    message = `${parts.join(" · ")} since you last visited at step ${storedStep.toLocaleString()}.`;
+  }
+
+  if (!message) {
+    banner.hidden = true;
+    banner.classList.remove("fading");
+    return;
+  }
+
+  if (iconEl) iconEl.textContent = icon;
+  if (msgEl) msgEl.textContent = message;
+  banner.hidden = false;
+  banner.classList.remove("fading");
+  visitBannerTimer = window.setTimeout(() => {
+    commitVisit();
+    banner.classList.add("fading");
+    window.setTimeout(() => {
+      banner.hidden = true;
+      banner.classList.remove("fading");
+    }, 600);
+  }, 8000);
 }
 
 function updateTrainingPulseState(data, preserve = false) {
@@ -3370,7 +3559,7 @@ function renderScoreTable(host, run) {
     .filter((key) => /step|psnr|lpips|temporal|ratio|latency/i.test(key))
     .slice(0, 6);
   const head = keys.map((key) => `<th class="px-3 py-2 text-left font-medium">${escapeHtml(key)}</th>`).join("");
-  const body = rows.map((row) => `<tr class="border-t border-zinc-800">${keys.map((key) => `<td class="px-3 py-2 font-mono">${escapeHtml(fmtNumber(row[key], 4))}</td>`).join("")}</tr>`).join("");
+  const body = rows.map((row) => `<tr class="border-t border-zinc-800 ${shouldMarkNewForVisit(run, row.step) ? "score-row-new" : ""}">${keys.map((key) => `<td class="px-3 py-2 font-mono">${escapeHtml(fmtNumber(row[key], 4))}</td>`).join("")}</tr>`).join("");
   host.innerHTML = `<div class="score-scroll overflow-x-auto rounded border border-zinc-800"><table class="min-w-full text-sm text-zinc-300"><thead class="bg-zinc-950/50 text-xs uppercase text-zinc-500"><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
@@ -3474,8 +3663,10 @@ function renderVizStrip(host, run, limit) {
     return;
   }
   for (const file of files) {
+    const step = stepFromName(file);
     const frame = document.createElement("figure");
     frame.className = "viz-frame w-72 shrink-0";
+    if (shouldMarkNewForVisit(run, step)) frame.classList.add("viz-strip-new");
     const button = document.createElement("button");
     button.className = "viz-button block w-full rounded text-left focus:outline-none focus:ring-2 focus:ring-cyan-400";
     button.type = "button";
@@ -3491,11 +3682,11 @@ function renderVizStrip(host, run, limit) {
     img.src = runUrl(run, file);
     const overlay = document.createElement("span");
     overlay.className = "viz-overlay font-mono text-xs";
-    overlay.textContent = `step ${stepFromName(file).toLocaleString()}`;
+    overlay.textContent = `step ${step.toLocaleString()}`;
     button.append(img, overlay);
     const caption = document.createElement("figcaption");
     caption.className = "mt-2 text-center font-mono text-xs text-zinc-400";
-    caption.textContent = `step ${stepFromName(file).toLocaleString()}`;
+    caption.textContent = `step ${step.toLocaleString()}`;
     frame.append(button, caption);
     host.appendChild(frame);
   }
@@ -4162,6 +4353,7 @@ function etaTextForRun(run) {
 function renderHero(data) {
   const active = activeRunFrom(data);
   if (!active) return;
+  window.__lastActiveName = active.name;
   // Single source of truth for active/idle is the animated chip on the
   // title line. Hide the verbose "is training right now" text duplicate.
   const heroStatus = document.getElementById("hero-active-status");
@@ -4193,6 +4385,7 @@ function renderHero(data) {
     document.getElementById("cite-plain").textContent = plain;
   }
   document.getElementById("hero-gpu").innerHTML = gpuPanelHtml(active).replace("rounded-md border ", "");
+  setupVisitBanner(active);
 }
 
 function renderRun(run, index, openByRun = new Map()) {
@@ -4480,6 +4673,7 @@ function renderDashboard(data, options = {}) {
   updateTrainingPulseState(data, Boolean(options.preserveTrainingState));
   latestGeneratedAt = data.generated_at;
   lastKnownData = data;
+  window.OSS_DATA = data;
   if (!getDashboardState().run) dashboardActiveRunNameOverride = null;
   updateStamp();
   renderHero(data);
