@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from oss.sr.v6.dgp_dictionary import DGPDictionary
 
@@ -56,25 +57,66 @@ class DisocclusionSpawner(nn.Module):
     def compute_disocclusion_mask(
         self,
         depth_t: torch.Tensor,
-        depth_prev_warped: torch.Tensor,
+        depth_prev: torch.Tensor,
+        MV: torch.Tensor,
     ) -> torch.Tensor:
         """Return a binary ``(B, 1, H, W)`` mask where one means disoccluded."""
-        if depth_t.shape != depth_prev_warped.shape:
+        if depth_t.shape != depth_prev.shape:
             raise ValueError(
-                "depth_t and depth_prev_warped must have the same shape; "
-                f"got {tuple(depth_t.shape)} and {tuple(depth_prev_warped.shape)}"
+                "depth_t and depth_prev must have the same shape; "
+                f"got {tuple(depth_t.shape)} and {tuple(depth_prev.shape)}"
             )
         if depth_t.ndim != 4 or depth_t.shape[1] != 1:
             raise ValueError(
                 "depth tensors must have shape (B, 1, H, W); "
                 f"got {tuple(depth_t.shape)}"
             )
+        if MV.shape != (depth_t.shape[0], 2, depth_t.shape[2], depth_t.shape[3]):
+            raise ValueError(
+                "MV must have shape "
+                f"{(depth_t.shape[0], 2, depth_t.shape[2], depth_t.shape[3])}; "
+                f"got {tuple(MV.shape)}"
+            )
+        depth_prev_warped = self._warp_prev_depth(depth_prev, MV)
         return ((depth_t - depth_prev_warped).abs() > self.tau_z).to(depth_t.dtype)
+
+    def _warp_prev_depth(
+        self,
+        depth_prev: torch.Tensor,
+        MV: torch.Tensor,
+    ) -> torch.Tensor:
+        """Sample previous depth at ``p - MV(p)`` with zero for offscreen history."""
+        B, _, H, W = depth_prev.shape
+        y = torch.arange(H, device=depth_prev.device, dtype=depth_prev.dtype)
+        x = torch.arange(W, device=depth_prev.device, dtype=depth_prev.dtype)
+        yy, xx = torch.meshgrid(y, x, indexing="ij")
+        base = torch.stack((xx, yy), dim=-1).unsqueeze(0).expand(B, H, W, 2)
+        flow = MV.permute(0, 2, 3, 1).to(
+            device=depth_prev.device,
+            dtype=depth_prev.dtype,
+        )
+        src = base - flow
+        if W > 1:
+            grid_x = 2.0 * src[..., 0] / float(W - 1) - 1.0
+        else:
+            grid_x = torch.zeros_like(src[..., 0])
+        if H > 1:
+            grid_y = 2.0 * src[..., 1] / float(H - 1) - 1.0
+        else:
+            grid_y = torch.zeros_like(src[..., 1])
+        grid = torch.stack((grid_x, grid_y), dim=-1)
+        return F.grid_sample(
+            depth_prev,
+            grid,
+            mode="bilinear",
+            padding_mode="zeros",
+            align_corners=True,
+        )
 
     def forward(
         self,
         depth_t: torch.Tensor,
-        depth_prev_warped: torch.Tensor,
+        depth_prev: torch.Tensor,
         MV: torch.Tensor,
         lr_features: torch.Tensor,
         residual: torch.Tensor,
@@ -83,7 +125,7 @@ class DisocclusionSpawner(nn.Module):
 
         Args:
             depth_t: ``(B, 1, H, W)`` current depth.
-            depth_prev_warped: ``(B, 1, H, W)`` canvas-warped previous depth.
+            depth_prev: ``(B, 1, H, W)`` previous depth.
             MV: ``(B, 2, H, W)`` per-pixel motion vector.
             lr_features: ``(B, feat_dim, H, W)`` per-pixel features.
             residual: ``(B, 1, H, W)`` LR-vs-canvas-render residual.
@@ -97,10 +139,10 @@ class DisocclusionSpawner(nn.Module):
             raise ValueError(
                 f"depth_t must have shape {(B, 1, H, W)}; got {tuple(depth_t.shape)}"
             )
-        if depth_prev_warped.shape != (B, 1, H, W):
+        if depth_prev.shape != (B, 1, H, W):
             raise ValueError(
-                "depth_prev_warped must have shape "
-                f"{(B, 1, H, W)}; got {tuple(depth_prev_warped.shape)}"
+                "depth_prev must have shape "
+                f"{(B, 1, H, W)}; got {tuple(depth_prev.shape)}"
             )
         if MV.shape != (B, 2, H, W):
             raise ValueError(f"MV must have shape {(B, 2, H, W)}; got {tuple(MV.shape)}")
@@ -111,7 +153,7 @@ class DisocclusionSpawner(nn.Module):
 
         device = lr_features.device
         dtype = lr_features.dtype
-        disocc = self.compute_disocclusion_mask(depth_t, depth_prev_warped)
+        disocc = self.compute_disocclusion_mask(depth_t, depth_prev, MV)
         residual_gate = (residual > self.tau_r).to(disocc.dtype)
         priority = (disocc * residual_gate).squeeze(1)
 
