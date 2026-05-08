@@ -97,13 +97,25 @@ stage_run_files() {
     local dst_run="${STAGING_DIR}/runs/${run}"
     [[ -d "$src_run" ]] || continue
     mkdir -p "$dst_run/viz"
-    # rsync (portable Mac + WSL + Linux); -a archive, -u update-only-newer
-    rsync -au "$src_run/metrics.json" "$dst_run/" 2>/dev/null || true
-    rsync -au "$src_run/score_log.json" "$dst_run/" 2>/dev/null || true
-    rsync -au "$src_run/events.json" "$dst_run/" 2>/dev/null || true
-    rsync -au "$src_run/gpu_status.json" "$dst_run/" 2>/dev/null || true
+    # Use cp instead of rsync because cwrsync (the Windows port we use on
+    # the 3080 Ti) misparses local paths and tries to resolve them as ssh
+    # remotes. cp -p preserves mtime; -u (BSD) only copies if source is
+    # newer. cp -u is GNU coreutils; falls back to plain cp on BSD.
+    for f in metrics.json score_log.json events.json gpu_status.json; do
+      [[ -f "$src_run/$f" ]] || continue
+      cp -p "$src_run/$f" "$dst_run/$f" 2>/dev/null || true
+    done
     if [[ -d "$src_run/viz" ]]; then
-      rsync -au --include='*.png' --exclude='*' "$src_run/viz/" "$dst_run/viz/" 2>/dev/null || true
+      # Sync only PNGs from viz/. cp -un is GNU; cp -u is BSD; fall back to cp.
+      for png in "$src_run"/viz/*.png; do
+        [[ -f "$png" ]] || continue
+        local base; base="$(basename "$png")"
+        # Skip if dest exists and is at least as new
+        if [[ -f "$dst_run/viz/$base" ]] && [[ "$dst_run/viz/$base" -nt "$png" || "$dst_run/viz/$base" -ef "$png" ]]; then
+          continue
+        fi
+        cp -p "$png" "$dst_run/viz/$base" 2>/dev/null || true
+      done
     fi
   done
 }
