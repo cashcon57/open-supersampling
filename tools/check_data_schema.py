@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import math
 from pathlib import Path
 import sys
 
@@ -16,6 +17,10 @@ def type_name(value: object) -> str:
 
 def is_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
+
+
+def is_finite_number(value: object) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value))
 
 
 def is_utc_iso8601(value: str) -> bool:
@@ -53,6 +58,14 @@ def require_str(obj: dict[str, object], key: str, path: str, errors: list[str]) 
 def require_bool(obj: dict[str, object], key: str, path: str, errors: list[str]) -> None:
     if require_key(obj, key, path, errors) and not isinstance(obj[key], bool):
         add_error(errors, f"{path}.{key}", "bool", obj[key])
+
+
+def require_optional_str(obj: dict[str, object], key: str, path: str, errors: list[str]) -> None:
+    if not require_key(obj, key, path, errors):
+        return
+    value = obj[key]
+    if value is not None and not isinstance(value, str):
+        add_error(errors, f"{path}.{key}", "str | null", value)
 
 
 def require_int_ge_zero(obj: dict[str, object], key: str, path: str, errors: list[str]) -> None:
@@ -113,6 +126,121 @@ def require_str_list(obj: dict[str, object], key: str, path: str, errors: list[s
             errors.append(f"{item_path}: expected relative path, got absolute path")
 
 
+def require_finite_float(
+    obj: dict[str, object],
+    key: str,
+    path: str,
+    errors: list[str],
+    *,
+    gt: float | None = None,
+    ge: float | None = None,
+    le: float | None = None,
+) -> None:
+    if not require_key(obj, key, path, errors):
+        return
+    value = obj[key]
+    value_path = f"{path}.{key}"
+    if not is_finite_number(value):
+        add_error(errors, value_path, "finite float", value)
+        return
+    number = float(value)
+    if gt is not None and not number > gt:
+        errors.append(f"{value_path}: expected > {gt}, got {number}")
+    if ge is not None and not number >= ge:
+        errors.append(f"{value_path}: expected >= {ge}, got {number}")
+    if le is not None and not number <= le:
+        errors.append(f"{value_path}: expected <= {le}, got {number}")
+
+
+def validate_float_list(value: object, path: str, errors: list[str]) -> int | None:
+    if not isinstance(value, list):
+        add_error(errors, path, "list[float]", value)
+        return None
+    for index, item in enumerate(value):
+        if not is_finite_number(item):
+            add_error(errors, f"{path}[{index}]", "finite float", item)
+    return len(value)
+
+
+def validate_per_frame(value: object, path: str, errors: list[str]) -> int | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        add_error(errors, path, "object | null", value)
+        return None
+    lengths: list[int] = []
+    for key in ("psnr", "lpips", "delta_psnr_vs_bicubic", "delta_lpips_vs_bicubic"):
+        if require_key(value, key, path, errors):
+            length = validate_float_list(value[key], f"{path}.{key}", errors)
+            if length is not None:
+                lengths.append(length)
+    if lengths and any(length != lengths[0] for length in lengths):
+        errors.append(f"{path}: expected all arrays to have equal length, got {lengths}")
+    return lengths[0] if lengths else None
+
+
+def validate_stats(value: object, path: str, errors: list[str], frame_count: int | None) -> None:
+    if value is None:
+        return
+    if not isinstance(value, dict):
+        add_error(errors, path, "object | null", value)
+        return
+    for key in ("psnr_std", "psnr_iqr", "lpips_std", "lpips_iqr"):
+        require_finite_float(value, key, path, errors, ge=0.0)
+    if not require_key(value, "beats_bicubic_count", path, errors):
+        pass
+    elif not is_int(value["beats_bicubic_count"]):
+        add_error(errors, f"{path}.beats_bicubic_count", "int", value["beats_bicubic_count"])
+    elif value["beats_bicubic_count"] < 0:
+        errors.append(f"{path}.beats_bicubic_count: expected int >= 0, got {value['beats_bicubic_count']}")
+    elif frame_count is not None and value["beats_bicubic_count"] > frame_count:
+        errors.append(
+            f"{path}.beats_bicubic_count: expected <= frame_count {frame_count}, "
+            f"got {value['beats_bicubic_count']}"
+        )
+    require_finite_float(value, "beats_bicubic_wilson95_lo", path, errors, ge=0.0, le=1.0)
+    require_finite_float(value, "beats_bicubic_wilson95_hi", path, errors, ge=0.0, le=1.0)
+    lo = value.get("beats_bicubic_wilson95_lo")
+    hi = value.get("beats_bicubic_wilson95_hi")
+    if is_finite_number(lo) and is_finite_number(hi) and float(lo) > float(hi):
+        errors.append(f"{path}: expected wilson95_lo <= wilson95_hi")
+
+
+def validate_score_row(row: object, path: str, errors: list[str], warnings: list[str]) -> None:
+    if not isinstance(row, dict):
+        add_error(errors, path, "object", row)
+        return
+    if "per_frame" not in row:
+        errors.append(f"{path}.per_frame: missing required key")
+        frame_count = None
+    else:
+        frame_count = validate_per_frame(row["per_frame"], f"{path}.per_frame", errors)
+        if row["per_frame"] is None and row.get("ckpt") is not None:
+            warnings.append(f"WARNING {path}.per_frame: null on checkpoint-backed score row")
+    if "stats" not in row:
+        errors.append(f"{path}.stats: missing required key")
+    else:
+        validate_stats(row["stats"], f"{path}.stats", errors, frame_count)
+        if row["stats"] is None and row.get("ckpt") is not None:
+            warnings.append(f"WARNING {path}.stats: null on checkpoint-backed score row")
+
+
+def validate_model(model: object, index: int, errors: list[str]) -> None:
+    path = f"models[{index}]"
+    if not isinstance(model, dict):
+        add_error(errors, path, "object", model)
+        return
+    require_str(model, "id", path, errors)
+    if isinstance(model.get("id"), str) and not model["id"]:
+        errors.append(f"{path}.id: expected non-empty str")
+    require_str(model, "label", path, errors)
+    require_optional_str(model, "run_name", path, errors)
+    require_optional_int(model, "step", path, errors)
+    require_finite_float(model, "psnr_mean", path, errors, gt=0.0)
+    require_finite_float(model, "lpips_mean", path, errors, ge=0.0, le=1.0)
+    require_bool(model, "active", path, errors)
+
+
 def validate_run(run: object, index: int, errors: list[str], warnings: list[str]) -> None:
     path = f"runs[{index}]"
     if not isinstance(run, dict):
@@ -135,6 +263,9 @@ def validate_run(run: object, index: int, errors: list[str], warnings: list[str]
 
     if run.get("active") is True and isinstance(run.get("loss_curve"), list) and not run["loss_curve"]:
         warnings.append(f"WARNING {path}.loss_curve: active run has no rows")
+    if isinstance(run.get("score_log"), list):
+        for row_index, row in enumerate(run["score_log"]):
+            validate_score_row(row, f"{path}.score_log[{row_index}]", errors, warnings)
 
 
 def load_json(path: Path) -> object:
@@ -171,6 +302,14 @@ def validate(data: object) -> tuple[int, list[str], list[str]]:
         for index, run in enumerate(data["runs"]):
             validate_run(run, index, errors, warnings)
 
+    if "models" not in data:
+        errors.append("models: required field missing")
+    elif not isinstance(data["models"], list):
+        add_error(errors, "models", "list[Model]", data["models"])
+    else:
+        for index, model in enumerate(data["models"]):
+            validate_model(model, index, errors)
+
     return (1 if errors else 0), errors, warnings
 
 
@@ -198,7 +337,8 @@ def main() -> int:
 
     print(
         f"OK schema_version={data['schema_version']} "
-        f"runs={len(data['runs'])} generated_at={data['generated_at']}"
+        f"runs={len(data['runs'])} models={len(data['models'])} "
+        f"generated_at={data['generated_at']}"
     )
     return 0
 

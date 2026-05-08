@@ -154,6 +154,19 @@ V4_CROSS_VERSION_POINTS = [
         "is_in_distribution": False,
     },
 ]
+REFERENCE_MODEL_IDS = ("bicubic", "fsr3", "xess1", "dlss4")
+REFERENCE_ID_LABELS = {
+    "bicubic": "Bicubic",
+    "fsr3": "FSR 3",
+    "xess1": "XeSS 1.x",
+    "dlss4": "DLSS 4",
+}
+REFERENCE_OUTPUT_IDS = {
+    "bicubic": "bicubic",
+    "fsr3": "fsr-3",
+    "xess1": "xess-1.x",
+    "dlss4": "dlss-4",
+}
 
 
 def utc_now_iso() -> str:
@@ -235,12 +248,118 @@ def primitive_value(value: Any) -> Any:
     return None
 
 
-def slim_row(row: dict[str, Any]) -> dict[str, Any]:
+def finite_float(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    return number
+
+
+def numeric_list(row: dict[str, Any], *keys: str) -> list[float] | None:
+    for key in keys:
+        value = row.get(key)
+        if not isinstance(value, list):
+            continue
+        numbers: list[float] = []
+        for item in value:
+            number = finite_float(item)
+            if number is None:
+                return None
+            numbers.append(number)
+        return numbers
+    return None
+
+
+def percentile(sorted_values: list[float], pct: float) -> float | None:
+    if not sorted_values:
+        return None
+    if len(sorted_values) == 1:
+        return sorted_values[0]
+    pos = (len(sorted_values) - 1) * pct
+    lo = int(math.floor(pos))
+    hi = int(math.ceil(pos))
+    if lo == hi:
+        return sorted_values[lo]
+    weight = pos - lo
+    return sorted_values[lo] * (1.0 - weight) + sorted_values[hi] * weight
+
+
+def stddev(values: list[float]) -> float | None:
+    if not values:
+        return 0.0
+    mean = sum(values) / len(values)
+    return math.sqrt(sum((value - mean) ** 2 for value in values) / len(values))
+
+
+def iqr(values: list[float]) -> float | None:
+    if not values:
+        return 0.0
+    sorted_values = sorted(values)
+    q1 = percentile(sorted_values, 0.25)
+    q3 = percentile(sorted_values, 0.75)
+    if q1 is None or q3 is None:
+        return None
+    return q3 - q1
+
+
+def wilson95(success: int, n: int) -> tuple[float, float]:
+    if n == 0:
+        return (0.0, 0.0)
+    z = 1.959963984540054
+    phat = success / n
+    denom = 1 + z * z / n
+    center = (phat + z * z / (2 * n)) / denom
+    spread = z * ((phat * (1 - phat) / n + z * z / (4 * n * n)) ** 0.5) / denom
+    return (max(0.0, center - spread), min(1.0, center + spread))
+
+
+def per_frame_payload(row: dict[str, Any]) -> tuple[dict[str, list[float]] | None, dict[str, Any] | None]:
+    psnr = numeric_list(row, "per_frame_psnr", "model_psnr_per_sample", "psnr_per_sample")
+    lpips = numeric_list(row, "per_frame_lpips", "model_lpips_per_sample", "lpips_per_sample")
+    bicubic_psnr = numeric_list(row, "per_frame_bicubic_psnr", "bicubic_psnr_per_sample")
+    bicubic_lpips = numeric_list(row, "per_frame_bicubic_lpips", "bicubic_lpips_per_sample")
+    if psnr is None or lpips is None or bicubic_psnr is None or bicubic_lpips is None:
+        return None, None
+    frame_count = len(psnr)
+    if not (len(lpips) == len(bicubic_psnr) == len(bicubic_lpips) == frame_count):
+        return None, None
+    delta_psnr = [model - bicubic for model, bicubic in zip(psnr, bicubic_psnr)]
+    delta_lpips = [model - bicubic for model, bicubic in zip(lpips, bicubic_lpips)]
+    beats_count = sum(1 for model, bicubic in zip(psnr, bicubic_psnr) if model > bicubic)
+    wilson_lo, wilson_hi = wilson95(beats_count, frame_count)
+    return (
+        {
+            "psnr": psnr,
+            "lpips": lpips,
+            "delta_psnr_vs_bicubic": delta_psnr,
+            "delta_lpips_vs_bicubic": delta_lpips,
+        },
+        {
+            "psnr_std": stddev(psnr),
+            "psnr_iqr": iqr(psnr),
+            "lpips_std": stddev(lpips),
+            "lpips_iqr": iqr(lpips),
+            "beats_bicubic_count": beats_count,
+            "beats_bicubic_wilson95_lo": wilson_lo,
+            "beats_bicubic_wilson95_hi": wilson_hi,
+        },
+    )
+
+
+def slim_row(row: dict[str, Any], *, enrich_score: bool = False) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for key, value in row.items():
         primitive = primitive_value(value)
         if primitive is not None or value is None:
             out[str(key)] = primitive
+    if not enrich_score:
+        return out
+    per_frame, stats = per_frame_payload(row)
+    out["per_frame"] = per_frame
+    out["stats"] = stats
     return out
 
 
@@ -380,6 +499,16 @@ def build_run(name: str, previous: dict[str, Any] | None) -> dict[str, Any] | No
     )
     if not metrics and not scores and not viz_pngs and previous_has_data:
         cached = dict(previous)
+        if isinstance(cached.get("score_log"), list):
+            cached["score_log"] = [
+                {
+                    **row,
+                    "per_frame": row.get("per_frame") if isinstance(row, dict) else None,
+                    "stats": row.get("stats") if isinstance(row, dict) else None,
+                }
+                for row in cached["score_log"]
+                if isinstance(row, dict)
+            ]
         cached["cached"] = True
         cached["label"] = label_for_run(name, config)
         cached["active"] = config["active"]
@@ -420,7 +549,7 @@ def build_run(name: str, previous: dict[str, Any] | None) -> dict[str, Any] | No
         "latest_step": latest_step,
         "latest_metrics": latest,
         "loss_curve": [slim_row(row) for row in metrics[-1000:]],
-        "score_log": [slim_row(row) for row in scores],
+        "score_log": [slim_row(row, enrich_score=True) for row in scores],
         "viz_pngs": viz_pngs,
         "viz_columns": viz_columns,
         "max_target_steps": max_steps_for_run(name, metrics, previous),
@@ -446,6 +575,165 @@ def history_for_run(name: str, config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def score_metric(row: dict[str, Any], *keys: str) -> float | None:
+    for key in keys:
+        value = finite_float(row.get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def format_step_label(step: int | None) -> str:
+    if step is None:
+        return ""
+    if step >= 1000 and step % 1000 == 0:
+        return f"{step // 1000}K"
+    if step >= 1000:
+        return f"{step / 1000:.1f}K".rstrip("0").rstrip(".")
+    return str(step)
+
+
+def model_label_for_run(name: str, step: int | None) -> str:
+    step_label = format_step_label(step)
+    if name == "srcnn-v6.1-pico-001":
+        return f"v6.1 step {step_label}" if step_label else "v6.1"
+    if name == "srcnn-v6-pico-001":
+        return f"v6 step {step_label}" if step_label else "v6"
+    if name == "srcnn-v5-pixel-temporal-validated":
+        return f"v5 step {step_label}" if step_label else "v5"
+    if name.startswith("srcnn-prod-v4") or name.startswith("srcnn-v4"):
+        return f"v4 step {step_label}" if step_label else "v4"
+    return f"{name} step {step_label}" if step_label else name
+
+
+def model_id_for_run(name: str, step: int | None) -> str:
+    suffix = f"-step-{step}" if step is not None else ""
+    return re.sub(r"[^a-z0-9._-]+", "-", f"{name}{suffix}".lower()).strip("-")
+
+
+def model_from_score_run(run: dict[str, Any]) -> dict[str, Any] | None:
+    score_log = run.get("score_log")
+    if not isinstance(score_log, list) or not score_log:
+        return None
+    latest = max((row for row in score_log if isinstance(row, dict)), key=step_value, default=None)
+    if latest is None:
+        return None
+    psnr = score_metric(latest, "model_psnr_mean", "psnr_mean", "psnr")
+    lpips = score_metric(latest, "model_lpips_mean", "lpips_mean", "lpips")
+    if psnr is None or lpips is None:
+        return None
+    step = step_value(latest)
+    return {
+        "id": model_id_for_run(str(run["name"]), step),
+        "label": model_label_for_run(str(run["name"]), step),
+        "run_name": str(run["name"]),
+        "step": step,
+        "psnr_mean": psnr,
+        "lpips_mean": lpips,
+        "active": bool(run.get("active")),
+    }
+
+
+def model_from_run_config(run: dict[str, Any]) -> dict[str, Any] | None:
+    name = str(run.get("name") or "")
+    config = RUN_CONFIG.get(name)
+    if config is None:
+        return None
+    values: dict[str, float] = {}
+    for item in config.get("headline", []):
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("label") or "").strip().lower()
+        if label not in {"psnr", "lpips"}:
+            continue
+        value = finite_float(item.get("value"))
+        if value is not None:
+            values[label] = value
+    if "psnr" not in values or "lpips" not in values:
+        return None
+    step = RUN_MAX_STEPS.get(name)
+    return {
+        "id": model_id_for_run(name, step),
+        "label": model_label_for_run(name, step),
+        "run_name": name,
+        "step": step,
+        "psnr_mean": values["psnr"],
+        "lpips_mean": values["lpips"],
+        "active": bool(run.get("active")),
+    }
+
+
+def v4_srgd_model() -> dict[str, Any]:
+    point = next(point for point in V4_CROSS_VERSION_POINTS if point.get("is_in_distribution"))
+    return {
+        "id": "v4-srgd",
+        "label": "v4 SRGD",
+        "run_name": "srcnn-prod-v4-lpips",
+        "step": int(point["step"]),
+        "psnr_mean": float(point["psnr"]),
+        "lpips_mean": float(point["lpips"]),
+        "active": False,
+    }
+
+
+def extract_reference_models() -> list[dict[str, Any]]:
+    source = ROOT / "dashboard-public" / "index.html"
+    try:
+        text = source.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    match = re.search(r"const\s+comparisonReferenceLines\s*=\s*\[(.*?)\];", text, re.S)
+    if not match:
+        return []
+    models: list[dict[str, Any]] = []
+    by_id: dict[str, dict[str, str]] = {}
+    for raw_obj in re.findall(r"\{[^{}]*\}", match.group(1)):
+        id_match = re.search(r'id:\s*"([^"]+)"', raw_obj)
+        psnr_match = re.search(r"psnr:\s*([0-9.]+)", raw_obj)
+        lpips_match = re.search(r"lpips:\s*([0-9.]+)", raw_obj)
+        latest_match = re.search(r"latest:\s*true", raw_obj)
+        if not id_match or not psnr_match or not lpips_match or not latest_match:
+            continue
+        by_id[id_match.group(1)] = {
+            "psnr": psnr_match.group(1),
+            "lpips": lpips_match.group(1),
+        }
+    for reference_id in REFERENCE_MODEL_IDS:
+        values = by_id.get(reference_id)
+        if values is None:
+            continue
+        models.append(
+            {
+                "id": REFERENCE_OUTPUT_IDS[reference_id],
+                "label": REFERENCE_ID_LABELS[reference_id],
+                "run_name": None,
+                "step": None,
+                "psnr_mean": float(values["psnr"]),
+                "lpips_mean": float(values["lpips"]),
+                "active": False,
+            }
+        )
+    return models
+
+
+def build_models(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    models: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def add(model: dict[str, Any] | None) -> None:
+        if model is None or model["id"] in seen:
+            return
+        seen.add(model["id"])
+        models.append(model)
+
+    for run in runs:
+        add(model_from_score_run(run) or model_from_run_config(run))
+    add(v4_srgd_model())
+    for model in extract_reference_models():
+        add(model)
+    return models
+
+
 def extract_pitch() -> str:
     return DASHBOARD_PITCH
 
@@ -465,6 +753,7 @@ def build_data() -> dict[str, Any]:
         "schema_version": "2026-05-07",
         "generated_at": utc_now_iso(),
         "runs": runs,
+        "models": build_models(runs),
     }
 
 

@@ -523,6 +523,63 @@ def _mean(xs: list[float]) -> float:
     return sum(xs) / len(xs) if xs else float("nan")
 
 
+def _step_from_ckpt(ckpt_path: Path) -> int:
+    try:
+        return int(ckpt_path.stem.split("-")[-1])
+    except ValueError:
+        return -1
+
+
+def _dashboard_score_row(
+    *,
+    ckpt: Path,
+    manifest_paths: list[Path],
+    result: dict[str, list[float]],
+) -> dict[str, Any]:
+    model_psnr = result["psnr_temporal"]
+    bic_psnr = result["psnr_bicubic"]
+    model_lpips = result["lpips_temporal"]
+    bic_lpips = result["lpips_bicubic"]
+    return {
+        "step": _step_from_ckpt(ckpt),
+        "model_psnr_mean": _mean(model_psnr),
+        "bicubic_psnr_mean": _mean(bic_psnr),
+        "per_frame_psnr": list(model_psnr),
+        "per_frame_bicubic_psnr": list(bic_psnr),
+        "model_lpips_mean": _mean(model_lpips) if model_lpips else None,
+        "bicubic_lpips_mean": _mean(bic_lpips) if bic_lpips else None,
+        "per_frame_lpips": list(model_lpips),
+        "per_frame_bicubic_lpips": list(bic_lpips),
+        "model_beats_bicubic_count": sum(1 for m, b in zip(model_psnr, bic_psnr) if m > b),
+        "model_beats_bicubic_lpips_count": (
+            sum(1 for m, b in zip(model_lpips, bic_lpips) if m < b)
+            if model_lpips else None
+        ),
+        "n_samples": len(model_psnr),
+        "manifest": ",".join(str(p) for p in manifest_paths),
+        "ckpt": str(ckpt),
+    }
+
+
+def _append_dashboard_score_row(path: Path, row: dict[str, Any]) -> None:
+    rows: list[dict[str, Any]] = []
+    if path.exists():
+        with path.open("r", encoding="utf-8") as f:
+            payload = json.load(f)
+        if isinstance(payload, list):
+            rows = [dict(r) for r in payload if isinstance(r, dict)]
+        else:
+            raise ValueError(f"{path} must contain a JSON array")
+    rows = [r for r in rows if r.get("step") != row.get("step")]
+    rows.append(row)
+    rows.sort(key=lambda r: int(r.get("step", -1)))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with tmp.open("w", encoding="utf-8") as f:
+        json.dump(rows, f, indent=2)
+    tmp.replace(path)
+
+
 def _print_compact_result_block(label: str, result: dict[str, list[float]]) -> None:
     n = len(result["psnr_temporal"])
     if n == 0:
@@ -601,6 +658,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="LR synth blur sigma checked against --manifest.")
     p.add_argument("--jpeg-quality", type=int, default=85,
                    help="LR synth JPEG quality checked against --manifest.")
+    p.add_argument("--score-log", type=Path, default=None,
+                   help="Optional dashboard-compatible JSON score log to append/update.")
     return p.parse_args(argv)
 
 
@@ -798,6 +857,14 @@ def main(argv: list[str] | None = None) -> int:
     with json_path.open("w") as f:
         json.dump(out, f, indent=2)
     print(f"wrote {json_path}")
+    if args.score_log is not None:
+        row = _dashboard_score_row(
+            ckpt=args.ckpt_temporal,
+            manifest_paths=manifest_paths,
+            result=merged,
+        )
+        _append_dashboard_score_row(args.score_log, row)
+        print(f"updated {args.score_log}")
     return 0
 
 

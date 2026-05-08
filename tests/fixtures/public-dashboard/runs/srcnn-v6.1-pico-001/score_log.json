@@ -1,7 +1,16 @@
 [
   {
     "step": 1,
-    "psnr": 28.5,
-    "lpips": 0.2
+    "model_psnr_mean": 25.75,
+    "bicubic_psnr_mean": 23.95,
+    "model_lpips_mean": 0.185,
+    "bicubic_lpips_mean": 0.295,
+    "model_beats_bicubic_count": 8,
+    "model_beats_bicubic_lpips_count": 8,
+    "n_samples": 8,
+    "per_frame_psnr": [25.1, 25.8, 26.2, 25.5, 25.9, 26.0, 25.4, 26.1],
+    "per_frame_lpips": [0.192, 0.181, 0.176, 0.188, 0.183, 0.179, 0.19, 0.181],
+    "per_frame_bicubic_psnr": [23.7, 24.0, 24.2, 23.8, 24.1, 24.0, 23.6, 24.2],
+    "per_frame_bicubic_lpips": [0.302, 0.293, 0.288, 0.299, 0.291, 0.294, 0.304, 0.289]
   }
 ]
