@@ -177,6 +177,7 @@
     .chart-wrap { height: 18rem; min-height: 16rem; max-width: 100%; overflow: hidden; }
     .chart-wrap canvas { max-width: 100% !important; touch-action: none; }
     .comparison-chart-wrap { height: 20rem; min-height: 18rem; }
+    .chart-card { position: relative; scroll-margin-top: 1rem; }
     .title-with-info {
       display: inline-flex;
       align-items: center;
@@ -281,6 +282,39 @@
       border-color: var(--oss-line-strong);
       color: var(--oss-accent);
       outline: none;
+    }
+    .copy-link {
+      position: relative;
+    }
+    .copy-link::after {
+      content: "copied!";
+      position: absolute;
+      left: 50%;
+      top: -1.9rem;
+      z-index: 4;
+      min-width: max-content;
+      border: 1px solid rgba(56, 189, 248, 0.45);
+      background: rgba(6, 17, 15, 0.96);
+      padding: 0.25rem 0.45rem;
+      color: #7dd3fc;
+      font-size: 0.68rem;
+      opacity: 0;
+      pointer-events: none;
+      transform: translateX(-50%) translateY(2px);
+      transition: opacity 160ms ease, transform 160ms ease;
+    }
+    .copy-link.copied::after {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+    .chart-card-highlight {
+      outline: 2px solid rgba(56, 189, 248, 0.55);
+      outline-offset: 4px;
+      animation: chart-highlight-fade 1.5s ease-out forwards;
+    }
+    @keyframes chart-highlight-fade {
+      0%   { outline-color: rgba(56, 189, 248, 0.85); }
+      100% { outline-color: rgba(56, 189, 248, 0.0); }
     }
     .chart-card.fullscreen {
       position: fixed;
@@ -592,7 +626,7 @@
     </section>
 
     <div class="terminal-divider" aria-hidden="true"><span class="td-corner">├─ industry context ─</span><span class="td-rule"></span><span class="td-corner">─┤</span></div>
-    <section class="rounded-md border border-zinc-800 bg-zinc-900/60 p-5" data-surface aria-labelledby="comparison-title">
+    <section id="comparison" class="rounded-md border border-zinc-800 bg-zinc-900/60 p-5" data-surface aria-labelledby="comparison-title">
       <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <h2 id="comparison-title" class="title-with-info text-xl font-semibold text-zinc-50" data-text><span>Held-out PSNR / LPIPS by version</span><button class="info-btn" data-info-key="held-out-psnr" type="button" aria-label="What is this chart?">(i)</button></h2>
@@ -611,11 +645,11 @@
       </div>
       <div id="comparison-density-note" class="mt-3 hidden text-xs text-amber-200">(many overlapping lines — use checkbox above to hide older gens)</div>
       <div class="grid gap-4 mt-4 lg:grid-cols-2">
-        <div>
+        <div class="chart-card" data-chart-id="cross-version-psnr-chart" data-chart-slug="cross-version-psnr">
           <h3 class="title-with-info text-sm font-semibold text-zinc-300 mb-2 font-mono"><span>PSNR — higher is better</span><button class="info-btn" data-info-key="held-out-psnr" type="button" aria-label="What is this chart?">(i)</button></h3>
           <div class="chart-wrap comparison-chart-wrap"><canvas id="cross-version-psnr-chart"></canvas></div>
         </div>
-        <div>
+        <div class="chart-card" data-chart-id="cross-version-lpips-chart" data-chart-slug="cross-version-lpips">
           <h3 class="title-with-info text-sm font-semibold text-zinc-300 mb-2 font-mono"><span>LPIPS — lower is better</span><button class="info-btn" data-info-key="held-out-lpips" type="button" aria-label="What is this chart?">(i)</button></h3>
           <div class="chart-wrap comparison-chart-wrap"><canvas id="cross-version-lpips-chart"></canvas></div>
         </div>
@@ -640,7 +674,7 @@
       <div id="load-error" class="hidden rounded-md border border-red-900 bg-red-950/30 p-4 text-sm text-red-200"></div>
     </section>
 
-    <section class="canonical-card rounded-md border border-zinc-800 bg-zinc-900/60 p-5" data-surface>
+    <section id="model-card" class="canonical-card rounded-md border border-zinc-800 bg-zinc-900/60 p-5" data-surface>
       <h2 class="text-xl font-semibold text-zinc-50" data-text>Read canonical v6 design</h2>
       <p class="mt-2 max-w-3xl text-sm leading-6 text-zinc-300" data-subtext>The canonical v6 design is the source of truth for the persistent Gaussian canvas, covariance-resampled rasterizer, cross-attention fusion path, and OSS-FX frame extrapolation plan.</p>
       <a class="mt-4 inline-flex rounded-md border border-cyan-500 px-3 py-2 text-sm font-medium text-cyan-300 hover:bg-cyan-500 hover:text-zinc-950" href="https://github.com/cashcon57/open-supersampling/blob/main/docs/superpowers/experiments/2026-05-05-v6-architecture-canonical.md">Open canonical memo</a>
@@ -765,6 +799,90 @@ let activeInfoButton = null;
 let pinnedInfoButton = null;
 let activeInfoMode = null;
 let lastInfoOpenedAt = 0;
+let dashboardActiveRunNameOverride = null;
+const warnedUrlRuns = new Set();
+const warnedUrlTargets = new Set();
+
+const CHART_SLUGS = new Set([
+  "loss",
+  "loss-decomp",
+  "psnr-live",
+  "lpips-live",
+  "psnr-held-out",
+  "lpips-held-out",
+  "cross-version-psnr",
+  "cross-version-lpips",
+]);
+const FOCUS_SLUGS = new Set([...CHART_SLUGS, "comparison", "viz", "model-card", "gpu"]);
+
+const stepReferencePlugin = {
+  id: "ossUrlStateStepReference",
+  afterDatasetsDraw(chart) {
+    const step = Number(chart.$urlStateStep);
+    const { chartArea, ctx, scales } = chart;
+    const xScale = scales?.x;
+    if (!Number.isFinite(step) || !chartArea || !xScale?.getPixelForValue) {
+      chart.$urlStateStepLineDrawn = false;
+      return;
+    }
+
+    const rawX = xScale.getPixelForValue(step);
+    if (!Number.isFinite(rawX)) {
+      chart.$urlStateStepLineDrawn = false;
+      return;
+    }
+    const x = Math.max(chartArea.left, Math.min(chartArea.right, rawX));
+    const outside = rawX < chartArea.left || rawX > chartArea.right;
+    const age = performance.now() - Number(chart.$urlStateStepFlashStartedAt || 0);
+    const flashAlpha = Math.max(0.2, 1 - Math.max(0, age) / 1500);
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.setLineDash(outside ? [4, 3] : [6, 4]);
+    ctx.lineWidth = outside ? 1.5 : 2;
+    ctx.strokeStyle = outside ? "rgba(56, 189, 248, 0.42)" : "rgba(56, 189, 248, 0.78)";
+    ctx.moveTo(x, chartArea.top);
+    ctx.lineTo(x, chartArea.bottom);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    ctx.font = "10px JetBrains Mono, monospace";
+    ctx.textAlign = outside && rawX > chartArea.right ? "right" : "left";
+    ctx.textBaseline = "top";
+    ctx.fillStyle = "rgba(125, 211, 252, 0.86)";
+    const labelX = outside && rawX > chartArea.right ? x - 4 : x + 4;
+    ctx.fillText(`step ${formatStepTick(step)}`, labelX, chartArea.top + 4);
+
+    chart.data.datasets.forEach((dataset, datasetIndex) => {
+      if (!chart.isDatasetVisible(datasetIndex)) return;
+      const points = (dataset.data || [])
+        .map((point) => ({ x: Number(point?.x), y: Number(point?.y), raw: point }))
+        .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
+      if (!points.length) return;
+      const closest = points.reduce((best, point) =>
+        Math.abs(point.x - step) < Math.abs(best.x - step) ? point : best
+      , points[0]);
+      const yScale = scales?.[dataset.yAxisID || "y"];
+      const pointY = yScale?.getPixelForValue?.(closest.y);
+      const pointX = xScale.getPixelForValue(closest.x);
+      if (!Number.isFinite(pointX) || !Number.isFinite(pointY)) return;
+      if (pointX < chartArea.left || pointX > chartArea.right || pointY < chartArea.top || pointY > chartArea.bottom) return;
+      ctx.beginPath();
+      ctx.arc(pointX, pointY, 4 + flashAlpha * 3, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(56, 189, 248, 0.18)";
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = `rgba(125, 211, 252, ${0.35 + flashAlpha * 0.5})`;
+      ctx.stroke();
+    });
+    ctx.restore();
+    chart.$urlStateStepLineDrawn = true;
+  },
+};
+
+if (window.Chart?.register) {
+  Chart.register(stepReferencePlugin);
+}
 
 const comparisonReferenceLines = [
   { id: "bicubic", method: "Bicubic baseline", vendor: "OSS", latest: true, psnr: 23.909, lpips: 0.2945, color: colors.bicubic, dash: [], source: "measured directly on the OSS TartanAir oldtown held-out batch", nudge: -12 },
@@ -1044,7 +1162,59 @@ function latestMetricRows(run, limit = 3) {
   return (run.loss_curve || []).slice(-limit).reverse();
 }
 
+function getDashboardState() {
+  const params = new URLSearchParams(location.search);
+  return {
+    run: params.get("run") || null,
+    step: Number(params.get("step")) || null,
+    chart: params.get("chart") || null,
+    zoom: params.get("zoom") || null,
+    focus: params.get("focus") || null,
+  };
+}
+
+function setDashboardState(partial, { replace = true } = {}) {
+  const params = new URLSearchParams(location.search);
+  for (const [k, v] of Object.entries(partial)) {
+    if (v === null || v === undefined || v === "") params.delete(k);
+    else params.set(k, String(v));
+  }
+  const url = params.toString() ? `${location.pathname}?${params}` : location.pathname;
+  if (replace) history.replaceState(null, "", url);
+  else history.pushState(null, "", url);
+}
+
+window.__getDashboardState = getDashboardState;
+window.__setDashboardState = setDashboardState;
+
+function runTokenFromName(name) {
+  return String(name || "").replace(/^srcnn-/, "");
+}
+
+function runAliases(run) {
+  const token = runTokenFromName(run?.name);
+  const aliases = new Set([token]);
+  if (token) {
+    aliases.add(token.replace(/-pico-\d+$/, ""));
+    aliases.add(token.replace(/-pixel-temporal-validated$/, ""));
+    aliases.add(token.replace(/^prod-/, ""));
+  }
+  return Array.from(aliases).filter(Boolean);
+}
+
+function findRunByUrlToken(data, token) {
+  const query = String(token || "").trim();
+  if (!query) return null;
+  return (data?.runs || []).find((run) =>
+    runAliases(run).some((alias) => alias === query || alias.startsWith(`${query}-`))
+  ) || null;
+}
+
 function activeRunFrom(data) {
+  if (dashboardActiveRunNameOverride) {
+    const selected = (data.runs || []).find((run) => run.name === dashboardActiveRunNameOverride);
+    if (selected) return selected;
+  }
   return (data.runs || []).find((run) => run.active) || (data.runs || [])[0] || null;
 }
 
@@ -1207,6 +1377,9 @@ function chartZoomOptions() {
       enabled: true,
       mode: "xy",
       modifierKey: "shift",
+      onPanComplete({ chart }) {
+        updateDashboardZoomState(chart);
+      },
     },
     zoom: {
       wheel: { enabled: true, modifierKey: null },
@@ -1219,6 +1392,9 @@ function chartZoomOptions() {
         threshold: 6,
       },
       mode: "xy",
+      onZoomComplete({ chart }) {
+        updateDashboardZoomState(chart);
+      },
     },
     limits: {
       x: { min: "original", max: "original" },
@@ -1234,24 +1410,59 @@ function chartActionIcon(kind) {
       <path d="M2 2v4h4M14 14v-4h-4M2 14h4v-4M14 2h-4v4" stroke="currentColor" stroke-width="1.5" fill="none"/>
     </svg>`;
   }
-  return `<svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true">
+  if (kind === "fullscreen") {
+    return `<svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true">
     <path d="M2 5V2h3M14 5V2h-3M2 11v3h3M14 11v3h-3" stroke="currentColor" stroke-width="1.5" fill="none"/>
   </svg>`;
+  }
+  return `<svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true">
+    <path d="M5 11l-2 2a2 2 0 0 1-2.83-2.83l4-4a2 2 0 0 1 2.83 0M11 5l2-2a2 2 0 0 1 2.83 2.83l-4 4a2 2 0 0 1-2.83 0" stroke="currentColor" stroke-width="1.4" fill="none"/>
+  </svg>`;
+}
+
+function chartSlugForId(chartId) {
+  if (/^loss-chart-\d+$/.test(chartId)) return "loss";
+  if (/^loss-decomp-chart-\d+$/.test(chartId)) return "loss-decomp";
+  if (/^psnr-chart-\d+$/.test(chartId)) return "psnr-live";
+  if (/^lpips-chart-\d+$/.test(chartId)) return "lpips-live";
+  if (/^heldout-chart-\d+$/.test(chartId)) return "psnr-held-out";
+  if (chartId === "cross-version-psnr-chart") return "cross-version-psnr";
+  if (chartId === "cross-version-lpips-chart") return "cross-version-lpips";
+  return chartId.replace(/-chart(?:-\d+)?$/, "");
+}
+
+function chartCardIdForSlug(slug) {
+  return slug === "loss" ? "loss-curve" : slug;
+}
+
+function chartCardAttrs(chartId) {
+  const slug = chartSlugForId(chartId);
+  return `data-chart-id="${escapeHtml(chartCardIdForSlug(slug))}" data-chart-slug="${escapeHtml(slug)}"`;
 }
 
 function chartActionButton(kind, chartId, label) {
   const button = document.createElement("button");
-  button.className = `chart-toggle chart-action ${kind === "reset" ? "reset-zoom" : "fullscreen-toggle"}`;
+  const actionClass = kind === "reset" ? "reset-zoom" : kind === "fullscreen" ? "fullscreen-toggle" : "copy-link";
+  const chartSlug = chartSlugForId(chartId);
+  button.className = `chart-toggle chart-action ${actionClass}`;
   button.type = "button";
-  button.dataset.chartId = chartId;
-  button.setAttribute(kind === "reset" ? "data-reset-zoom" : "data-fullscreen", "");
-  button.setAttribute("aria-label", `${label} chart`);
+  button.dataset.chartId = kind === "copy" ? chartSlug : chartId;
+  button.dataset.chartSlug = chartSlug;
+  if (kind === "reset") button.setAttribute("data-reset-zoom", "");
+  if (kind === "fullscreen") button.setAttribute("data-fullscreen", "");
+  if (kind === "copy") button.setAttribute("data-copy-link", "");
+  button.setAttribute("aria-label", kind === "copy" ? "Copy link to chart" : `${label} chart`);
   button.innerHTML = `${chartActionIcon(kind)}<span class="chart-action-label">${label}</span>`;
   return button;
 }
 
 function chartCardForCanvas(canvas) {
-  const card = canvas.closest(".chart-card") || canvas.closest("article") || canvas.parentElement?.parentElement;
+  const wrap = canvas.closest(".chart-wrap");
+  const wrapParent = wrap?.parentElement;
+  const card = canvas.closest(".chart-card")
+    || canvas.closest("article")
+    || (wrapParent?.querySelector?.("h3") ? wrapParent : null)
+    || canvas.parentElement?.parentElement;
   if (!card) return null;
   card.classList.add("chart-card");
   return card;
@@ -1259,13 +1470,28 @@ function chartCardForCanvas(canvas) {
 
 function ensureChartToolbar(card, canvas, chartId) {
   let toolbar = card.querySelector(`[data-chart-toolbar="${chartId}"]`);
-  if (toolbar) return toolbar;
+  const chartSlug = chartSlugForId(chartId);
+
+  card.dataset.chartId = chartCardIdForSlug(chartSlug);
+  card.dataset.chartSlug = chartSlug;
+  if (chartSlug === "cross-version-psnr" || chartSlug === "cross-version-lpips") {
+    card.id = chartSlug;
+  }
+
+  if (toolbar) {
+    if (!toolbar.querySelector("[data-copy-link]")) {
+      toolbar.appendChild(chartActionButton("copy", chartId, "Link"));
+    }
+    return toolbar;
+  }
 
   toolbar = document.createElement("div");
   toolbar.className = "chart-toolbar";
   toolbar.dataset.chartToolbar = chartId;
+  toolbar.dataset.chartSlug = chartSlug;
   toolbar.appendChild(chartActionButton("reset", chartId, "Reset"));
   toolbar.appendChild(chartActionButton("fullscreen", chartId, "Fullscreen"));
+  toolbar.appendChild(chartActionButton("copy", chartId, "Link"));
 
   const header = Array.from(card.children).find((child) => child.classList?.contains("flex") && child.querySelector("h3"));
   if (header) {
@@ -1306,7 +1532,10 @@ function bindResetZoom(chart, chartId) {
   btn._resetZoomChart = chart;
   if (btn.dataset.resetZoomBound === "true") return;
   btn.dataset.resetZoomBound = "true";
-  btn.addEventListener("click", () => btn._resetZoomChart?.resetZoom?.("none"));
+  btn.addEventListener("click", () => {
+    btn._resetZoomChart?.resetZoom?.("none");
+    setDashboardState({ zoom: null, chart: null });
+  });
 }
 
 function enterFullscreen(card, chart) {
@@ -1417,6 +1646,7 @@ function applyChartScaleRange(chart, scaleId, range) {
   chart.options.scales[scaleId].min = range.min;
   chart.options.scales[scaleId].max = range.max;
   chart.update("none");
+  if (scaleId === "x") updateDashboardZoomState(chart);
 }
 
 function bindAxisScaleDrag(chart, canvas) {
@@ -1511,11 +1741,204 @@ function bindChartControls(chart, canvasOrId) {
   const card = chartCardForCanvas(canvas);
   if (!card) return chart;
   const toolbar = ensureChartToolbar(card, canvas, canvas.id);
+  chart.$urlStateChartId = chartSlugForId(canvas.id);
   ensureChartHint(card, toolbar, canvas.id);
   bindAxisScaleDrag(chart, canvas);
   bindResetZoom(chart, canvas.id);
   bindFullscreen(chart, canvas.id, card);
   return chart;
+}
+
+function validZoomRange(value) {
+  const match = /^(-?\d+(?:\.\d+)?)-(-?\d+(?:\.\d+)?)$/.exec(String(value || "").trim());
+  if (!match) return null;
+  const min = Number(match[1]);
+  const max = Number(match[2]);
+  if (!Number.isFinite(min) || !Number.isFinite(max) || min >= max) return null;
+  return { min, max };
+}
+
+function serializeZoomRange(min, max) {
+  const fmt = (value) => Number(value).toFixed(3).replace(/\.?0+$/, "");
+  return `${fmt(min)}-${fmt(max)}`;
+}
+
+function updateDashboardZoomState(chart) {
+  const scale = chart?.scales?.x;
+  const min = Number(scale?.min);
+  const max = Number(scale?.max);
+  const chartId = chart?.$urlStateChartId || chartSlugForId(chart?.canvas?.id || "");
+  if (!CHART_SLUGS.has(chartId) || !Number.isFinite(min) || !Number.isFinite(max) || min >= max) return;
+  setDashboardState({ chart: chartId, zoom: serializeZoomRange(min, max) });
+}
+
+function currentRunToken() {
+  const stateRun = getDashboardState().run;
+  if (stateRun) return stateRun;
+  const active = activeRunFrom(lastKnownData || {});
+  const alias = runAliases(active).sort((a, b) => a.length - b.length)[0];
+  return alias || null;
+}
+
+function chartForElement(element) {
+  const canvas = element?.matches?.("canvas") ? element : element?.querySelector?.("canvas");
+  return canvas ? window.Chart?.getChart?.(canvas) : null;
+}
+
+function activeRunDetails() {
+  const active = activeRunFrom(lastKnownData || {});
+  return active?.name ? document.querySelector(`details[data-run-name="${CSS.escape(active.name)}"]`) : null;
+}
+
+function targetElementForChart(chartId) {
+  if (!chartId || !CHART_SLUGS.has(chartId)) return null;
+  if (chartId === "cross-version-psnr" || chartId === "cross-version-lpips") {
+    return document.querySelector(`[data-chart-id="${chartId}"], #${CSS.escape(chartId)}`);
+  }
+
+  const selector = `[data-chart-id="${chartId}"], [data-chart-slug="${chartId}"]`;
+  const details = activeRunDetails();
+  if (details) {
+    const target = details.querySelector(selector);
+    if (target) return target;
+    if (chartId === "lpips-held-out") return details.querySelector(`[data-chart-id="psnr-held-out"], [data-chart-slug="psnr-held-out"]`);
+  }
+  if (chartId === "lpips-held-out") {
+    return document.querySelector(`[data-chart-id="psnr-held-out"], [data-chart-slug="psnr-held-out"]`);
+  }
+  return document.querySelector(selector);
+}
+
+function targetElementForFocus(focusId) {
+  if (!focusId || !FOCUS_SLUGS.has(focusId)) return null;
+  if (CHART_SLUGS.has(focusId)) return targetElementForChart(focusId);
+  if (focusId === "comparison") return document.getElementById("comparison");
+  if (focusId === "model-card") return document.getElementById("model-card");
+  if (focusId === "gpu") return document.getElementById("hero-gpu");
+  if (focusId === "viz") {
+    const details = activeRunDetails();
+    return details?.querySelector("[id^='viz-strip-']")?.closest("article")
+      || document.querySelector("[id^='viz-strip-']")?.closest("article");
+  }
+  return null;
+}
+
+function highlightAndScroll(element) {
+  if (!element) return;
+  element.scrollIntoView({ behavior: "smooth", block: "center" });
+  element.classList.remove("chart-card-highlight");
+  void element.offsetWidth;
+  element.classList.add("chart-card-highlight");
+  window.setTimeout(() => element.classList.remove("chart-card-highlight"), 1500);
+}
+
+function applyZoomToTarget(element, zoom) {
+  const range = validZoomRange(zoom);
+  if (!range) return false;
+  const chart = chartForElement(element);
+  if (!chart?.options?.scales?.x) return false;
+  chart.options.scales.x.min = range.min;
+  chart.options.scales.x.max = range.max;
+  chart.update("none");
+  return true;
+}
+
+function applyStepReference(stepValue) {
+  const step = Number(stepValue);
+  if (!Number.isFinite(step)) return;
+  activeCharts.forEach((chart) => {
+    if (!chart?.scales?.x || !/step/i.test(chart.options?.scales?.x?.title?.text || "")) return;
+    chart.$urlStateStep = step;
+    chart.$urlStateStepFlashStartedAt = performance.now();
+    chart.update("none");
+  });
+}
+
+function applyRunState(data, runToken) {
+  if (!runToken) return;
+  const run = findRunByUrlToken(data, runToken);
+  if (!run) {
+    if (!warnedUrlRuns.has(runToken)) {
+      console.warn(`Dashboard URL state: run not found: ${runToken}`);
+      warnedUrlRuns.add(runToken);
+    }
+    return;
+  }
+  dashboardActiveRunNameOverride = run.name;
+  renderHero(data);
+  const details = document.querySelector(`details[data-run-name="${CSS.escape(run.name)}"]`);
+  if (details && !details.open) {
+    details.open = true;
+    details.querySelector(".accordion-body")?.removeAttribute("style");
+    activeCharts.forEach((chart) => chart.resize());
+  }
+}
+
+function applyUrlState() {
+  const state = getDashboardState();
+  if (!lastKnownData) return;
+
+  applyRunState(lastKnownData, state.run);
+
+  if (Number.isFinite(state.step)) {
+    applyStepReference(state.step);
+  }
+
+  const chartTarget = state.chart ? targetElementForChart(state.chart) : null;
+  if (state.chart && chartTarget) {
+    highlightAndScroll(chartTarget);
+    if (state.zoom) applyZoomToTarget(chartTarget, state.zoom);
+  } else if (state.chart && !warnedUrlTargets.has(`chart:${state.chart}`)) {
+    console.warn(`Dashboard URL state: chart not found: ${state.chart}`);
+    warnedUrlTargets.add(`chart:${state.chart}`);
+  }
+
+  const focusTarget = state.focus ? targetElementForFocus(state.focus) : null;
+  if (state.focus && focusTarget) {
+    highlightAndScroll(focusTarget);
+  } else if (state.focus && !warnedUrlTargets.has(`focus:${state.focus}`)) {
+    console.warn(`Dashboard URL state: focus not found: ${state.focus}`);
+    warnedUrlTargets.add(`focus:${state.focus}`);
+  }
+}
+
+async function copyDashboardLink(button) {
+  const chart = button.dataset.chartId || button.dataset.chartSlug || null;
+  const state = {
+    run: currentRunToken(),
+    chart,
+  };
+  const chartObj = chartForElement(targetElementForChart(chart));
+  const min = Number(chartObj?.scales?.x?.min);
+  const max = Number(chartObj?.scales?.x?.max);
+  if (Number.isFinite(min) && Number.isFinite(max) && min < max) {
+    state.zoom = serializeZoomRange(min, max);
+  }
+  const params = new URLSearchParams(location.search);
+  for (const [key, value] of Object.entries(state)) {
+    if (value) params.set(key, value);
+  }
+  const url = `${location.origin}${location.pathname}?${params}`;
+  await navigator.clipboard.writeText(url);
+  setDashboardState(state, { replace: false });
+  button.classList.add("copied");
+  window.setTimeout(() => button.classList.remove("copied"), 1200);
+}
+
+function initDashboardUrlState() {
+  if (document.body.dataset.urlStateBound === "true") return;
+  document.body.dataset.urlStateBound = "true";
+  document.addEventListener("click", (event) => {
+    const copyButton = event.target.closest("[data-copy-link]");
+    if (copyButton) {
+      event.preventDefault();
+      copyDashboardLink(copyButton).catch((error) => console.warn(`Dashboard URL copy failed: ${error.message}`));
+    }
+  });
+  window.addEventListener("popstate", () => {
+    if (lastKnownData) renderDashboard(lastKnownData, { preserveTrainingState: true, skipUrlState: true });
+    applyUrlState();
+  });
 }
 
 function chartOptions({ yTitle = "loss", componentAxis = false, logY = false } = {}) {
@@ -2728,7 +3151,7 @@ function renderRun(run, index, openByRun = new Map()) {
         ${progress}
         ${gpu}
         ${note}
-        <article class="min-w-0 rounded-md border border-zinc-800 bg-zinc-950/25 p-4" data-muted-surface>
+        <article class="chart-card min-w-0 rounded-md border border-zinc-800 bg-zinc-950/25 p-4" ${chartCardAttrs(chartId)} data-muted-surface>
           <div class="flex items-center justify-between gap-3">
             <h3 class="title-with-info text-base font-semibold text-zinc-50" data-text><span>Loss curve</span>${infoButtonHtml("loss")}</h3>
             <span class="text-sm text-zinc-500" data-dim>${rows.length} points</span>
@@ -2736,14 +3159,14 @@ function renderRun(run, index, openByRun = new Map()) {
           ${directionHtml("loss_total")}
           ${chartBody}
         </article>
-        <article class="min-w-0 rounded-md border border-zinc-800 bg-zinc-950/25 p-4" data-muted-surface>
+        <article class="chart-card min-w-0 rounded-md border border-zinc-800 bg-zinc-950/25 p-4" ${chartCardAttrs(psnrChartId)} data-muted-surface>
           <div class="flex items-center justify-between gap-3">
             <h3 class="title-with-info text-base font-semibold text-zinc-50" data-text><span>${escapeHtml(psnrTitle)}</span>${infoButtonHtml("psnr-live")}</h3>
           </div>
           <div class="metric-direction" data-direction="higher">↑ higher is better.</div>
           ${psnrChartBody}
         </article>
-        <article class="min-w-0 rounded-md border border-zinc-800 bg-zinc-950/25 p-4" data-muted-surface>
+        <article class="chart-card min-w-0 rounded-md border border-zinc-800 bg-zinc-950/25 p-4" ${chartCardAttrs(lpipsChartId)} data-muted-surface>
           <div class="flex items-center justify-between gap-3">
             <h3 class="title-with-info text-base font-semibold text-zinc-50" data-text><span>Live LPIPS</span>${infoButtonHtml("lpips-live")}</h3>
             <span class="text-sm text-zinc-500" data-dim>training crops</span>
@@ -2751,7 +3174,7 @@ function renderRun(run, index, openByRun = new Map()) {
           <div class="metric-direction" data-direction="lower">↓ lower is better. Training-crop LPIPS is biased versus held-out; x-axis is step within run.</div>
           ${lpipsChartBody}
         </article>
-        <article class="min-w-0 rounded-md border border-zinc-800 bg-zinc-950/25 p-4" data-muted-surface>
+        <article class="chart-card min-w-0 rounded-md border border-zinc-800 bg-zinc-950/25 p-4" ${chartCardAttrs(decompChartId)} data-muted-surface>
           <div class="flex items-center justify-between gap-3">
             <h3 class="title-with-info text-base font-semibold text-zinc-50" data-text><span>Loss decomposition</span>${infoButtonHtml("loss-decomp")}</h3>
             <span class="text-sm text-zinc-500" data-dim>${rows.length} points</span>
@@ -2761,7 +3184,7 @@ function renderRun(run, index, openByRun = new Map()) {
         </article>
       </div>
       <div class="flex min-w-0 flex-col gap-4">
-        <article class="min-w-0 rounded-md border border-zinc-800 bg-zinc-950/25 p-4" data-muted-surface>
+        <article class="chart-card min-w-0 rounded-md border border-zinc-800 bg-zinc-950/25 p-4" ${chartCardAttrs(heldoutChartId)} data-muted-surface>
           <h3 class="title-with-info text-base font-semibold text-zinc-50" data-text><span>Held-out scores</span>${infoButtonHtml("held-out-psnr")}</h3>
           <div class="metric-direction" data-direction="mixed">PSNR ↑ higher is better / LPIPS ↓ lower is better / temporal ratio ↓ lower is better</div>
           ${heldoutChartBody}
@@ -2900,6 +3323,11 @@ function bindAccordion(details, charts) {
         delete details.dataset.animating;
       }, 340);
     }
+    const run = lastKnownData ? findRunByUrlToken(lastKnownData, details.dataset.runName) : null;
+    const runToken = run ? runAliases(run).sort((a, b) => a.length - b.length)[0] : runTokenFromName(details.dataset.runName);
+    dashboardActiveRunNameOverride = details.dataset.runName || null;
+    if (lastKnownData) renderHero(lastKnownData);
+    setDashboardState({ run: runToken });
   });
 }
 
@@ -2941,6 +3369,7 @@ function renderDashboard(data, options = {}) {
   updateTrainingPulseState(data, Boolean(options.preserveTrainingState));
   latestGeneratedAt = data.generated_at;
   lastKnownData = data;
+  if (!getDashboardState().run) dashboardActiveRunNameOverride = null;
   updateStamp();
   renderHero(data);
   renderRuns(data);
@@ -2949,7 +3378,11 @@ function renderDashboard(data, options = {}) {
     if (chart) activeCharts.push(chart);
   });
   setupInfoTooltips();
+  initDashboardUrlState();
   setLoadedState();
+  if (!options.skipUrlState) {
+    window.requestAnimationFrame(applyUrlState);
+  }
 }
 
 async function fetchDashboardData() {
