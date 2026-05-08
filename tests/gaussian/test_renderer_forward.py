@@ -90,6 +90,18 @@ def test_invalid_output_hw_raises() -> None:
         r(g, output_hw=(8, -1))
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+def test_oss_cuda_env_selects_custom_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OSS_USE_CUDA_KERNELS", "rasterizer")
+    g = GaussianBatch(
+        xy=torch.zeros((1, 2), device="cuda"),
+        scale=torch.ones((1, 2), device="cuda"),
+        rot=torch.zeros((1,), device="cuda"),
+        feat=torch.ones((1, 1), device="cuda"),
+    )
+    assert Rasterizer()._select_backend(g) == "oss_cuda"
+
+
 def test_gaussian_batch_validates_shapes() -> None:
     with pytest.raises(ValueError, match="xy must be"):
         GaussianBatch(

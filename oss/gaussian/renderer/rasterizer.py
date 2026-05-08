@@ -17,6 +17,7 @@ Sprint 1 deliverable. Wired into:
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from typing import Tuple
 
 import torch
@@ -41,6 +42,14 @@ except Exception as _e:  # noqa: BLE001 — import failure is captured for diagn
 # the kernel source. See `vendor/image_gs/model.py:198` (`self.block_h, self.block_w = 16, 16`).
 TILE_SIZE: int = 16
 CUDA_MAX_CHANNELS: int = 12
+
+
+def _custom_rasterizer_enabled() -> bool:
+    raw = os.environ.get("OSS_USE_CUDA_KERNELS", "0").strip().lower()
+    if raw in {"", "0", "false", "off", "none"}:
+        return False
+    enabled = {part.strip() for part in raw.replace(",", " ").split()}
+    return bool(enabled & {"1", "true", "on", "rasterizer", "both", "all"})
 
 
 @dataclass(frozen=True)
@@ -95,6 +104,8 @@ class Rasterizer:
 
     Two implementations:
     - CUDA (preferred): calls the vendored gsplat extension.
+    - OSS CUDA: calls the Phase 3 native extension when
+      `OSS_USE_CUDA_KERNELS=rasterizer` is set.
     - PyTorch reference (fallback): naive O(N×H×W) implementation in pure PyTorch
       for correctness validation on machines without CUDA. Slow — not for production.
 
@@ -115,8 +126,11 @@ class Rasterizer:
         topk_norm: bool = True,
         force_backend: str | None = None,
     ) -> None:
-        if force_backend not in (None, "cuda", "reference"):
-            raise ValueError(f"force_backend must be 'cuda', 'reference', or None; got {force_backend!r}")
+        if force_backend not in (None, "cuda", "oss_cuda", "reference"):
+            raise ValueError(
+                "force_backend must be 'cuda', 'oss_cuda', 'reference', or None; "
+                f"got {force_backend!r}"
+            )
         if tile_size != TILE_SIZE and force_backend == "cuda":
             raise ValueError(
                 f"CUDA backend requires tile_size={TILE_SIZE} (hardcoded in kernel); got {tile_size}"
@@ -144,6 +158,8 @@ class Rasterizer:
         if h <= 0 or w <= 0:
             raise ValueError(f"output_hw must be positive; got {output_hw}")
         backend = self._select_backend(gaussians)
+        if backend == "oss_cuda":
+            return self._render_oss_cuda(gaussians, h, w)
         if backend == "cuda":
             return self._render_cuda(gaussians, h, w)
         return self._render_reference(gaussians, h, w)
@@ -151,9 +167,32 @@ class Rasterizer:
     def _select_backend(self, gaussians: GaussianBatch) -> str:
         if self.force_backend is not None:
             return self.force_backend
+        if gaussians.device.type == "cuda" and _custom_rasterizer_enabled():
+            return "oss_cuda"
         if gaussians.device.type == "cuda" and _GSPLAT_AVAILABLE:
             return "cuda"
         return "reference"
+
+    def _render_oss_cuda(self, gaussians: GaussianBatch, h: int, w: int) -> torch.Tensor:
+        if gaussians.device.type != "cuda":
+            raise RuntimeError("OSS CUDA rasterizer requires CUDA tensors")
+        try:
+            from oss.cuda.oss_cuda import rasterize_gaussians
+        except Exception as exc:  # noqa: BLE001 - preserve original import reason
+            raise RuntimeError(
+                "OSS CUDA rasterizer requested but oss_cuda is not importable. "
+                "Build it with: pip install --no-build-isolation -e ./oss/cuda"
+            ) from exc
+        return rasterize_gaussians(
+            gaussians.xy,
+            gaussians.scale.clamp_min(1.0e-3),
+            gaussians.rot,
+            gaussians.feat,
+            h,
+            w,
+            self.tile_size,
+            self.topk_norm,
+        )
 
     def _render_cuda(self, gaussians: GaussianBatch, h: int, w: int) -> torch.Tensor:
         if not _GSPLAT_AVAILABLE:
