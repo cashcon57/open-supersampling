@@ -10,3 +10,7 @@ except ImportError:
 
 def preprocess_only(xy, scale, rot, H, W, tile_size=16):
     return _C.preprocess_only(xy, scale, rot, H, W, tile_size)
+
+
+def pair_construction_only(xy, scale, rot, H, W, tile_size=16):
+    return _C.pair_construction_only(xy, scale, rot, H, W, tile_size)

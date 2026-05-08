@@ -32,6 +32,7 @@ FetchContent_MakeAvailable(googletest)
 
 add_executable(test_oss_cuda
   test_preprocess.cu
+  test_build_pairs.cu
   "${OSS_CUDA_SRC}/rasterizer_fwd.cu"
 )
 

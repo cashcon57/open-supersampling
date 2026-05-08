@@ -19,3 +19,11 @@ __global__ void preprocess_gaussians(
     int4*         __restrict__ aabb_out,
     int*          __restrict__ pair_count_out
 );
+
+__global__ void build_tile_pairs(
+    int N, int num_tiles_x,
+    const int4* __restrict__ aabb,
+    const int*  __restrict__ cum_pair_count,
+    int64_t*    __restrict__ keys_out,
+    int*        __restrict__ gid_out
+);
