@@ -23,13 +23,16 @@
 
 #include "../include/oss_gaussian_interception.h"
 #include "d3d12_hooks.h"
+#include "dll_config.h"
 #include "dxgi_proxy.h"
 #include "log.h"
 
 #include <Windows.h>
 
 #include <atomic>
+#include <cctype>
 #include <mutex>
+#include <string>
 
 namespace oss_gaussian {
 
@@ -58,6 +61,38 @@ void OnAttach(HMODULE self) {
     } else {
         OSSG_LOG_ERROR("dll",
                        "DXGI proxy attach failed; forwarded exports will return E_NOTIMPL");
+    }
+
+    // T2.7: Load per-game config.json (capture mode, runtime knobs). Best-guess
+    // the game_id from the host EXE basename — installer puts config under
+    // %LOCALAPPDATA%\oss-capture\<game_id>\config.json so the basename usually
+    // matches.
+    std::string game_id_hint;
+    {
+        char exe_path[MAX_PATH];
+        DWORD len = GetModuleFileNameA(nullptr, exe_path, MAX_PATH);
+        if (len > 0 && len < MAX_PATH) {
+            std::string ep(exe_path);
+            size_t slash = ep.find_last_of("\\/");
+            std::string basename = (slash == std::string::npos) ? ep : ep.substr(slash + 1);
+            // Strip extension
+            size_t dot = basename.find_last_of('.');
+            if (dot != std::string::npos) basename = basename.substr(0, dot);
+            // Lowercase
+            for (auto& c : basename) c = static_cast<char>(::tolower(static_cast<unsigned char>(c)));
+            game_id_hint = basename;
+        }
+    }
+    DllConfig dll_cfg = LoadDllConfig(game_id_hint);
+    OSSG_LOG_INFO("dll", "DllConfig: loaded=%d, source=%s, mode=%s",
+                  dll_cfg.is_loaded ? 1 : 0,
+                  dll_cfg.loaded_from.empty() ? "(defaults)" : dll_cfg.loaded_from.c_str(),
+                  dll_cfg.capture_mode.empty() ? "(default)" : dll_cfg.capture_mode.c_str());
+
+    // Push capture_mode to the hook layer so the sampler is constructed with
+    // the right preset on first Present.
+    if (!dll_cfg.capture_mode.empty()) {
+        ConfigureCaptureSampler(dll_cfg.capture_mode.c_str());
     }
 
     // T2.2/T2.8: Vtable-probe IDXGISwapChain::Present and ID3D12CommandQueue::

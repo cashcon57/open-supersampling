@@ -209,11 +209,55 @@ void on_ngx_evaluate_feature_impl(void* command_list, const void* ngx_handle, co
     (void)command_list;
     (void)ngx_handle;
     (void)ngx_params;
-    // Integration point: unpack DLSS parameters into LR/depth/motion/normals,
-    // compute candidate stats, run CaptureSampler, and arm a burst. Present
-    // consumes N consecutive swap-chain frames after ACCEPT. Rejects never touch
-    // disk.
-    OSSG_LOG_TRACE("capture", "NGX EvaluateFeature observed for capture-mode candidate");
+    // T2.6: unpack DLSS parameters into LR/depth/motion/normals, compute
+    // candidate stats, run CaptureSampler, arm a burst. Present consumes
+    // N consecutive swap-chain frames after ACCEPT. Rejects never touch disk.
+    //
+    // Implementation outline (pending NVIDIA/DLSS SDK headers vendored under
+    // third_party/DLSS/ — license review required before redistribution):
+    //
+    //   // Cast to the typed parameter dictionary
+    //   const NVSDK_NGX_Parameter* p =
+    //       reinterpret_cast<const NVSDK_NGX_Parameter*>(ngx_params);
+    //
+    //   // Resource pointers (ID3D12Resource*) and dimensions
+    //   ID3D12Resource* color   = nullptr;  p->Get(NVSDK_NGX_Parameter_Color,         (void**)&color);
+    //   ID3D12Resource* output  = nullptr;  p->Get(NVSDK_NGX_Parameter_Output,        (void**)&output);
+    //   ID3D12Resource* depth   = nullptr;  p->Get(NVSDK_NGX_Parameter_Depth,         (void**)&depth);
+    //   ID3D12Resource* motion  = nullptr;  p->Get(NVSDK_NGX_Parameter_MotionVectors, (void**)&motion);
+    //   uint32_t lr_w = 0, lr_h = 0;
+    //   p->Get(NVSDK_NGX_Parameter_Width,  &lr_w);
+    //   p->Get(NVSDK_NGX_Parameter_Height, &lr_h);
+    //   float jitter_x = 0.0f, jitter_y = 0.0f;
+    //   p->Get(NVSDK_NGX_Parameter_Jitter_Offset_X, &jitter_x);
+    //   p->Get(NVSDK_NGX_Parameter_Jitter_Offset_Y, &jitter_y);
+    //
+    //   // Build the candidate
+    //   OssCaptureCandidate cand{};
+    //   cand.frame_index = oss_gaussian::CurrentFrameIndex();
+    //   cand.timestamp_seconds = SecondsSinceStart();
+    //   // motion_mean_magnitude_px requires reading 'motion' contents — use
+    //   // the staging-copy path with a small downscaled snapshot
+    //   // perceptual_hash_64 = oss_capture_phash64_rgb8(...) — same approach
+    //   // depth_degenerate = check first-pixel depth == 1.0 (cleared)
+    //
+    //   OssCaptureDecision decision = oss_capture_consider_candidate(&cand);
+    //   if (decision.capture) {
+    //       // Schedule readback of color + depth + motion via staging_copy.cpp,
+    //       // then invoke oss_capture_write_exr() with the OssCaptureFramePayload
+    //   }
+    //
+    // Why not implement directly: the NVSDK_NGX_Parameter virtual interface
+    // is defined in nvsdk_ngx.h which is licensed redistribution. The DLSS
+    // SDK is at github.com/NVIDIA/DLSS but redistribution requires license
+    // attestation. Vendoring + license review = separate sprint task.
+    //
+    // For now, log the call so we can verify the hook fires when DLSS-enabled
+    // games run with our DLL injected.
+    OSSG_LOG_INFO("capture",
+                  "NGX EvaluateFeature observed (cmd_list=%p, handle=%p, params=%p) — "
+                  "param-dict unpack pending DLSS SDK header vendoring (T2.6)",
+                  command_list, ngx_handle, ngx_params);
 }
 
 } // namespace

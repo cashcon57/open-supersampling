@@ -28,6 +28,12 @@ namespace oss_gaussian {
 // true if the hook is already (or now) installed. Logs into LogModule("hooks").
 bool InstallD3D12Hooks();
 
+// Set the desired CaptureSampler configuration before the first frame. Must
+// be called BEFORE InstallD3D12Hooks (or before the first present after
+// install) to take effect. Pass capture_mode strings: "trickle" | "lite" |
+// "regular" | "INSANE". Empty string preserves the default.
+void ConfigureCaptureSampler(const char* capture_mode);
+
 // Symmetric teardown. Idempotent.
 void UninstallD3D12Hooks();
 

@@ -87,18 +87,29 @@ typedef void    (STDMETHODCALLTYPE *PFN_ExecuteCommandLists)(
 PFN_Present              g_orig_Present              = nullptr;
 PFN_ExecuteCommandLists  g_orig_ExecuteCommandLists  = nullptr;
 
-// CaptureSampler instance. Lazily constructed; the configuration comes from
-// the JSON config reader (see InstallD3D12Hooks). For Sprint 2.x this is a
-// bare default config until the JSON reader lands.
-std::mutex                         g_sampler_mu;
-std::unique_ptr<CaptureSampler>    g_sampler;
+// CaptureSampler instance. Lazily constructed. Configuration comes from
+// ConfigureCaptureSampler() (called by dllmain after LoadDllConfig); if no
+// configure call was made, defaults to oss_capture_default_config().
+std::mutex                                g_sampler_mu;
+std::unique_ptr<capture::CaptureSampler>  g_sampler;
+std::string                               g_pending_capture_mode;
 
-CaptureSampler* GetOrCreateSampler() {
+capture::CaptureSampler* GetOrCreateSampler() {
     std::lock_guard<std::mutex> lk(g_sampler_mu);
     if (!g_sampler) {
         OssCaptureConfig cfg = oss_capture_default_config();
-        g_sampler = std::make_unique<CaptureSampler>(cfg);
-        OSSG_LOG_INFO("hooks", "CaptureSampler constructed (default config)");
+        if (!g_pending_capture_mode.empty()) {
+            // Map capture_mode string → OssCaptureMode enum and apply preset.
+            OssCaptureMode mode = OSS_CAPTURE_MODE_LITE;  // safe default
+            if (g_pending_capture_mode == "trickle") mode = OSS_CAPTURE_MODE_TRICKLE;
+            else if (g_pending_capture_mode == "regular") mode = OSS_CAPTURE_MODE_REGULAR;
+            else if (g_pending_capture_mode == "INSANE")  mode = OSS_CAPTURE_MODE_INSANE;
+            else if (g_pending_capture_mode == "lite")    mode = OSS_CAPTURE_MODE_LITE;
+            oss_capture_apply_mode_preset(&cfg, mode);
+        }
+        g_sampler = std::make_unique<capture::CaptureSampler>(cfg);
+        OSSG_LOG_INFO("hooks", "CaptureSampler constructed (mode=%s)",
+                      g_pending_capture_mode.empty() ? "default" : g_pending_capture_mode.c_str());
     }
     return g_sampler.get();
 }
@@ -181,7 +192,7 @@ HRESULT STDMETHODCALLTYPE Hooked_Present(
                                           fmt == DXGI_FORMAT_R11G11B10_FLOAT ||
                                           fmt == DXGI_FORMAT_R16G16B16A16_FLOAT) ? 0 : 1;
 
-            CaptureSampler* sampler = GetOrCreateSampler();
+            capture::CaptureSampler* sampler = GetOrCreateSampler();
             OssCaptureDecision decision = sampler->Consider(cand);
 
             if (decision.capture) {
@@ -393,6 +404,16 @@ bool AreD3D12HooksActive() {
 
 unsigned long long CurrentFrameIndex() {
     return g_frame_counter.load(std::memory_order_relaxed);
+}
+
+void ConfigureCaptureSampler(const char* capture_mode) {
+    if (!capture_mode || capture_mode[0] == '\0') return;
+    std::lock_guard<std::mutex> lk(g_sampler_mu);
+    g_pending_capture_mode = capture_mode;
+    // If sampler already exists, drop it so the next Consider() rebuilds with
+    // the new mode. Race-free under the same lock.
+    g_sampler.reset();
+    OSSG_LOG_INFO("hooks", "ConfigureCaptureSampler: mode set to %s", capture_mode);
 }
 
 }  // namespace oss_gaussian

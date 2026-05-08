@@ -81,6 +81,7 @@ set(INTERCEPTION_SOURCES
     src/dllmain.cpp
     src/d3d12_hooks.cpp
     src/staging_copy.cpp
+    src/dll_config.cpp
     src/dxgi_proxy.cpp
     src/ngx_exports.cpp
     src/g_buffer_extractor.cpp
@@ -91,6 +92,7 @@ set(INTERCEPTION_HEADERS
     include/oss_gaussian_interception.h
     src/d3d12_hooks.h
     src/staging_copy.h
+    src/dll_config.h
     src/dxgi_proxy.h
     src/g_buffer_extractor.h
     src/log.h)
