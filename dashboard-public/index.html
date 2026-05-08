@@ -4883,6 +4883,37 @@ function renderVizCompareControls(host, run) {
   sync();
 }
 
+// Tiny 1x1 transparent PNG (data URI) used as a placeholder when a viz frame
+// scrolls out of viewport. Swapping <img src> to this allows the browser to
+// release the decoded bitmap, dropping resident memory dramatically. We
+// stash the real URL on a data attribute and restore it when the frame
+// scrolls back into view via IntersectionObserver below.
+const VIZ_BLANK_DATA_URI = "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
+
+// Single shared IntersectionObserver for all viz <img> elements on the page.
+// Threshold 0 means we fire on any partial intersection. rootMargin "200px"
+// means we start loading 200px before the frame enters the visible viewport,
+// and unload only after it's left by 200px — gives the user time to scroll
+// past without flicker. This is the dashboard memory fix: full-quality 4-22MB
+// viz PNGs were keeping decoded bitmaps resident → ~2.9 GB total page memory.
+let _vizObserver = null;
+function ensureVizObserver() {
+  if (_vizObserver) return _vizObserver;
+  _vizObserver = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      const img = entry.target;
+      const realUrl = img.dataset.vizSrc;
+      if (!realUrl) continue;
+      if (entry.isIntersecting) {
+        if (img.src !== realUrl) img.src = realUrl;
+      } else {
+        if (img.src !== VIZ_BLANK_DATA_URI) img.src = VIZ_BLANK_DATA_URI;
+      }
+    }
+  }, { rootMargin: "200px 0px 200px 0px", threshold: 0 });
+  return _vizObserver;
+}
+
 function renderVizStrip(host, run, limit) {
   const files = (run && run.viz_pngs ? run.viz_pngs : []).slice(-limit).reverse();
   const orderedFiles = (run && run.viz_pngs ? run.viz_pngs : [])
@@ -4913,7 +4944,13 @@ function renderVizStrip(host, run, limit) {
     img.decoding = "async";
     img.fetchPriority = "low";
     img.alt = `${run.label} ${file}`;
-    img.src = runUrl(run, file);
+    // Memory-saving pattern: start with a 1x1 placeholder; the
+    // IntersectionObserver swaps in the real URL when the frame enters
+    // viewport (and back to placeholder when it leaves), letting the browser
+    // release the decoded bitmap of full-quality 4-22 MB viz PNGs.
+    img.dataset.vizSrc = runUrl(run, file);
+    img.src = VIZ_BLANK_DATA_URI;
+    ensureVizObserver().observe(img);
     const overlay = document.createElement("span");
     overlay.className = "viz-overlay font-mono text-xs";
     overlay.textContent = `step ${step.toLocaleString()}`;
@@ -6074,7 +6111,7 @@ function renderGlobalVizStrip(data) {
 
   // Render strips for the selected run
   const sel = runs.find((r) => r.name === selectedName) || runs[0];
-  renderVizStrip(host, sel, 12);
+  renderVizStrip(host, sel, 6);
 
   // Wire change handler (idempotent — replace prior listener)
   if (!select._oss_bound) {
