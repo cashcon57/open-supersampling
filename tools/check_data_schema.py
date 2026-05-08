@@ -308,6 +308,43 @@ def validate_cost(cost: object, path: str, errors: list[str]) -> None:
                 validate_cost_projection(projection, f"{path}.projections.{gpu_class}", errors)
 
 
+def validate_repro_manifest_item(item: object, path: str, errors: list[str]) -> None:
+    if not isinstance(item, dict):
+        add_error(errors, path, "object", item)
+        return
+    for key in (
+        "git_sha",
+        "dataset_sha",
+        "python_version",
+        "torch_version",
+        "cuda_version",
+        "model_arch",
+    ):
+        require_optional_str(item, key, path, errors)
+    require_optional_str(item, "cli_invocation", path, errors)
+    require_optional_int(item, "param_count", path, errors)
+    if require_key(item, "rng_state", path, errors):
+        rng_state = item["rng_state"]
+        if rng_state is not None and not isinstance(rng_state, dict):
+            add_error(errors, f"{path}.rng_state", "object | null", rng_state)
+    if require_key(item, "timestamp_utc", path, errors):
+        value = item["timestamp_utc"]
+        if not isinstance(value, str):
+            add_error(errors, f"{path}.timestamp_utc", "UTC ISO-8601 str", value)
+        elif not is_utc_iso8601_datetime(value):
+            errors.append(f"{path}.timestamp_utc: expected ISO-8601 UTC string ending in Z")
+
+
+def validate_repro_manifest(manifest: object, path: str, errors: list[str]) -> None:
+    if not isinstance(manifest, dict):
+        add_error(errors, path, "object", manifest)
+        return
+    for key, item in manifest.items():
+        if not isinstance(key, str):
+            add_error(errors, f"{path} key", "str", key)
+        validate_repro_manifest_item(item, f"{path}.{key}", errors)
+
+
 def validate_run(run: object, index: int, errors: list[str], warnings: list[str]) -> None:
     path = f"runs[{index}]"
     if not isinstance(run, dict):
@@ -333,6 +370,8 @@ def validate_run(run: object, index: int, errors: list[str], warnings: list[str]
                 validate_event(event, f"{path}.events[{event_index}]", errors)
     require_object_list(run, "cross_version_points", path, errors)
     require_optional_object(run, "gpu_status", path, errors)
+    if require_key(run, "repro_manifest", path, errors):
+        validate_repro_manifest(run["repro_manifest"], f"{path}.repro_manifest", errors)
     if require_key(run, "cost", path, errors):
         validate_cost(run["cost"], f"{path}.cost", errors)
 
@@ -480,6 +519,20 @@ def self_test() -> int:
                 ],
                 "cross_version_points": [],
                 "gpu_status": None,
+                "repro_manifest": {
+                    "1": {
+                        "git_sha": "abc123",
+                        "dataset_sha": None,
+                        "rng_state": None,
+                        "cli_invocation": "python scripts/sr_train_v6.py --max-steps 1",
+                        "python_version": "3.11.0",
+                        "torch_version": "2.4.0",
+                        "cuda_version": None,
+                        "model_arch": "v6 hat-tiny",
+                        "param_count": 123,
+                        "timestamp_utc": "2026-05-07T00:00:00Z",
+                    },
+                },
                 "cost": {
                     "kwh": 0.1,
                     "usd": 0.015,

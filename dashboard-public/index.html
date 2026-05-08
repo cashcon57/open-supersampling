@@ -375,6 +375,7 @@
     .event-dot[data-event-kind="lr-drop"]       { background: linear-gradient(135deg, #60a5fa, #2563eb); }
     .event-dot[data-event-kind="abort"]         { background: linear-gradient(135deg, #f87171, #dc2626); }
     .event-dot[data-event-kind="resume"]        { background: linear-gradient(135deg, #a78bfa, #7c3aed); }
+    .event-dot[data-event-kind="checkpoint"]    { background: linear-gradient(135deg, #fef08a, #f59e0b); }
     .event-tooltip-copy {
       display: grid;
       gap: 0.45rem;
@@ -395,6 +396,105 @@
     .event-tooltip-links a {
       border-bottom: 1px solid rgba(140, 255, 193, 0.45);
     }
+    .event-tooltip-links a[data-repro-manifest-id] {
+      cursor: pointer;
+    }
+    .repro-panel {
+      position: fixed;
+      inset: 0;
+      z-index: 10020;
+      display: grid;
+      justify-items: end;
+    }
+    .repro-panel[hidden] { display: none; }
+    .repro-panel-backdrop {
+      position: absolute;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.62);
+    }
+    .repro-panel-shell {
+      position: relative;
+      display: flex;
+      width: min(34rem, 100vw);
+      max-width: 100vw;
+      height: 100dvh;
+      flex-direction: column;
+      border-left: 1px solid var(--oss-line-strong);
+      background: rgba(0, 0, 0, 0.96);
+      box-shadow: -24px 0 70px rgba(0, 0, 0, 0.5), 0 0 26px rgba(140, 255, 193, 0.08);
+    }
+    .repro-panel-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 1rem;
+      border-bottom: 1px solid var(--oss-line);
+      padding: 1rem;
+    }
+    .repro-panel-title {
+      color: var(--oss-text);
+      font-size: 0.95rem;
+      font-weight: 700;
+      line-height: 1.35;
+    }
+    .repro-panel-meta {
+      margin-top: 0.25rem;
+      color: var(--oss-dim);
+      font-size: 0.72rem;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
+    .repro-panel-close {
+      flex: 0 0 auto;
+      color: var(--oss-accent);
+      font-size: 1.35rem;
+      line-height: 1;
+    }
+    .repro-panel-body {
+      display: grid;
+      gap: 1rem;
+      overflow: auto;
+      padding: 1rem;
+    }
+    .repro-panel-section {
+      display: grid;
+      gap: 0.5rem;
+      min-width: 0;
+    }
+    .repro-panel-label {
+      color: var(--oss-subtext);
+      font-size: 0.72rem;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+    .repro-command,
+    .repro-manifest-json {
+      max-width: 100%;
+      overflow-x: auto;
+      border: 1px solid rgba(140, 255, 193, 0.18);
+      background: rgba(4, 8, 5, 0.78);
+      padding: 0.75rem;
+      color: var(--oss-subtext);
+      font-size: 0.72rem;
+      line-height: 1.55;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .repro-command-copy {
+      justify-self: start;
+      border: 1px solid var(--oss-line-strong);
+      padding: 0.45rem 0.65rem;
+      color: var(--oss-accent);
+      font-size: 0.72rem;
+    }
+    .repro-command-copy:hover,
+    .repro-command-copy:focus-visible,
+    .repro-panel-close:hover,
+    .repro-panel-close:focus-visible {
+      outline: none;
+      background: rgba(140, 255, 193, 0.12);
+    }
+    .repro-command-copy.copied::after { content: " copied"; }
     .comparison-chart-wrap { height: 20rem; min-height: 18rem; }
     .chart-card { position: relative; scroll-margin-top: 1rem; }
     .title-with-info {
@@ -1135,6 +1235,16 @@
       .info-tooltip.is-sheet.is-open { transform: translateY(0); }
       .info-tooltip.is-sheet .info-copy { padding-right: 2rem; }
       .info-tooltip.is-sheet .info-close { display: inline-flex; }
+      .repro-panel {
+        align-items: end;
+        justify-items: stretch;
+      }
+      .repro-panel-shell {
+        width: 100vw;
+        height: min(82dvh, 42rem);
+        border-top: 1px solid var(--oss-line-strong);
+        border-left: 0;
+      }
     }
   </style>
 </head>
@@ -1516,6 +1626,8 @@ let pinnedInfoButton = null;
 let activeInfoMode = null;
 let lastInfoOpenedAt = 0;
 let dashboardActiveRunNameOverride = null;
+let reproManifestSeq = 0;
+const reproManifestRegistry = new Map();
 const warnedUrlRuns = new Set();
 const warnedUrlTargets = new Set();
 
@@ -1664,6 +1776,11 @@ function ensureInfoTooltip() {
     infoTooltip.addEventListener("pointerenter", cancelTooltipHide);
     infoTooltip.addEventListener("pointerleave", scheduleTooltipHide);
     infoTooltip.addEventListener("click", (event) => {
+      const manifestLink = event.target.closest("[data-repro-manifest-id]");
+      if (manifestLink) {
+        event.preventDefault();
+        openReproManifestPanel(manifestLink.dataset.reproManifestId);
+      }
       if (event.target.closest(".info-close")) hideAllTooltips();
       event.stopPropagation();
     });
@@ -1901,15 +2018,167 @@ function repoFileUrl(path) {
   return `https://github.com/cashcon57/open-supersampling/blob/main/${clean.split("/").map(encodeURIComponent).join("/")}`;
 }
 
-function eventTooltipHtml(event) {
+function isObjectRecord(value) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function basename(path) {
+  return String(path || "").split(/[\\/]/).filter(Boolean).pop() || "";
+}
+
+function stepFromCheckpointPath(path) {
+  const match = String(path || "").match(/step[-_]?0*(\d+)/i);
+  return match ? Number(match[1]) : null;
+}
+
+function shellArg(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "''";
+  if (/^[A-Za-z0-9_@%+=:,./\\-]+$/.test(raw)) return raw;
+  return `'${raw.replace(/'/g, `'\\''`)}'`;
+}
+
+function manifestArgs(manifest) {
+  const raw = manifest?.args ?? manifest?.train_args ?? manifest?.training_args ?? manifest?.argv ?? manifest?.cli_args ?? manifest?.command_args ?? manifest?.cli_invocation ?? "";
+  if (isObjectRecord(raw)) {
+    return Object.entries(raw).flatMap(([key, value]) => {
+      if (value === null || value === undefined || value === false) return [];
+      const flag = `--${String(key).replace(/_/g, "-")}`;
+      if (value === true) return [flag];
+      if (Array.isArray(value)) return value.length ? [flag, ...value.map(shellArg)] : [];
+      return [flag, shellArg(value)];
+    }).join(" ");
+  }
+  if (!Array.isArray(raw)) {
+    return String(raw || "").trim().replace(/^.*?(?:^|\s)scripts[\\/]sr_train_v6\.py\s*/, "");
+  }
+  const args = Array.isArray(raw) ? raw.map((arg) => String(arg)) : String(raw || "").trim().split(/\s+/).filter(Boolean);
+  const scriptIndex = args.findIndex((arg) => /(^|[\\/])sr_train_v6\.py$/.test(arg));
+  const trimmed = scriptIndex >= 0 ? args.slice(scriptIndex + 1) : args;
+  return trimmed.map(shellArg).join(" ");
+}
+
+function manifestSeed(manifest) {
+  return manifest?.rng ?? manifest?.rng_seed ?? manifest?.seed ?? manifest?.OSS_RNG_SEED ?? manifest?.env?.OSS_RNG_SEED ?? "<rng>";
+}
+
+function manifestCheckpoint(manifest, fallback = "") {
+  return manifest?.ckpt ?? manifest?.checkpoint ?? manifest?.checkpoint_path ?? manifest?.dashboard_ckpt ?? manifest?.resume ?? manifest?.path ?? fallback;
+}
+
+function recreateCommand(manifest, fallbackCkpt = "") {
+  const ckpt = manifestCheckpoint(manifest, fallbackCkpt) || "<ckpt>";
+  const args = manifestArgs(manifest) || "<args>";
+  return `OSS_RNG_SEED=${shellArg(manifestSeed(manifest))} python scripts/sr_train_v6.py ${args} --resume ${shellArg(ckpt)}`;
+}
+
+function normalizeManifestEntry(key, value, base = {}) {
+  const manifest = isObjectRecord(value) ? { ...base, ...value } : { ...base, ckpt: value };
+  const ckpt = manifestCheckpoint(manifest, String(key || ""));
+  const step = Number(manifest.step ?? manifest.ckpt_step ?? stepFromCheckpointPath(ckpt) ?? stepFromCheckpointPath(key) ?? (Number.isFinite(Number(key)) ? Number(key) : NaN));
+  return {
+    key: String(key || ckpt || step || ""),
+    manifest,
+    ckpt,
+    step: Number.isFinite(step) ? step : null,
+  };
+}
+
+function compactManifestMap(raw) {
+  if (!isObjectRecord(raw)) return null;
+  for (const key of ["checkpoints", "checkpoint_manifests", "manifests", "per_ckpt", "per_checkpoint"]) {
+    if (isObjectRecord(raw[key])) return raw[key];
+  }
+  return null;
+}
+
+function looksLikeSingleManifest(raw) {
+  return ["args", "train_args", "training_args", "argv", "cli_args", "command_args", "rng", "rng_seed", "seed", "ckpt", "checkpoint", "checkpoint_path"].some((key) => key in raw);
+}
+
+function reproManifestEntries(run) {
+  const raw = run?.repro_manifest ?? run?.repro_manifests;
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw.map((item, index) => normalizeManifestEntry(item?.ckpt ?? item?.checkpoint ?? item?.step ?? index, item));
+
+  const compact = compactManifestMap(raw);
+  if (!compact && looksLikeSingleManifest(raw)) {
+    return [normalizeManifestEntry(raw.ckpt ?? raw.checkpoint ?? raw.checkpoint_path ?? raw.step ?? 0, raw)];
+  }
+  const source = compact || raw;
+  const base = compact ? Object.fromEntries(Object.entries(raw).filter(([key]) => !["checkpoints", "checkpoint_manifests", "manifests", "per_ckpt", "per_checkpoint"].includes(key))) : {};
+  const entries = Object.entries(source)
+    .filter(([, value]) => isObjectRecord(value) || typeof value === "string" || typeof value === "number")
+    .map(([key, value]) => normalizeManifestEntry(key, value, base));
+  return entries.filter((entry) => entry.key || entry.ckpt || entry.step !== null);
+}
+
+function findReproManifest(run, event) {
+  const entries = reproManifestEntries(run);
+  if (!entries.length) return null;
+  const step = eventStep(event);
+  const ckpt = eventText(event, ["ckpt", "checkpoint", "checkpoint_path", "resume", "path"]);
+  const ckptBase = basename(ckpt);
+  return entries.find((entry) => {
+    if (step !== null && entry.step === step) return true;
+    if (ckpt && (entry.key === ckpt || entry.ckpt === ckpt)) return true;
+    if (ckptBase && (basename(entry.key) === ckptBase || basename(entry.ckpt) === ckptBase)) return true;
+    return ckpt && (String(entry.key).includes(ckpt) || String(entry.ckpt).includes(ckpt) || ckpt.includes(String(entry.key)));
+  }) || null;
+}
+
+function registerReproManifest(run, event, entry) {
+  const id = `repro-${++reproManifestSeq}`;
+  const step = eventStep(event) ?? entry.step;
+  const label = eventText(event, ["label", "title", "name"], step !== null ? `checkpoint step ${formatStepTick(step)}` : "checkpoint");
+  reproManifestRegistry.set(id, {
+    runName: run?.label || run?.name || "run",
+    label,
+    step,
+    ckpt: entry.ckpt || manifestCheckpoint(entry.manifest, entry.key),
+    manifest: entry.manifest,
+    command: recreateCommand(entry.manifest, entry.ckpt || entry.key),
+  });
+  return id;
+}
+
+function checkpointEventsForRun(run, existingEvents) {
+  const seen = new Set((existingEvents || []).map((event) => {
+    const step = eventStep(event);
+    const ckpt = eventText(event, ["ckpt", "checkpoint", "checkpoint_path", "resume", "path"]);
+    return `${step ?? ""}:${basename(ckpt)}`;
+  }));
+  return reproManifestEntries(run).filter((entry) => {
+    const key = `${entry.step ?? ""}:${basename(entry.ckpt || entry.key)}`;
+    return !seen.has(key);
+  }).map((entry) => ({
+    kind: "checkpoint",
+    label: entry.step !== null ? `checkpoint step ${formatStepTick(entry.step)}` : "checkpoint",
+    detail: "Training checkpoint with reproducibility manifest.",
+    step: entry.step,
+    ckpt: entry.ckpt || entry.key,
+    __reproEntry: entry,
+  }));
+}
+
+function chartEventsForRun(run, slug) {
+  const events = Array.isArray(run?.events) ? run.events : [];
+  if (slug !== "loss") return events;
+  return events.concat(checkpointEventsForRun(run, events).filter((event) => event.step !== null));
+}
+
+function eventTooltipHtml(event, run) {
   const step = eventStep(event);
   const label = eventText(event, ["label", "title", "name"], `step ${formatStepTick(step)}`);
   const detail = eventText(event, ["detail", "details", "description", "summary", "note"]);
   const sha = eventSha(event);
   const docPath = eventDocPath(event);
+  const manifestEntry = event.__reproEntry || findReproManifest(run, event);
+  const manifestId = manifestEntry ? registerReproManifest(run, event, manifestEntry) : "";
   const links = [
     sha ? `<a href="https://github.com/cashcon57/open-supersampling/commit/${encodeURIComponent(sha)}" target="_blank" rel="noopener noreferrer">commit ${escapeHtml(sha.slice(0, 7))}</a>` : "",
     docPath ? `<a href="${repoFileUrl(docPath)}" target="_blank" rel="noopener noreferrer">${escapeHtml(docPath)}</a>` : "",
+    manifestId ? `<a href="#" data-repro-manifest-id="${escapeHtml(manifestId)}">View reproducibility manifest</a>` : "",
   ].filter(Boolean).join("");
   return `<button class="info-close" type="button" aria-label="Close tooltip">&times;</button>
     <div class="event-tooltip-copy">
@@ -1929,18 +2198,18 @@ function scheduleChartEventDots(chart) {
   window.requestAnimationFrame(() => renderChartEventDots(chart));
 }
 
-function bindEventDotTooltip(dot, event) {
+function bindEventDotTooltip(dot, event, run) {
   dot.addEventListener("pointerenter", () => {
     if (!canHoverTooltips() || activeInfoMode === "click-stuck") return;
     cancelTooltipHide();
-    infoHoverTimer = window.setTimeout(() => showHtmlTooltip(dot, eventTooltipHtml(event), "hover-shown"), 120);
+    infoHoverTimer = window.setTimeout(() => showHtmlTooltip(dot, eventTooltipHtml(event, run), "hover-shown"), 120);
   });
   dot.addEventListener("pointerleave", () => {
     if (infoHoverTimer) window.clearTimeout(infoHoverTimer);
     infoHoverTimer = null;
     scheduleTooltipHide();
   });
-  dot.addEventListener("focus", () => showHtmlTooltip(dot, eventTooltipHtml(event), "hover-shown"));
+  dot.addEventListener("focus", () => showHtmlTooltip(dot, eventTooltipHtml(event, run), "hover-shown"));
   dot.addEventListener("blur", scheduleTooltipHide);
   dot.addEventListener("click", (clickEvent) => {
     clickEvent.preventDefault();
@@ -1952,13 +2221,13 @@ function bindEventDotTooltip(dot, event) {
       hideAllTooltips();
       return;
     }
-    showHtmlTooltip(dot, eventTooltipHtml(event), "click-stuck");
+    showHtmlTooltip(dot, eventTooltipHtml(event, run), "click-stuck");
   });
 }
 
 function renderChartEventDots(chart) {
   const slug = chart?.$eventChartSlug || chart?.$urlStateChartId || chartSlugForId(chart?.canvas?.id || "");
-  const events = Array.isArray(chart?.$eventRun?.events) ? chart.$eventRun.events : [];
+  const events = chartEventsForRun(chart?.$eventRun, slug);
   const canvas = chart?.canvas;
   const wrap = canvas?.closest?.(".chart-wrap");
   const xScale = chart?.scales?.x;
@@ -2016,7 +2285,7 @@ function renderChartEventDots(chart) {
     dot.style.left = `${xOffset + x}px`;
     dot.style.top = `${yOffset + area.top + 6 + stackIndex * 10}px`;
     dot.setAttribute("aria-label", `${eventText(event, ["label", "title", "name"], "training event")} at step ${formatStepTick(step)}`);
-    bindEventDotTooltip(dot, event);
+    bindEventDotTooltip(dot, event, chart.$eventRun);
     layer.appendChild(dot);
   });
 
@@ -3102,6 +3371,77 @@ function openEmbedModal(trigger) {
   modal.hidden = false;
 }
 
+function ensureReproManifestPanel() {
+  let panel = document.getElementById("repro-manifest-panel");
+  if (panel) return panel;
+  panel = document.createElement("aside");
+  panel.id = "repro-manifest-panel";
+  panel.className = "repro-panel";
+  panel.hidden = true;
+  panel.setAttribute("aria-labelledby", "repro-panel-title");
+  panel.innerHTML = `
+    <div class="repro-panel-backdrop" data-repro-close></div>
+    <section class="repro-panel-shell" role="dialog" aria-modal="true" aria-labelledby="repro-panel-title">
+      <div class="repro-panel-head">
+        <div>
+          <h3 class="repro-panel-title" id="repro-panel-title">Reproducibility manifest</h3>
+          <div class="repro-panel-meta" id="repro-panel-meta"></div>
+        </div>
+        <button class="repro-panel-close" type="button" data-repro-close aria-label="Close reproducibility manifest">&times;</button>
+      </div>
+      <div class="repro-panel-body">
+        <div class="repro-panel-section">
+          <div class="repro-panel-label">Recreate this run</div>
+          <pre class="repro-command" id="repro-command"></pre>
+          <button class="repro-command-copy" type="button" data-repro-copy>Copy command</button>
+        </div>
+        <div class="repro-panel-section">
+          <div class="repro-panel-label">Manifest contents</div>
+          <pre class="repro-manifest-json" id="repro-manifest-json"></pre>
+        </div>
+      </div>
+    </section>`;
+  panel.addEventListener("click", (event) => {
+    if (event.target.closest("[data-repro-close]")) {
+      event.preventDefault();
+      closeReproManifestPanel();
+      return;
+    }
+    const copyButton = event.target.closest("[data-repro-copy]");
+    if (!copyButton) return;
+    event.preventDefault();
+    const command = document.getElementById("repro-command")?.textContent || "";
+    navigator.clipboard.writeText(command).then(() => {
+      copyButton.classList.add("copied");
+      setTimeout(() => copyButton.classList.remove("copied"), 1400);
+    }).catch((error) => console.warn(`Repro command copy failed: ${error.message}`));
+  });
+  document.body.appendChild(panel);
+  return panel;
+}
+
+function openReproManifestPanel(id) {
+  const item = reproManifestRegistry.get(id);
+  if (!item) return;
+  hideAllTooltips();
+  const panel = ensureReproManifestPanel();
+  document.getElementById("repro-panel-title").textContent = item.label || "Reproducibility manifest";
+  document.getElementById("repro-panel-meta").textContent = [
+    item.runName,
+    item.step !== null && item.step !== undefined ? `step ${Number(item.step).toLocaleString()}` : "",
+    item.ckpt || "",
+  ].filter(Boolean).join(" / ");
+  document.getElementById("repro-command").textContent = item.command;
+  document.getElementById("repro-manifest-json").textContent = JSON.stringify(item.manifest || {}, null, 2);
+  panel.hidden = false;
+  panel.querySelector(".repro-panel-close")?.focus();
+}
+
+function closeReproManifestPanel() {
+  const panel = document.getElementById("repro-manifest-panel");
+  if (panel) panel.hidden = true;
+}
+
 function initDashboardUrlState() {
   if (document.body.dataset.urlStateBound === "true") return;
   document.body.dataset.urlStateBound = "true";
@@ -3151,7 +3491,10 @@ function initDashboardUrlState() {
     }).catch((error) => console.warn(`Cite copy failed: ${error.message}`));
   });
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") closeEmbedModal();
+    if (event.key === "Escape") {
+      closeEmbedModal();
+      closeReproManifestPanel();
+    }
   });
   window.addEventListener("popstate", () => {
     if (lastKnownData) renderDashboard(lastKnownData, { preserveTrainingState: true, skipUrlState: true });

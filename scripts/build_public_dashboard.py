@@ -21,6 +21,9 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 PUBLIC_DIR = ROOT / "dashboard-public"
 RUNS_DIR = PUBLIC_DIR / "runs"
 README = ROOT / "README.md"
@@ -527,6 +530,41 @@ def list_viz_pngs(run_dir: Path) -> list[str]:
     return sorted((path.name for path in viz_dir.glob("step-*.png")), key=viz_step)
 
 
+def ckpt_step(path: Path) -> int:
+    match = re.search(r"step-(\d+)", path.name)
+    return int(match.group(1)) if match else -1
+
+
+def repro_manifests_for_run(run_dir: Path) -> dict[str, Any]:
+    ckpt_dir = run_dir / "ckpts"
+    if not ckpt_dir.is_dir():
+        return {}
+    try:
+        from scripts.emit_repro_manifest import emit_manifest
+    except Exception as exc:
+        print(f"warn: reproducibility manifest import failed for {run_dir}: {exc}", file=sys.stderr)
+        return {}
+
+    out: dict[str, Any] = {}
+    ckpts = [
+        path
+        for pattern in ("*.pt", "*.pth")
+        for path in ckpt_dir.glob(pattern)
+        if path.is_file()
+    ]
+    for ckpt in sorted(ckpts, key=ckpt_step):
+        step = ckpt_step(ckpt)
+        key = str(step) if step >= 0 else ckpt.name
+        try:
+            manifest = emit_manifest(ckpt)
+        except Exception as exc:
+            print(f"warn: reproducibility manifest failed for {ckpt}: {exc}", file=sys.stderr)
+            continue
+        manifest["dashboard_ckpt"] = f"runs/{run_dir.name}/ckpts/{ckpt.name}"
+        out[key] = manifest
+    return out
+
+
 def viz_columns_for_run(name: str) -> list[str]:
     """Return the comparison-strip column order used by sr_temporal_inflight_viz."""
 
@@ -628,6 +666,7 @@ def build_run(name: str, previous: dict[str, Any] | None) -> dict[str, Any] | No
     scores = read_rows(run_dir / "score_log.json")
     viz_pngs = list_viz_pngs(run_dir)
     events = read_events(run_dir)
+    repro_manifest = repro_manifests_for_run(run_dir)
 
     previous_has_data = bool(
         previous
@@ -657,6 +696,7 @@ def build_run(name: str, previous: dict[str, Any] | None) -> dict[str, Any] | No
         cached["gpu_status"] = read_gpu_status(run_dir) or cached.get("gpu_status")
         cached["viz_columns"] = viz_columns_for_run(name) or cached.get("viz_columns", [])
         cached["events"] = events if events else cached.get("events", [])
+        cached["repro_manifest"] = repro_manifest or cached.get("repro_manifest", {})
         cached["max_target_steps"] = max_steps_for_run(name, [], cached)
         cached["cross_version_points"] = cross_version_points_for_run(name)
         cached_metrics = cached.get("loss_curve") if isinstance(cached.get("loss_curve"), list) else []
@@ -681,6 +721,7 @@ def build_run(name: str, previous: dict[str, Any] | None) -> dict[str, Any] | No
             "viz_pngs": [],
             "viz_columns": viz_columns_for_run(name),
             "events": events,
+            "repro_manifest": repro_manifest,
             "max_target_steps": max_target_steps,
             "gpu_status": read_gpu_status(run_dir),
             "cross_version_points": cross_version_points_for_run(name),
@@ -705,6 +746,7 @@ def build_run(name: str, previous: dict[str, Any] | None) -> dict[str, Any] | No
         "viz_pngs": viz_pngs,
         "viz_columns": viz_columns,
         "events": events,
+        "repro_manifest": repro_manifest,
         "max_target_steps": max_target_steps,
         "gpu_status": read_gpu_status(run_dir),
         "cross_version_points": cross_version_points_for_run(name),

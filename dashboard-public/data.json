@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-05-08T09:16:16Z",
+  "generated_at": "2026-05-08T09:30:22Z",
   "models": [
     {
       "active": true,
@@ -18168,6 +18168,7 @@
       ],
       "max_target_steps": 300000,
       "name": "srcnn-v6.1-pico-001",
+      "repro_manifest": {},
       "score_log": [
         {
           "bicubic_lpips_mean": 0.2944577056914568,
@@ -34547,6 +34548,7 @@
       ],
       "max_target_steps": 300000,
       "name": "srcnn-v6-pico-001",
+      "repro_manifest": {},
       "score_log": [],
       "viz_columns": [
         "LR-bilinear",
@@ -34623,6 +34625,7 @@
       "loss_curve": [],
       "max_target_steps": 300000,
       "name": "srcnn-v6-heavy-001",
+      "repro_manifest": {},
       "score_log": [],
       "viz_columns": [
         "LR-bilinear",
@@ -47706,6 +47709,7 @@
       ],
       "max_target_steps": 80000,
       "name": "srcnn-v5-pixel-temporal-validated",
+      "repro_manifest": {},
       "score_log": [
         {
           "bicubic_lpips_mean": 0.2945,
@@ -47829,6 +47833,7 @@
       "loss_curve": [],
       "max_target_steps": 80000,
       "name": "srcnn-v5-pixel-temporal-clean-restart-override",
+      "repro_manifest": {},
       "score_log": [],
       "viz_columns": [
         "LR-bilinear",
@@ -59931,6 +59936,7 @@
       ],
       "max_target_steps": 420000,
       "name": "srcnn-prod-v4-lpips",
+      "repro_manifest": {},
       "score_log": [
         {
           "bicubic_lpips_mean": 0.3996944483369589,

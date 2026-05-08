@@ -17,6 +17,7 @@ import logging
 import math
 import os
 import random
+import subprocess
 import sys
 import time
 from contextlib import nullcontext
@@ -672,6 +673,22 @@ def _load_rng_state(state: Optional[dict[str, Any]]) -> None:
         _load_numpy_rng_state(state["numpy"])
 
 
+def _git_head() -> str | None:
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=_REPO_ROOT,
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    value = proc.stdout.strip()
+    return value or None
+
+
 def save_checkpoint(
     output_dir: Path,
     step: int,
@@ -688,6 +705,7 @@ def save_checkpoint(
     payload: dict[str, Any] = {
         "step": int(step),
         "kind": "v6",
+        "git_sha": _git_head(),
         "args": {
             k: (str(v) if isinstance(v, Path) else v)
             for k, v in vars(args).items()
