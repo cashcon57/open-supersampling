@@ -1,6 +1,12 @@
 #include <torch/extension.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <tuple>
+
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> preprocess_gaussians_cuda(
+    torch::Tensor xy, torch::Tensor scale, torch::Tensor rot,
+    int64_t h, int64_t w, int64_t tile_size
+);
 
 // Phase 1 stub: takes torch tensors, returns a passthrough.
 // Phase 2 will replace this with a real CUDA fwd kernel.
@@ -26,7 +32,9 @@ torch::Tensor rasterize_forward_stub(
 }
 
 PYBIND11_MODULE(_C, m) {
-    m.doc() = "OSS custom CUDA extension (Phase 1 stub)";
+    m.doc() = "OSS custom CUDA extension (Phase 2a preprocess)";
     m.def("rasterize_forward", &rasterize_forward_stub,
           "Rasterize Gaussians (Phase 1: delegates to PyTorch reference)");
+    m.def("preprocess_only", &preprocess_gaussians_cuda,
+          "Preprocess Gaussian conics and tile AABBs (Phase 2a)");
 }
