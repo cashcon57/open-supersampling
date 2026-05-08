@@ -67,6 +67,7 @@ include = ["oss*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
+    "cuda: requires custom OSS CUDA extension built and CUDA GPU available",
     "gpu: requires CUDA GPU (deselect with -m 'not gpu')",
     "mitsuba: requires Mitsuba 3 installed",
 ]
