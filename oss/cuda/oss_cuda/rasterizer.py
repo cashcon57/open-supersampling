@@ -1,8 +1,8 @@
 """
 OSS custom rasterizer -- autograd Function wrapper around the C++ extension.
 
-Phase 3a native CUDA forward/backward is the live implementation.
-Backward currently returns dfeat only.
+Phase 3b native CUDA forward/backward is the live implementation.
+Backward currently returns dxy and dfeat.
 """
 
 from __future__ import annotations
@@ -49,7 +49,7 @@ class _RasterizeGaussians(Function):
         xy, scale, rot, feat, conic, gaussian_idx_sorted, tile_offsets = (
             ctx.saved_tensors
         )
-        d_xy_unused, d_conic_unused, d_feat = _C.rasterize_backward(
+        d_xy, d_conic_unused, d_feat = _C.rasterize_backward(
             xy,
             scale,
             rot,
@@ -62,10 +62,10 @@ class _RasterizeGaussians(Function):
             ctx.w,
             ctx.tile_size,
         )
-        del d_xy_unused, d_conic_unused
-        return None, None, None, d_feat, None, None, None, None
+        del d_conic_unused
+        return d_xy, None, None, d_feat, None, None, None, None
 
 
 def rasterize_gaussians(xy, scale, rot, feat, h, w, tile_size=16, topk_norm=True):
-    """CUDA rasterizer wrapper with Phase 3a dfeat-only backward."""
+    """CUDA rasterizer wrapper with Phase 3b dxy+dfeat backward."""
     return _RasterizeGaussians.apply(xy, scale, rot, feat, h, w, tile_size, topk_norm)

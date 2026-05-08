@@ -1,4 +1,4 @@
-"""Compute Sanitizer smoke for the Phase 3a rasterizer."""
+"""Compute Sanitizer smoke for the Phase 3b rasterizer."""
 
 from pathlib import Path
 import sys
@@ -38,7 +38,7 @@ def _run_shape(n: int, h: int, w: int, f: int) -> None:
         feat_cpu = torch.sin(idx[:, None] * 0.013 + feat_idx[None, :] * 0.17)
 
     device = torch.device("cuda:0")
-    xy = xy_cpu.to(device)
+    xy = xy_cpu.to(device).requires_grad_(True)
     scale = scale_cpu.to(device)
     rot = rot_cpu.to(device)
     feat = feat_cpu.to(device).requires_grad_(True)
@@ -51,9 +51,13 @@ def _run_shape(n: int, h: int, w: int, f: int) -> None:
     torch.cuda.synchronize()
     assert out.shape == (f, h, w)
     assert torch.isfinite(out.cpu()).all()
+    assert xy.grad is not None
+    assert torch.isfinite(xy.grad.cpu()).all()
     assert feat.grad is not None
     assert torch.isfinite(feat.grad.cpu()).all()
+    d_xy_sum = xy.grad.detach().cpu().sum().item()
     d_feat_sum = feat.grad.detach().cpu().sum().item()
+    print(f"smoke backward d_xy sum: {d_xy_sum:.6f}")
     print(f"smoke backward d_feat sum: {d_feat_sum:.6f}")
 
 

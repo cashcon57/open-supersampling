@@ -29,7 +29,7 @@ if CUDA_HOME:
 
 setup(
     name="oss_cuda",
-    version="0.3.0+phase3a",
+    version="0.3.0+phase3b",
     packages=["oss_cuda"],
     ext_modules=[
         CUDAExtension(

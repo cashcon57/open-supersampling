@@ -43,11 +43,11 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> rasterize_backward(
 }
 
 PYBIND11_MODULE(_C, m) {
-    m.doc() = "OSS custom CUDA extension (Phase 3a rasterizer)";
+    m.doc() = "OSS custom CUDA extension (Phase 3b rasterizer)";
     m.def("rasterize_forward", &rasterize_forward,
-          "Rasterize Gaussians (Phase 3a CUDA forward)");
+          "Rasterize Gaussians (Phase 3b CUDA forward)");
     m.def("rasterize_backward", &rasterize_backward,
-          "Rasterize Gaussians backward (Phase 3a dfeat only)");
+          "Rasterize Gaussians backward (Phase 3b dxy+dconic+dfeat)");
     m.def("preprocess_only", &preprocess_gaussians_cuda,
           "Preprocess Gaussian conics and tile AABBs (Phase 2a)");
     m.def("pair_construction_only", &pair_construction_cuda,

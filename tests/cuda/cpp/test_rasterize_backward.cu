@@ -118,3 +118,90 @@ TEST(RasterizeBackward, SingleGaussianDFeatMatchesWeightSum) {
     cudaFree(gids_d);
     cudaFree(offsets_d);
 }
+
+TEST(RasterizeBackward, DxyAnalytic) {
+    constexpr int H = 16;
+    constexpr int W = 16;
+    constexpr int F = 1;
+    constexpr int N = 1;
+    constexpr int num_tiles_x = 1;
+    constexpr int num_tiles_y = 1;
+    constexpr int px = 9;
+    constexpr int py = 8;
+
+    const std::vector<float2> xy_h{make_float2(8.0f, 8.0f)};
+    const std::vector<float3> conic_h{make_float3(0.25f, 0.0f, 0.25f)};
+    const std::vector<float> feat_h{3.0f};
+    std::vector<float> grad_out_h(F * H * W, 0.0f);
+    grad_out_h[py * W + px] = 2.0f;
+    const std::vector<int> gids_h{0};
+    const std::vector<int> offsets_h{0, 1};
+
+    const float weight = std::exp(-0.125f);
+    const float expected_d_feat = 2.0f * weight;
+    const float expected_dxy_x = 1.5f * weight;
+    const float expected_dconic_x = -3.0f * weight;
+
+    float2* xy_d = nullptr;
+    float3* conic_d = nullptr;
+    float* feat_d = nullptr;
+    float* grad_out_d = nullptr;
+    float2* d_xy_d = nullptr;
+    float3* d_conic_d = nullptr;
+    float* d_feat_d = nullptr;
+    int* gids_d = nullptr;
+    int* offsets_d = nullptr;
+
+    ASSERT_EQ(cudaMalloc(&xy_d, N * sizeof(float2)), cudaSuccess);
+    ASSERT_EQ(cudaMalloc(&conic_d, N * sizeof(float3)), cudaSuccess);
+    ASSERT_EQ(cudaMalloc(&feat_d, N * F * sizeof(float)), cudaSuccess);
+    ASSERT_EQ(cudaMalloc(&grad_out_d, F * H * W * sizeof(float)), cudaSuccess);
+    ASSERT_EQ(cudaMalloc(&d_xy_d, N * sizeof(float2)), cudaSuccess);
+    ASSERT_EQ(cudaMalloc(&d_conic_d, N * sizeof(float3)), cudaSuccess);
+    ASSERT_EQ(cudaMalloc(&d_feat_d, N * F * sizeof(float)), cudaSuccess);
+    ASSERT_EQ(cudaMalloc(&gids_d, gids_h.size() * sizeof(int)), cudaSuccess);
+    ASSERT_EQ(cudaMalloc(&offsets_d, offsets_h.size() * sizeof(int)), cudaSuccess);
+
+    ASSERT_EQ(cudaMemcpy(xy_d, xy_h.data(), N * sizeof(float2), cudaMemcpyHostToDevice), cudaSuccess);
+    ASSERT_EQ(cudaMemcpy(conic_d, conic_h.data(), N * sizeof(float3), cudaMemcpyHostToDevice), cudaSuccess);
+    ASSERT_EQ(cudaMemcpy(feat_d, feat_h.data(), N * F * sizeof(float), cudaMemcpyHostToDevice), cudaSuccess);
+    ASSERT_EQ(cudaMemcpy(grad_out_d, grad_out_h.data(), F * H * W * sizeof(float), cudaMemcpyHostToDevice), cudaSuccess);
+    ASSERT_EQ(cudaMemcpy(gids_d, gids_h.data(), gids_h.size() * sizeof(int), cudaMemcpyHostToDevice), cudaSuccess);
+    ASSERT_EQ(cudaMemcpy(offsets_d, offsets_h.data(), offsets_h.size() * sizeof(int), cudaMemcpyHostToDevice), cudaSuccess);
+    ASSERT_EQ(cudaMemset(d_xy_d, 0, N * sizeof(float2)), cudaSuccess);
+    ASSERT_EQ(cudaMemset(d_conic_d, 0, N * sizeof(float3)), cudaSuccess);
+    ASSERT_EQ(cudaMemset(d_feat_d, 0, N * F * sizeof(float)), cudaSuccess);
+
+    rasterize_backward<<<dim3(num_tiles_x, num_tiles_y), dim3(OSS_TILE_SIZE, OSS_TILE_SIZE)>>>(
+        H, W, num_tiles_x, num_tiles_y,
+        F, 0, F,
+        gids_d, offsets_d, xy_d, conic_d, feat_d, grad_out_d,
+        d_xy_d, d_conic_d, d_feat_d
+    );
+    ASSERT_EQ(cudaGetLastError(), cudaSuccess);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    float2 d_xy_h{};
+    float3 d_conic_h{};
+    float d_feat_h = 0.0f;
+    ASSERT_EQ(cudaMemcpy(&d_xy_h, d_xy_d, sizeof(float2), cudaMemcpyDeviceToHost), cudaSuccess);
+    ASSERT_EQ(cudaMemcpy(&d_conic_h, d_conic_d, sizeof(float3), cudaMemcpyDeviceToHost), cudaSuccess);
+    ASSERT_EQ(cudaMemcpy(&d_feat_h, d_feat_d, sizeof(float), cudaMemcpyDeviceToHost), cudaSuccess);
+
+    EXPECT_NEAR(d_feat_h, expected_d_feat, 1e-5f);
+    EXPECT_NEAR(d_xy_h.x, expected_dxy_x, 1e-5f);
+    EXPECT_NEAR(d_xy_h.y, 0.0f, 1e-5f);
+    EXPECT_NEAR(d_conic_h.x, expected_dconic_x, 1e-5f);
+    EXPECT_NEAR(d_conic_h.y, 0.0f, 1e-5f);
+    EXPECT_NEAR(d_conic_h.z, 0.0f, 1e-5f);
+
+    cudaFree(xy_d);
+    cudaFree(conic_d);
+    cudaFree(feat_d);
+    cudaFree(grad_out_d);
+    cudaFree(d_xy_d);
+    cudaFree(d_conic_d);
+    cudaFree(d_feat_d);
+    cudaFree(gids_d);
+    cudaFree(offsets_d);
+}

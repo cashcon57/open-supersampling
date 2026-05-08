@@ -43,10 +43,6 @@ void rasterize_backward(
     float3*       __restrict__ d_conic,
     float*        __restrict__ d_feat
 ) {
-    (void)feat;
-    (void)d_xy;
-    (void)d_conic;
-
     const int tile_x = static_cast<int>(blockIdx.x);
     const int tile_y = static_cast<int>(blockIdx.y);
     if (tile_x >= num_tiles_x || tile_y >= num_tiles_y) {
@@ -92,16 +88,24 @@ void rasterize_backward(
 
                 const float weight = expf(-0.5f * q);
                 const int feat_base = gid * F_total + F_offset;
+                float dL_dw = 0.0f;
 #pragma unroll
                 for (int c = 0; c < OSS_F_CHUNK; ++c) {
                     if (c < F_chunk) {
                         const float go = grad_out[(F_offset + c) * H * W + pix_id];
+                        dL_dw += go * feat[feat_base + c];
                         atomicAdd(&d_feat[feat_base + c], weight * go);
                     }
                 }
 
-                // TODO(Phase 3b): accumulate d_xy using dL/dq for this pixel/Gaussian.
-                // TODO(Phase 3b): accumulate d_conic using dL/dq for this pixel/Gaussian.
+                const float dL_dq = -0.5f * weight * dL_dw;
+                const float dL_ddx = dL_dq * (2.0f * k.x * dx + 2.0f * k.y * dy);
+                const float dL_ddy = dL_dq * (2.0f * k.y * dx + 2.0f * k.z * dy);
+                atomicAdd(&d_xy[gid].x, -dL_ddx);
+                atomicAdd(&d_xy[gid].y, -dL_ddy);
+                atomicAdd(&d_conic[gid].x, dL_dq * dx * dx);
+                atomicAdd(&d_conic[gid].y, dL_dq * 2.0f * dx * dy);
+                atomicAdd(&d_conic[gid].z, dL_dq * dy * dy);
             }
         }
         __syncthreads();

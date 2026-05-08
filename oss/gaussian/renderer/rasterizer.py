@@ -206,7 +206,13 @@ class Rasterizer:
         # gsplat returns (H*W, F); reshape to (F, H, W).
         return out_flat.view(h, w, gaussians.feat_dim).permute(2, 0, 1).contiguous()
 
-    def _render_reference(self, gaussians: GaussianBatch, h: int, w: int) -> torch.Tensor:
+    def _render_reference(
+        self,
+        gaussians: GaussianBatch,
+        h: int,
+        w: int,
+        conic: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         """Naive PyTorch reference rasterizer.
 
         For each pixel, accumulate weighted contributions from every Gaussian.
@@ -215,6 +221,8 @@ class Rasterizer:
         n = gaussians.num_gaussians
         if n == 0:
             return torch.zeros((gaussians.feat_dim, h, w), device=gaussians.device, dtype=gaussians.feat.dtype)
+        if conic is not None and conic.shape != (n, 3):
+            raise ValueError(f"conic must be (N, 3), got {tuple(conic.shape)}")
 
         device = gaussians.device
         ys = torch.arange(h, device=device, dtype=gaussians.xy.dtype)
@@ -222,20 +230,25 @@ class Rasterizer:
         grid_y, grid_x = torch.meshgrid(ys, xs, indexing="ij")  # (H, W) each
         # (H, W, 2)
         grid = torch.stack([grid_x, grid_y], dim=-1)
-        # Per-Gaussian covariance from scale + rot.
-        cos_t = torch.cos(gaussians.rot)  # (N,)
-        sin_t = torch.sin(gaussians.rot)
-        # R = [[cos, -sin], [sin, cos]]; S = diag(scale)
-        # Σ = R S Sᵀ Rᵀ. Compute Σ⁻¹ for evaluation.
-        sx = gaussians.scale[:, 0].clamp(min=1e-6)
-        sy = gaussians.scale[:, 1].clamp(min=1e-6)
-        # Σ⁻¹ = R diag(1/sx², 1/sy²) Rᵀ.
-        inv_sx2 = 1.0 / (sx * sx)
-        inv_sy2 = 1.0 / (sy * sy)
-        # 2x2 inverse cov per Gaussian
-        a = cos_t * cos_t * inv_sx2 + sin_t * sin_t * inv_sy2  # (N,)
-        b = cos_t * sin_t * (inv_sx2 - inv_sy2)
-        d = sin_t * sin_t * inv_sx2 + cos_t * cos_t * inv_sy2
+        if conic is None:
+            # Per-Gaussian covariance from scale + rot.
+            cos_t = torch.cos(gaussians.rot)  # (N,)
+            sin_t = torch.sin(gaussians.rot)
+            # R = [[cos, -sin], [sin, cos]]; S = diag(scale)
+            # Σ = R S Sᵀ Rᵀ. Compute Σ⁻¹ for evaluation.
+            sx = gaussians.scale[:, 0].clamp(min=1e-6)
+            sy = gaussians.scale[:, 1].clamp(min=1e-6)
+            # Σ⁻¹ = R diag(1/sx², 1/sy²) Rᵀ.
+            inv_sx2 = 1.0 / (sx * sx)
+            inv_sy2 = 1.0 / (sy * sy)
+            # 2x2 inverse cov per Gaussian
+            a = cos_t * cos_t * inv_sx2 + sin_t * sin_t * inv_sy2  # (N,)
+            b = cos_t * sin_t * (inv_sx2 - inv_sy2)
+            d = sin_t * sin_t * inv_sx2 + cos_t * cos_t * inv_sy2
+        else:
+            a = conic[:, 0]
+            b = conic[:, 1]
+            d = conic[:, 2]
 
         out = torch.zeros((h, w, gaussians.feat_dim), device=device, dtype=gaussians.feat.dtype)
         # Loop Gaussian-major to keep memory bounded for arbitrary N.
