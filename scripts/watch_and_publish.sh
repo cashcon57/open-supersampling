@@ -175,7 +175,25 @@ publish_changed() {
 
 echo "[watch_and_publish] interval=${INTERVAL}s source=${SOURCE_DIR} staging=${STAGING_DIR} target=${WORKER_UPLOAD_URL}"
 
+# How often (in cycles) to attempt a `git pull --ff-only`. Prevents the watcher
+# from running stale repo code if the operator forgets to restart after pushes.
+# Default: every 4 cycles (~2 minutes at default 30s interval).
+GIT_PULL_EVERY="${GIT_PULL_EVERY:-4}"
+cycle_idx=0
+
 while :; do
+  # Periodic git pull. Failures are non-fatal — log and keep cycling so a
+  # transient network blip doesn't kill the publish path.
+  if (( cycle_idx % GIT_PULL_EVERY == 0 )); then
+    if [[ -d "${REPO_ROOT}/.git" ]]; then
+      pull_out="$(cd "${REPO_ROOT}" && git pull --ff-only origin main 2>&1)" || pull_out="(pull failed: $pull_out)"
+      if [[ -n "$pull_out" ]] && [[ "$pull_out" != *"Already up to date"* ]]; then
+        echo "[watch_and_publish] git pull: $pull_out"
+      fi
+    fi
+  fi
+  cycle_idx=$((cycle_idx + 1))
+
   stage_run_files
   capture_gpu_status
   # Build the static index.html + data.json from staging tree.
