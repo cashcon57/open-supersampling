@@ -261,6 +261,13 @@
       justify-content: flex-end;
       gap: 0.4rem;
     }
+    .chart-hint {
+      font-size: 11px;
+      color: #71717a;
+      margin-top: 4px;
+      user-select: none;
+      pointer-events: none;
+    }
     .chart-action {
       min-height: 1.85rem;
       padding: 0 0.5rem;
@@ -277,21 +284,27 @@
     }
     .chart-card.fullscreen {
       position: fixed;
-      inset: 1rem;
+      inset: 0.5rem;
       z-index: 9000;
       background: var(--surface, var(--oss-panel));
       border: 1px solid #404040;
       border-radius: 8px !important;
       display: flex;
       flex-direction: column;
-      overflow: auto;
-      padding: 1rem;
+      overflow: hidden;
+      padding: 0.75rem;
     }
+    .chart-card.fullscreen .chart-hint { display: none; }
     .chart-card.fullscreen .chart-wrap {
-      flex: 1;
-      height: 100% !important;
+      flex: 1 1 0;
+      height: auto !important;
       max-height: none;
       min-height: 0;
+      overflow: hidden;
+    }
+    .chart-card.fullscreen .chart-wrap canvas {
+      width: 100% !important;
+      height: 100% !important;
     }
     .chart-card.fullscreen .fullscreen-dismiss {
       position: absolute;
@@ -1269,6 +1282,24 @@ function ensureChartToolbar(card, canvas, chartId) {
   return toolbar;
 }
 
+function ensureChartHint(card, toolbar, chartId) {
+  let hint = card.querySelector(`[data-chart-hint="${chartId}"]`);
+  if (hint) return hint;
+
+  hint = document.createElement("div");
+  hint.className = "chart-hint";
+  hint.dataset.chartHint = chartId;
+  hint.setAttribute("data-text", "");
+  hint.textContent = "drag axes to scale · drag chart to zoom · scroll to zoom · shift+drag to pan";
+  const header = toolbar.parentElement;
+  if (header?.classList?.contains("flex") && header.querySelector("h3")) {
+    header.insertAdjacentElement("afterend", hint);
+  } else {
+    toolbar.insertAdjacentElement("afterend", hint);
+  }
+  return hint;
+}
+
 function bindResetZoom(chart, chartId) {
   const btn = document.querySelector(`[data-reset-zoom][data-chart-id="${chartId}"]`);
   if (!btn) return;
@@ -1280,6 +1311,11 @@ function bindResetZoom(chart, chartId) {
 
 function enterFullscreen(card, chart) {
   if (!card || card.classList.contains("fullscreen")) return;
+  const resizeAfterLayout = () => {
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => chart.resize());
+    });
+  };
   const backdrop = document.createElement("div");
   backdrop.className = "fullscreen-backdrop";
   document.body.appendChild(backdrop);
@@ -1300,7 +1336,7 @@ function enterFullscreen(card, chart) {
     backdrop.remove();
     dismissButton.remove();
     document.removeEventListener("keydown", onEsc);
-    chart.resize();
+    resizeAfterLayout();
   };
   function onEsc(event) {
     if (event.key === "Escape") dismiss();
@@ -1309,7 +1345,7 @@ function enterFullscreen(card, chart) {
   dismissButton.addEventListener("click", dismiss);
   backdrop.addEventListener("click", dismiss);
   document.addEventListener("keydown", onEsc);
-  setTimeout(() => chart.resize(), 50);
+  resizeAfterLayout();
 }
 
 function bindFullscreen(chart, chartId, card) {
@@ -1322,12 +1358,161 @@ function bindFullscreen(chart, chartId, card) {
   btn.addEventListener("click", () => enterFullscreen(btn._fullscreenCard, btn._fullscreenChart));
 }
 
+function chartPointerPosition(chart, canvas, event) {
+  const rect = canvas.getBoundingClientRect();
+  if (!rect.width || !rect.height) return null;
+  return {
+    x: (event.clientX - rect.left) * (chart.width / rect.width),
+    y: (event.clientY - rect.top) * (chart.height / rect.height),
+  };
+}
+
+function chartAxisDragRegion(chart, canvas, event) {
+  const area = chart.chartArea;
+  const pos = chartPointerPosition(chart, canvas, event);
+  if (!area || !pos) return null;
+
+  const inXTickBand = chart.scales?.x
+    && pos.x >= area.left
+    && pos.x <= area.right
+    && pos.y > area.bottom
+    && pos.y <= chart.height;
+  if (inXTickBand) return { axis: "x", scaleId: "x", cursor: "col-resize", pos };
+
+  const inYTickBand = chart.scales?.y
+    && pos.y >= area.top
+    && pos.y <= area.bottom
+    && pos.x >= 0
+    && pos.x < area.left;
+  if (inYTickBand) return { axis: "y", scaleId: "y", cursor: "row-resize", pos };
+
+  return null;
+}
+
+function scaleRangeForDrag(chart, axis, startClientX, startClientY, event, startMin, startMax) {
+  const min = Number(startMin);
+  const max = Number(startMax);
+  if (!Number.isFinite(min) || !Number.isFinite(max) || min === max) return null;
+
+  const area = chart.chartArea;
+  if (!area) return null;
+
+  const range = max - min;
+  const center = (min + max) / 2;
+  const size = axis === "x" ? area.right - area.left : area.bottom - area.top;
+  if (!Number.isFinite(size) || size <= 0) return null;
+
+  const delta = axis === "x" ? event.clientX - startClientX : startClientY - event.clientY;
+  const rawFactor = 1 + (delta / size) * 1.5;
+  const factor = Math.max(0.05, rawFactor);
+  const nextRange = Math.max(range * 0.05, range * factor);
+  const nextMin = center - nextRange / 2;
+  const nextMax = center + nextRange / 2;
+  if (!Number.isFinite(nextMin) || !Number.isFinite(nextMax) || nextMin === nextMax) return null;
+  return { min: nextMin, max: nextMax };
+}
+
+function applyChartScaleRange(chart, scaleId, range) {
+  chart.options.scales[scaleId] ||= {};
+  chart.options.scales[scaleId].min = range.min;
+  chart.options.scales[scaleId].max = range.max;
+  chart.update("none");
+}
+
+function bindAxisScaleDrag(chart, canvas) {
+  if (!canvas) return;
+  if (canvas._axisScaleDrag) {
+    canvas._axisScaleDrag.chart = chart;
+    return;
+  }
+
+  const state = { chart, active: null };
+
+  function setCursor(cursor) {
+    canvas.style.cursor = cursor || "default";
+  }
+
+  function consumeAxisDragEvent(event) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (typeof event.stopImmediatePropagation === "function") {
+      event.stopImmediatePropagation();
+    }
+  }
+
+  function onMouseDown(event) {
+    if (event.button !== 0) return;
+    const region = chartAxisDragRegion(state.chart, canvas, event);
+    if (!region) return;
+    const scale = state.chart.scales?.[region.scaleId];
+    if (!scale) return;
+
+    state.active = {
+      axis: region.axis,
+      scaleId: region.scaleId,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startMin: scale.min,
+      startMax: scale.max,
+    };
+    setCursor("grabbing");
+    if (typeof canvas.setPointerCapture === "function" && event.pointerId !== undefined) {
+      try { canvas.setPointerCapture(event.pointerId); } catch (_) {}
+    }
+    consumeAxisDragEvent(event);
+  }
+
+  function onMouseMove(event) {
+    if (state.active) {
+      const scale = state.chart.scales?.[state.active.scaleId];
+      if (!scale) return;
+      const range = scaleRangeForDrag(
+        state.chart,
+        state.active.axis,
+        state.active.startClientX,
+        state.active.startClientY,
+        event,
+        state.active.startMin,
+        state.active.startMax,
+      );
+      if (range) applyChartScaleRange(state.chart, state.active.scaleId, range);
+      setCursor("grabbing");
+      consumeAxisDragEvent(event);
+      return;
+    }
+
+    const region = chartAxisDragRegion(state.chart, canvas, event);
+    setCursor(region?.cursor || "");
+  }
+
+  function onMouseUp() {
+    if (!state.active) return;
+    state.active = null;
+    setCursor("");
+  }
+
+  function onMouseOut() {
+    if (!state.active) setCursor("");
+  }
+
+  canvas.addEventListener("mousedown", onMouseDown, true);
+  canvas.addEventListener("mousemove", onMouseMove, true);
+  canvas.addEventListener("mouseleave", onMouseOut);
+  canvas.addEventListener("pointerup", onMouseUp);
+  canvas.addEventListener("pointercancel", onMouseUp);
+  document.addEventListener("mousemove", onMouseMove);
+  document.addEventListener("mouseup", onMouseUp);
+  canvas._axisScaleDrag = state;
+}
+
 function bindChartControls(chart, canvasOrId) {
   const canvas = typeof canvasOrId === "string" ? document.getElementById(canvasOrId) : canvasOrId;
   if (!chart || !canvas?.id) return chart;
   const card = chartCardForCanvas(canvas);
   if (!card) return chart;
-  ensureChartToolbar(card, canvas, canvas.id);
+  const toolbar = ensureChartToolbar(card, canvas, canvas.id);
+  ensureChartHint(card, toolbar, canvas.id);
+  bindAxisScaleDrag(chart, canvas);
   bindResetZoom(chart, canvas.id);
   bindFullscreen(chart, canvas.id, card);
   return chart;
