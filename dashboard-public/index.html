@@ -5806,9 +5806,14 @@ function renderHero(data) {
     if (stoppedReg[active.name]) {
       text = `${active.label || active.name} stopped — ${stoppedReg[active.name].short || "early stop"}`;
     } else if (liveAndFresh) {
-      text = `${active.label || active.name} is training right now`;
+      // Prefer history.title (e.g. "v6.2 Pico") over label so we don't end up
+      // with "v6.2 Pico (active) is training right now" — the live chip already
+      // signals active state.
+      const stem = active.history?.title || active.label || active.name;
+      text = `${stem} is training right now`;
     } else if (active.active) {
-      text = `${active.label || active.name} (training paused)`;
+      const stem = active.history?.title || active.label || active.name;
+      text = `${stem} (training paused)`;
     } else {
       text = `OpenSuperSampling — vendor-neutral SR + frame extrapolation`;
     }
@@ -5853,6 +5858,13 @@ function renderHero(data) {
 // Find the best run by max held-out PSNR and populate the hero best-card.
 // Equal prominence for PSNR + LPIPS; on hover, show industry-reference table
 // with the best run highlighted in its computed band.
+//
+// Important: candidate runs must be evaluated on the canonical OSS held-out
+// batch (TartanAir oldtown, 64 frames). v4's score_log is on SRGD which is
+// in-distribution to v4's training data — including it would surface
+// 33.67 dB as "current best" which is apples-to-oranges with v5/v6's TartanAir
+// numbers. We exclude v4 by name prefix; future runs add themselves to the
+// pool by simply training on the canonical batch.
 function renderHeroBestCard(data) {
   const titleEl = document.getElementById("hero-best-title");
   const psnrEl = document.getElementById("hero-best-psnr");
@@ -5860,7 +5872,10 @@ function renderHeroBestCard(data) {
   const metaEl = document.getElementById("hero-best-meta");
   const bodyEl = document.getElementById("hero-best-compare-body");
   if (!titleEl || !psnrEl || !lpipsEl || !metaEl || !bodyEl) return;
-  const runs = (data?.runs || []).filter((run) => Array.isArray(run.score_log) && run.score_log.length);
+  const isCanonicalCandidate = (run) =>
+    Array.isArray(run.score_log) && run.score_log.length &&
+    !/^srcnn-prod-v4/.test(run.name); // v4's score_log is SRGD, not TartanAir
+  const runs = (data?.runs || []).filter(isCanonicalCandidate);
   let bestRun = null;
   let bestRow = null;
   for (const run of runs) {
