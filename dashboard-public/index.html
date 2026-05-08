@@ -508,6 +508,33 @@
     .live-indicator.live { border-color: rgba(52,211,153,0.7); color: #6ee7b7; }
     .live-indicator.idle { color: #a1a1aa; }
     .terminal-cursor { animation: step-blink 1s steps(1, end) infinite; color: var(--oss-accent); will-change: opacity; }
+    .convergence-progress { margin-top: 8px; }
+    .progress-track {
+      position: relative;
+      height: 6px;
+      width: 100%;
+      background: #27272a;
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .progress-fill {
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      background: linear-gradient(90deg, #22d3ee, #a3e635);
+      transition: width 600ms ease-out;
+    }
+    .progress-meta {
+      margin-top: 4px;
+      font-size: 12px;
+      color: #a1a1aa;
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    }
+    .progress-meta .progress-pct { color: #22d3ee; }
     .training-progress-track { height: 0.55rem; border: 1px solid var(--oss-line); background: rgba(0,0,0,0.55); }
     .training-progress-fill { height: 100%; background: linear-gradient(90deg, var(--oss-accent), var(--gold)); box-shadow: 0 0 16px rgba(110,231,183,0.35); }
     .step-ticker-row.is-new { animation: ticker-slide 620ms cubic-bezier(0.2, 0.8, 0.2, 1); }
@@ -549,6 +576,7 @@
       .info-tooltip { max-width: 90vw; }
       .chart-action .chart-action-label { display: none; }
       .chart-action { width: 2rem; justify-content: center; padding: 0; }
+      .progress-meta { font-size: 11px; gap: 8px; }
     }
     @media (max-width: 640px) {
       .chart-wrap { height: 15rem; }
@@ -610,6 +638,16 @@
           <span id="hero-active-status">training status loading</span>
         </div>
         <h2 id="hero-active-title" class="mt-2 text-xl font-semibold text-zinc-50" data-text>v6.1 Pico</h2>
+        <div class="convergence-progress" id="hero-progress">
+          <div class="progress-track" data-track>
+            <div class="progress-fill" data-fill style="width: 0%"></div>
+          </div>
+          <div class="progress-meta">
+            <span class="progress-step">0 / 100,000 steps</span>
+            <span class="progress-pct">0% complete</span>
+            <span class="progress-eta"></span>
+          </div>
+        </div>
         <p id="hero-active-meta" class="mt-1 text-sm text-zinc-300" data-subtext>waiting for metrics.json</p>
       </article>
       <article class="rounded-md border border-zinc-800 bg-zinc-900/60 p-4" data-surface>
@@ -3055,7 +3093,7 @@ function gpuPanelHtml(run) {
 function trainingProgressHtml(run) {
   if (!run?.active) return "";
   const current = Number(run.latest_step || 0);
-  const target = Number(run.max_target_steps || 100000);
+  const target = targetStepsForRun(run);
   const pct = target > 0 ? Math.max(0, Math.min(100, (current / target) * 100)) : 0;
   return `<div class="rounded-md border border-zinc-800 bg-zinc-950/35 p-4" data-muted-surface>
     <div class="flex items-center justify-between gap-3 text-xs uppercase text-zinc-500" data-dim>
@@ -3068,6 +3106,48 @@ function trainingProgressHtml(run) {
     <div class="mt-2 font-mono text-sm text-zinc-300" data-subtext>step ${current.toLocaleString()} / ${target.toLocaleString()}</div>
     <div class="metric-direction" data-direction="neutral">step is within-run; cross-run step comparisons are not apples-to-apples.</div>
   </div>`;
+}
+
+function targetStepsForRun(run) {
+  return Number(run?.max_target_steps || run?.history?.target_steps || 100000);
+}
+
+function computeEtaInfo(run) {
+  const target = targetStepsForRun(run);
+  const current = Number(run?.latest_step || 0);
+  if (current >= target) return { hours: 0, estimated: false };
+
+  const sourceRows = (run?.loss_curve || []).length ? (run.loss_curve || []) : (run?.score_log || []);
+  const recent = sourceRows.slice(-200);
+  if (recent.length < 2) return null;
+
+  const first = recent[0];
+  const last = recent[recent.length - 1];
+  const t0 = Number(first.timestamp || first.t || 0);
+  const t1 = Number(last.timestamp || last.t || 0);
+  const remaining = target - current;
+  if (!t0 || !t1 || t1 <= t0) {
+    return { hours: (remaining * 1.5) / 3600, estimated: true };
+  }
+
+  const stepsPerSec = (Number(last.step || 0) - Number(first.step || 0)) / (t1 - t0);
+  if (stepsPerSec <= 0) return null;
+  return { hours: remaining / stepsPerSec / 3600, estimated: false };
+}
+
+function computeEtaHours(run) {
+  return computeEtaInfo(run)?.hours ?? null;
+}
+
+function etaTextForRun(run) {
+  const eta = computeEtaInfo(run);
+  if (!eta) return "";
+  const etaHours = eta.hours;
+  const suffix = eta.estimated ? " (estimate)" : "";
+  if (etaHours === 0) return "training complete";
+  if (etaHours < 1) return `ETA ~${Math.round(etaHours * 60)}m${suffix}`;
+  if (etaHours < 24) return `ETA ~${etaHours.toFixed(1)}h${suffix}`;
+  return `ETA ~${(etaHours / 24).toFixed(1)}d${suffix}`;
 }
 
 function renderHero(data) {
@@ -3083,6 +3163,19 @@ function renderHero(data) {
   document.getElementById("hero-active-title").innerHTML = `${escapeHtml(active.label || active.name)} ${trainingIndicatorHtml(active)}`;
   const latest = active.latest_metrics || {};
   document.getElementById("hero-active-meta").innerHTML = `step ${Number(active.latest_step || 0).toLocaleString()} / loss ${fmtNumber(latest.loss_total ?? latest.loss, 5)} ${directionHtml("loss_total")}`;
+  const progress = document.getElementById("hero-progress");
+  if (progress) {
+    progress.hidden = !active.active;
+    if (active.active) {
+      const target = targetStepsForRun(active);
+      const current = Number(active.latest_step || 0);
+      const pct = target > 0 ? Math.min(100, Math.round((current / target) * 1000) / 10) : 0;
+      progress.querySelector("[data-fill]").style.width = `${pct}%`;
+      progress.querySelector(".progress-step").textContent = `${current.toLocaleString()} / ${target.toLocaleString()} steps`;
+      progress.querySelector(".progress-pct").textContent = `${pct}% complete`;
+      progress.querySelector(".progress-eta").textContent = etaTextForRun(active);
+    }
+  }
   document.getElementById("hero-gpu").innerHTML = gpuPanelHtml(active).replace("rounded-md border ", "");
 }
 
