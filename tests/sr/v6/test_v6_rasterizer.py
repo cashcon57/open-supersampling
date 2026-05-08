@@ -67,6 +67,39 @@ def test_single_gaussian_renders_peak_at_known_pixel():
     assert out[0, 0, 6, 5] > out[0, 0, 5, 5]
 
 
+def test_low_rank_rasterizer_returns_latent_and_weight_sum():
+    token_dim = 64
+    latent_rank = 4
+    canvas = _canvas_state(count=1, token_dim=token_dim)
+    canvas.colors[0, :latent_rank] = torch.tensor([1.0, 2.0, 3.0, 4.0])
+    rast = V6Rasterizer(token_dim, latent_rank=latent_rank)
+
+    z, m = rast(canvas, torch.ones(1, dtype=torch.bool), output_hw=(16, 16))
+
+    assert z.shape == (1, latent_rank, 16, 16)
+    assert m.shape == (1, 1, 16, 16)
+    torch.testing.assert_close(m[0, 0, 6, 5], torch.tensor(1.0))
+    torch.testing.assert_close(z[0, :, 6, 5], canvas.colors[0, :latent_rank])
+    torch.testing.assert_close(z[0], canvas.colors[0, :latent_rank, None, None] * m[0])
+
+
+def test_legacy_rasterizer_can_explicitly_return_weight_sum():
+    token_dim = 4
+    canvas = _canvas_state(count=1, token_dim=token_dim)
+    rast = V6Rasterizer(token_dim)
+
+    features, m = rast(
+        canvas,
+        torch.ones(1, dtype=torch.bool),
+        output_hw=(16, 16),
+        return_weight_sum=True,
+    )
+
+    assert features.shape == (1, token_dim, 16, 16)
+    assert m.shape == (1, 1, 16, 16)
+    torch.testing.assert_close(features[:, :1], m)
+
+
 def test_active_mask_filters_inactive_gaussians():
     token_dim = 3
     canvas = _canvas_state(count=2, token_dim=token_dim)

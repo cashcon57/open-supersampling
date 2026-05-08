@@ -19,6 +19,8 @@ class V6Rasterizer(nn.Module):
 
     Args:
         token_dim: feature channels per Gaussian. Matches ``V6Config.token_dim``.
+        latent_rank: low-rank channels to rasterize for v6.2 callers. Values
+            below 64 switch the output feature image from ``token_dim`` to ``R``.
         tile_size: tile edge length in pixels. Must match the underlying renderer.
 
     ``active_mask`` may be ``(N,)`` or ``(B, N)``. The v6 canvas is per-rank
@@ -29,12 +31,15 @@ class V6Rasterizer(nn.Module):
     def __init__(
         self,
         token_dim: int,
+        latent_rank: int = 64,
         tile_size: int = TILE_SIZE,
         overlap: int = 0,
     ) -> None:
         super().__init__()
         if token_dim <= 0:
             raise ValueError(f"token_dim must be positive; got {token_dim}")
+        if latent_rank <= 0:
+            raise ValueError(f"latent_rank must be positive; got {latent_rank}")
         if tile_size != TILE_SIZE:
             raise ValueError(
                 f"tile_size must match the underlying renderer ({TILE_SIZE}); got {tile_size}"
@@ -42,6 +47,8 @@ class V6Rasterizer(nn.Module):
         if overlap < 0:
             raise ValueError(f"overlap must be >= 0; got {overlap}")
         self.token_dim = int(token_dim)
+        self.latent_rank = int(latent_rank)
+        self.feature_dim = self.latent_rank if self.latent_rank < 64 else self.token_dim
         self.tile_size = int(tile_size)
         self.overlap = int(overlap)
         self.renderer = Rasterizer(tile_size=tile_size)
@@ -51,8 +58,17 @@ class V6Rasterizer(nn.Module):
         canvas: CanvasState,
         active_mask: torch.Tensor,
         output_hw: Tuple[int, int],
-    ) -> torch.Tensor:
-        """Return ``(B, token_dim, H, W)`` feature image."""
+        return_weight_sum: bool | None = None,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        """Return rasterized features, and optionally per-pixel weight sum.
+
+        Legacy callers using the F=64 path receive only the feature image unless
+        ``return_weight_sum`` is explicitly true. Low-rank callers
+        (``latent_rank < 64``) receive ``(Z, m)`` by default, where ``Z`` is
+        ``(B, R, H, W)`` and ``m`` is ``(B, 1, H, W)``.
+        """
+        if return_weight_sum is None:
+            return_weight_sum = self.latent_rank < 64
         h, w = int(output_hw[0]), int(output_hw[1])
         if h <= 0 or w <= 0:
             raise ValueError(f"output_hw must be positive; got {output_hw}")
@@ -60,14 +76,23 @@ class V6Rasterizer(nn.Module):
         batch_size, mask_1d = self._normalize_active_mask(canvas, active_mask)
         device = canvas.colors.device
         out_dtype = canvas.colors.dtype
+        feature_dim = self.feature_dim
 
         n_live = self._live_count(canvas)
         if n_live == 0 or not bool(mask_1d[:n_live].any().item()):
-            return torch.zeros(
-                (batch_size, self.token_dim, h, w),
+            features_out = torch.zeros(
+                (batch_size, feature_dim, h, w),
                 device=device,
                 dtype=out_dtype,
             )
+            if return_weight_sum:
+                weight_sum = torch.zeros(
+                    (batch_size, 1, h, w),
+                    device=device,
+                    dtype=out_dtype,
+                )
+                return features_out, weight_sum
+            return features_out
 
         live_active = mask_1d[:n_live].to(device=device, dtype=torch.bool)
         colors = self._token_features(canvas.colors[:n_live])
@@ -88,17 +113,35 @@ class V6Rasterizer(nn.Module):
             output_hw=(h, w),
         )
         if positions.shape[0] == 0:
-            return torch.zeros(
-                (batch_size, self.token_dim, h, w),
+            features_out = torch.zeros(
+                (batch_size, feature_dim, h, w),
                 device=device,
                 dtype=out_dtype,
             )
+            if return_weight_sum:
+                weight_sum = torch.zeros(
+                    (batch_size, 1, h, w),
+                    device=device,
+                    dtype=out_dtype,
+                )
+                return features_out, weight_sum
+            return features_out
+
+        if return_weight_sum:
+            weight_feature = torch.ones(
+                (features.shape[0], 1),
+                device=features.device,
+                dtype=features.dtype,
+            )
+            render_features = torch.cat([features, weight_feature], dim=-1)
+        else:
+            render_features = features
 
         gaussians = GaussianBatch(
             xy=positions,
             scale=scales,
             rot=rotations,
-            feat=features,
+            feat=render_features,
         )
 
         if self.overlap > 0:
@@ -106,7 +149,12 @@ class V6Rasterizer(nn.Module):
         else:
             rendered = self.renderer(gaussians, output_hw=(h, w))
         rendered = rendered.to(dtype=feat_dtype)
-        return rendered.unsqueeze(0).expand(batch_size, -1, -1, -1)
+        features_b = rendered[:feature_dim].unsqueeze(0).expand(batch_size, -1, -1, -1)
+        if return_weight_sum:
+            weight_sum = rendered[feature_dim:feature_dim + 1]
+            weight_b = weight_sum.unsqueeze(0).expand(batch_size, -1, -1, -1)
+            return features_b, weight_b
+        return features_b
 
     def _render_overlapped(
         self,
@@ -285,11 +333,12 @@ class V6Rasterizer(nn.Module):
     def _token_features(self, colors: torch.Tensor) -> torch.Tensor:
         if colors.ndim != 2:
             raise ValueError(f"canvas.colors must be (N, F); got {tuple(colors.shape)}")
-        if colors.shape[-1] == self.token_dim:
+        feature_dim = self.feature_dim
+        if colors.shape[-1] == feature_dim:
             return colors
-        if colors.shape[-1] > self.token_dim:
-            return colors[..., : self.token_dim]
-        pad = self.token_dim - colors.shape[-1]
+        if colors.shape[-1] > feature_dim:
+            return colors[..., :feature_dim]
+        pad = feature_dim - colors.shape[-1]
         return torch.nn.functional.pad(colors, (0, pad))
 
 
