@@ -40,6 +40,17 @@ Third-party components included in this product
   Licensed under the BSD-3-Clause License. See the LICENSE file in that
   directory.
 
+- AMD FidelityFX SDK 2.0.0 (oss/third_party/fidelityfx-sdk-2.0.0-mit/)
+  Copyright (c) 2025 Advanced Micro Devices, Inc.
+  Licensed under the MIT License (see docs/license.md in that directory).
+  Vendored from AMD's official GitHub repo at orphan commit
+  01446e6a74888bf349652fcf2cbf5f642d30c2bf (the original 2025-08-18 SDK
+  2.0.0 push, which contains FSR 4 HLSL operator source). AMD subsequently
+  force-pushed the v2.0.0 tag to a different commit that scrubbed FSR 4
+  source; the original MIT grant on the orphan commit remains valid per
+  standard MIT license terms (irrevocable for distributed copies). Forensic
+  provenance trail is documented in the directory's MIT-PROVENANCE.md.
+
 ------------------------------------------------------------------------------
 Independent reimplementations and prior-art references
 ------------------------------------------------------------------------------

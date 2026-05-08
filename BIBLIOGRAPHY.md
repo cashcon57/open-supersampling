@@ -162,6 +162,9 @@ How to read this file:
 **[KHR-gsplat]** Khronos (2026). *glTF KHR_gaussian_splatting extension* (ratification Q2 2026).
 > Standard interchange format adopted as the OSS canvas serialization target so trained scenes are portable across engines.
 
+**[FSR4-SDK]** AMD (2025). *AMD FidelityFX SDK 2.0.0*. Original 2025-08-18 push at commit `01446e6a74888bf349652fcf2cbf5f642d30c2bf`. <https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK>
+> AMD's first public source release of the FSR 4 ML upscaler — HLSL operator runtime (ml2code), FasterNet block, fused conv kernels, FP16 NHWC + INT8 weights, SqrSwish activation. Released under MIT, force-pushed away by AMD ~2 days later but the orphan commit remains in the official repo and the MIT grant remains irrevocable per standard MIT terms. Vendored at `oss/third_party/fidelityfx-sdk-2.0.0-mit/`; full forensic provenance in that directory's `MIT-PROVENANCE.md`. OSS uses this as: (1) measured benchmark target via the FSR 4 binary DLL bundled in the same MIT release; (2) distillation teacher for the v6.2 student model training; (3) architecture reference for designing OSS's own fused-op kernels and student backbone (independent reimplementation, not direct port).
+
 ---
 
 ## 5. Loss Functions and Training Discipline
