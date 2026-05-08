@@ -308,6 +308,37 @@ def validate_cost(cost: object, path: str, errors: list[str]) -> None:
                 validate_cost_projection(projection, f"{path}.projections.{gpu_class}", errors)
 
 
+def validate_gpu_mem_log(value: object, path: str, errors: list[str]) -> None:
+    if not isinstance(value, list):
+        add_error(errors, path, "list[[unix_ts, mb]]", value)
+        return
+    timestamps: list[float] = []
+    for index, sample in enumerate(value):
+        sample_path = f"{path}[{index}]"
+        if not isinstance(sample, list):
+            add_error(errors, sample_path, "list[unix_ts, mb]", sample)
+            continue
+        if len(sample) != 2:
+            errors.append(f"{sample_path}: expected 2 entries, got {len(sample)}")
+            continue
+        ts, mb = sample
+        if not is_finite_number(ts):
+            add_error(errors, f"{sample_path}[0]", "finite unix timestamp", ts)
+            continue
+        if float(ts) < 0:
+            errors.append(f"{sample_path}[0]: expected >= 0, got {ts}")
+            continue
+        timestamps.append(float(ts))
+        if not is_finite_number(mb):
+            add_error(errors, f"{sample_path}[1]", "finite MB value", mb)
+        elif float(mb) < 0:
+            errors.append(f"{sample_path}[1]: expected >= 0, got {mb}")
+    if timestamps != sorted(timestamps):
+        errors.append(f"{path}: expected samples sorted by unix timestamp")
+    if timestamps and max(timestamps) - min(timestamps) > 1800:
+        errors.append(f"{path}: expected 30-min sliding window, got {max(timestamps) - min(timestamps):.1f}s")
+
+
 def validate_repro_manifest_item(item: object, path: str, errors: list[str]) -> None:
     if not isinstance(item, dict):
         add_error(errors, path, "object", item)
@@ -370,6 +401,8 @@ def validate_run(run: object, index: int, errors: list[str], warnings: list[str]
                 validate_event(event, f"{path}.events[{event_index}]", errors)
     require_object_list(run, "cross_version_points", path, errors)
     require_optional_object(run, "gpu_status", path, errors)
+    if require_key(run, "gpu_mem_log", path, errors):
+        validate_gpu_mem_log(run["gpu_mem_log"], f"{path}.gpu_mem_log", errors)
     if require_key(run, "repro_manifest", path, errors):
         validate_repro_manifest(run["repro_manifest"], f"{path}.repro_manifest", errors)
     if require_key(run, "cost", path, errors):
@@ -519,6 +552,7 @@ def self_test() -> int:
                 ],
                 "cross_version_points": [],
                 "gpu_status": None,
+                "gpu_mem_log": [[1778198400, 7561], [1778198460, 7563]],
                 "repro_manifest": {
                     "1": {
                         "git_sha": "abc123",

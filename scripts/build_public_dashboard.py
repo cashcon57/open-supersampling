@@ -182,6 +182,7 @@ GPU_CLASS_PROJECTION = {
     "A100": {"seconds_per_step": 0.54, "runpod_usd_per_hour": 1.89},
     "4090": {"seconds_per_step": 0.88, "runpod_usd_per_hour": 0.69},
 }
+GPU_MEM_WINDOW_SECONDS = 30 * 60
 
 
 def utc_now_iso() -> str:
@@ -630,6 +631,49 @@ def read_gpu_status(run_dir: Path) -> dict[str, Any] | None:
     return {key: primitive_value(payload.get(key)) for key in allowed if key in payload}
 
 
+def gpu_status_sample(gpu_status: dict[str, Any] | None) -> list[int] | None:
+    if not isinstance(gpu_status, dict):
+        return None
+    used = finite_float(gpu_status.get("memory_used_mib"))
+    if used is None or used < 0:
+        return None
+    ts = row_timestamp_seconds(gpu_status)
+    if ts is None:
+        ts = _dt.datetime.now(_dt.timezone.utc).timestamp()
+    return [int(round(ts)), int(round(used))]
+
+
+def previous_gpu_mem_log(previous: dict[str, Any] | None) -> list[list[int]]:
+    if not previous or not isinstance(previous.get("gpu_mem_log"), list):
+        return []
+    samples: list[list[int]] = []
+    for item in previous["gpu_mem_log"]:
+        if not isinstance(item, list) or len(item) != 2:
+            continue
+        ts = finite_float(item[0])
+        mb = finite_float(item[1])
+        if ts is None or mb is None or ts < 0 or mb < 0:
+            continue
+        samples.append([int(round(ts)), int(round(mb))])
+    return samples
+
+
+def build_gpu_mem_log(previous: dict[str, Any] | None, gpu_status: dict[str, Any] | None) -> list[list[int]]:
+    samples = previous_gpu_mem_log(previous)
+    current = gpu_status_sample(gpu_status)
+    if current is not None:
+        samples.append(current)
+    if not samples:
+        return []
+
+    by_ts: dict[int, int] = {}
+    for ts, mb in samples:
+        by_ts[ts] = mb
+    latest_ts = max(by_ts)
+    cutoff = latest_ts - GPU_MEM_WINDOW_SECONDS
+    return [[ts, mb] for ts, mb in sorted(by_ts.items()) if ts >= cutoff]
+
+
 def read_events(run_dir: Path) -> list[Any]:
     events_file = run_dir / "events.json"
     if not events_file.exists():
@@ -695,7 +739,9 @@ def build_run(name: str, previous: dict[str, Any] | None) -> dict[str, Any] | No
         cached["label"] = label_for_run(name, config)
         cached["active"] = config["active"]
         cached["history"] = history_for_run(name, config)
-        cached["gpu_status"] = read_gpu_status(run_dir) or cached.get("gpu_status")
+        gpu_status = read_gpu_status(run_dir) or cached.get("gpu_status")
+        cached["gpu_status"] = gpu_status
+        cached["gpu_mem_log"] = build_gpu_mem_log(cached, gpu_status if isinstance(gpu_status, dict) else None)
         cached["viz_columns"] = viz_columns_for_run(name) or cached.get("viz_columns", [])
         cached["events"] = events if events else cached.get("events", [])
         cached["repro_manifest"] = repro_manifest or cached.get("repro_manifest", {})
@@ -711,6 +757,7 @@ def build_run(name: str, previous: dict[str, Any] | None) -> dict[str, Any] | No
 
     if not metrics and not scores and not viz_pngs:
         max_target_steps = max_steps_for_run(name, [], previous)
+        gpu_status = read_gpu_status(run_dir)
         return {
             "name": name,
             "label": label_for_run(name, config),
@@ -725,7 +772,8 @@ def build_run(name: str, previous: dict[str, Any] | None) -> dict[str, Any] | No
             "events": events,
             "repro_manifest": repro_manifest,
             "max_target_steps": max_target_steps,
-            "gpu_status": read_gpu_status(run_dir),
+            "gpu_status": gpu_status,
+            "gpu_mem_log": build_gpu_mem_log(previous, gpu_status),
             "cross_version_points": cross_version_points_for_run(name),
             "cost": build_cost([], 0, max_target_steps),
         }
@@ -736,6 +784,7 @@ def build_run(name: str, previous: dict[str, Any] | None) -> dict[str, Any] | No
     viz_columns = viz_columns_for_run(name)
     max_target_steps = max_steps_for_run(name, metrics, previous)
 
+    gpu_status = read_gpu_status(run_dir)
     return {
         "name": name,
         "label": label_for_run(name, config),
@@ -750,7 +799,8 @@ def build_run(name: str, previous: dict[str, Any] | None) -> dict[str, Any] | No
         "events": events,
         "repro_manifest": repro_manifest,
         "max_target_steps": max_target_steps,
-        "gpu_status": read_gpu_status(run_dir),
+        "gpu_status": gpu_status,
+        "gpu_mem_log": build_gpu_mem_log(previous, gpu_status),
         "cross_version_points": cross_version_points_for_run(name),
         "cost": build_cost(metrics, latest_step, max_target_steps),
     }
@@ -1071,6 +1121,8 @@ const colors = {
   lpips: "#fb7185",
   psnr: "#34d399",
   bicubic: "#94a3b8",
+  gpuMem: "#22d3ee",
+  gpuLimit: "#f87171",
 };
 
 function escapeHtml(value) {
@@ -1181,6 +1233,50 @@ function renderLossChart(canvas, run) {
   return new Chart(canvas, { type: "line", data: { datasets }, options: chartOptions({ yTitle: "total loss", componentAxis: true }) });
 }
 
+function gpuMemoryRows(run) {
+  return (run?.gpu_mem_log || [])
+    .map((sample) => {
+      if (!Array.isArray(sample) || sample.length < 2) return null;
+      const ts = Number(sample[0]);
+      const mb = Number(sample[1]);
+      if (!Number.isFinite(ts) || !Number.isFinite(mb)) return null;
+      return { x: ts, y: mb };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.x - b.x);
+}
+
+function gpuMemoryExceeded(run) {
+  const total = Number(run?.gpu_status?.memory_total_mib || 0);
+  if (!Number.isFinite(total) || total <= 0) return false;
+  return gpuMemoryRows(run).some((point) => point.y > total * 0.95);
+}
+
+function renderGpuMemoryChart(canvas, run) {
+  const rows = gpuMemoryRows(run);
+  if (!rows.length) return null;
+  const total = Number(run?.gpu_status?.memory_total_mib || 0);
+  const threshold = Number.isFinite(total) && total > 0 ? total * 0.95 : null;
+  const alert = gpuMemoryExceeded(run);
+  const datasets = [
+    { label: "memory used", data: rows, borderColor: alert ? colors.gpuLimit : colors.gpuMem, backgroundColor: alert ? colors.gpuLimit : colors.gpuMem, pointRadius: rows.length >= 12 ? 0 : 2, borderWidth: 2, tension: 0 },
+  ];
+  if (threshold !== null) {
+    datasets.push({ label: "95% total", data: [{ x: rows[0].x, y: threshold }, { x: rows[rows.length - 1].x, y: threshold }], borderColor: colors.gpuLimit, backgroundColor: colors.gpuLimit, pointRadius: 0, borderWidth: 1.5, borderDash: [5, 4], tension: 0 });
+  }
+  const options = chartOptions({ yTitle: "GPU memory (MB)" });
+  options.scales.x.title.text = "time";
+  options.scales.x.ticks.callback = (value) => {
+    const seconds = Number(value);
+    if (!Number.isFinite(seconds)) return "";
+    return new Date(seconds * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  };
+  if (threshold !== null) {
+    options.scales.y.suggestedMax = Math.max(threshold, ...rows.map((point) => point.y)) * 1.05;
+  }
+  return new Chart(canvas, { type: "line", data: { datasets }, options });
+}
+
 function renderScoreTable(host, run) {
   const rows = (run.score_log || []).slice(-6).reverse();
   if (!rows.length) {
@@ -1268,12 +1364,26 @@ function renderRun(run, index) {
   const note = history.note ? `<p class="rounded border border-amber-900/60 bg-amber-950/20 px-4 py-3 text-sm text-amber-100">${escapeHtml(history.note)}</p>` : "";
   const gpu = run.active ? gpuPanelHtml(run) : "";
   const chartId = `loss-chart-${index}`;
+  const gpuMemChartId = `gpu-mem-chart-${index}`;
   const scoreId = `score-table-${index}`;
   const vizId = `viz-strip-${index}`;
   const rows = run.loss_curve || [];
+  const gpuMemRows = gpuMemoryRows(run);
+  const gpuMemAlert = gpuMemoryExceeded(run);
   const chartBody = rows.length
     ? `<div class="chart-wrap mt-3"><canvas id="${chartId}"></canvas></div>`
     : `<p class="mt-3 rounded border border-zinc-800 bg-zinc-950/40 px-4 py-5 text-sm text-zinc-400" data-muted-surface data-subtext>No loss metrics published yet.</p>`;
+  const gpuMemChartBody = gpuMemRows.length
+    ? `<div class="chart-wrap mt-3"><canvas id="${gpuMemChartId}"></canvas></div>`
+    : `<p class="mt-3 rounded border border-zinc-800 bg-zinc-950/40 px-4 py-5 text-sm text-zinc-400" data-muted-surface data-subtext>No GPU memory samples published yet.</p>`;
+  const gpuMemCard = run.active ? `<article class="min-w-0 rounded-md border ${gpuMemAlert ? "border-red-700 bg-red-950/20" : "border-zinc-800 bg-zinc-950/25"} p-4" data-muted-surface data-gpu-mem-card>
+          <div class="flex items-center justify-between gap-3">
+            <h3 class="text-base font-semibold text-zinc-50" data-text>GPU memory (last 30 min)</h3>
+            <span class="text-sm ${gpuMemAlert ? "text-red-300" : "text-zinc-500"}" data-dim>${gpuMemRows.length} points</span>
+          </div>
+          <div class="mt-1 text-xs ${gpuMemAlert ? "text-red-200" : "text-zinc-500"}" data-dim>${gpuMemAlert ? "Above 95% of total memory during this window." : "MB used on the training host."}</div>
+          ${gpuMemChartBody}
+        </article>` : "";
   return `<details ${open} class="rounded-md border ${activeClass}" data-surface>
     <summary class="flex cursor-pointer items-start gap-3 p-4">
       <span class="summary-chevron mt-1 text-zinc-500 transition-transform">›</span>
@@ -1293,6 +1403,7 @@ function renderRun(run, index) {
       <div class="flex min-w-0 flex-col gap-4">
         <div class="grid min-w-0 gap-3 sm:grid-cols-3">${headline}</div>
         ${gpu}
+        ${gpuMemCard}
         ${note}
         <article class="min-w-0 rounded-md border border-zinc-800 bg-zinc-950/25 p-4" data-muted-surface>
           <div class="flex items-center justify-between gap-3">
@@ -1328,6 +1439,11 @@ function renderRuns(data) {
     const canvas = document.getElementById(`loss-chart-${index}`);
     if (canvas) {
       const chart = renderLossChart(canvas, run);
+      if (chart) charts.push(chart);
+    }
+    const gpuMemCanvas = document.getElementById(`gpu-mem-chart-${index}`);
+    if (gpuMemCanvas) {
+      const chart = renderGpuMemoryChart(gpuMemCanvas, run);
       if (chart) charts.push(chart);
     }
     renderScoreTable(document.getElementById(`score-table-${index}`), run);

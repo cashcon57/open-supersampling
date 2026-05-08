@@ -16,6 +16,8 @@ const colors = {
   nvidia: "#8cffc1",
   amd: "#ff7b7b",
   intel: "#7dd3fc",
+  gpuMem: "#22d3ee",
+  gpuLimit: "#f87171",
   ossPoint: "#f4f4f5",
 };
 
@@ -348,6 +350,65 @@ function buildPsnrHeldOut(canvasEl, data, opts = {}) {
   return createChart(canvasEl, { type: "line", data: { datasets }, options: applyEmbedCrowdingRules(options, "psnr-held-out", opts) });
 }
 
+function gpuMemoryRows(run) {
+  return (run?.gpu_mem_log || [])
+    .map((sample) => {
+      if (!Array.isArray(sample) || sample.length < 2) return null;
+      const ts = Number(sample[0]);
+      const mb = Number(sample[1]);
+      if (!Number.isFinite(ts) || !Number.isFinite(mb)) return null;
+      return { x: ts, y: mb };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.x - b.x);
+}
+
+function gpuMemoryExceeded(run) {
+  const total = Number(run?.gpu_status?.memory_total_mib || 0);
+  if (!Number.isFinite(total) || total <= 0) return false;
+  return gpuMemoryRows(run).some((point) => point.y > total * 0.95);
+}
+
+function buildGpuMemory(canvasEl, data, opts = {}) {
+  const run = runForOptions(data, opts);
+  if (!run) throw new Error("run not found");
+  const rows = gpuMemoryRows(run);
+  if (!rows.length) throw new Error("no GPU memory points for run");
+  const total = Number(run?.gpu_status?.memory_total_mib || 0);
+  const threshold = Number.isFinite(total) && total > 0 ? total * 0.95 : null;
+  const alert = gpuMemoryExceeded(run);
+  const datasets = [
+    { label: "memory used", data: rows, borderColor: alert ? colors.gpuLimit : colors.gpuMem, backgroundColor: alert ? colors.gpuLimit : colors.gpuMem, pointRadius: rows.length >= 12 ? 0 : 2, pointHitRadius: 6, pointHoverRadius: 4, borderWidth: 2, tension: 0 },
+  ];
+  if (threshold !== null) {
+    datasets.push({ label: "95% total", data: [{ x: rows[0].x, y: threshold }, { x: rows[rows.length - 1].x, y: threshold }], borderColor: colors.gpuLimit, backgroundColor: colors.gpuLimit, pointRadius: 0, pointHitRadius: 6, borderWidth: 1.5, borderDash: [5, 4], tension: 0 });
+  }
+  const options = chartOptions({ yTitle: "GPU memory (MB)" }, opts);
+  options.scales.x.title.text = "time";
+  options.scales.x.ticks.callback = (value) => {
+    const seconds = Number(value);
+    if (!Number.isFinite(seconds)) return "";
+    return new Date(seconds * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  };
+  if (threshold !== null) {
+    options.scales.y.suggestedMax = Math.max(threshold, ...rows.map((point) => point.y)) * 1.05;
+  }
+  options.plugins.tooltip = {
+    mode: "point",
+    intersect: true,
+    callbacks: {
+      title(items) {
+        const seconds = Number(items[0]?.parsed?.x);
+        return Number.isFinite(seconds) ? new Date(seconds * 1000).toLocaleTimeString() : "";
+      },
+      label(item) {
+        return `${item.dataset.label}: ${fmtNumber(item.parsed.y, 0)} MB`;
+      },
+    },
+  };
+  return createChart(canvasEl, { type: "line", data: { datasets }, options: applyEmbedCrowdingRules(options, "gpu-mem", opts) });
+}
+
 function normalizedComparisonValue(value) {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : null;
@@ -625,6 +686,8 @@ export function buildChartById(chartId, canvasEl, data, opts = {}) {
     case "psnr-held-out":
     case "lpips-held-out":
       return buildPsnrHeldOut(canvasEl, data, opts);
+    case "gpu-mem":
+      return buildGpuMemory(canvasEl, data, opts);
     case "score-progression":
     case "cross-version-aggregate":
     case "cross-version-psnr":

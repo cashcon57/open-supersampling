@@ -1524,6 +1524,8 @@ const colors = {
   nvidia: "#8cffc1",
   amd: "#ff7b7b",
   intel: "#7dd3fc",
+  gpuMem: "#22d3ee",
+  gpuLimit: "#f87171",
   ossPoint: "#f4f4f5",
 };
 
@@ -1535,6 +1537,7 @@ const INFO_COPY = {
   "held-out-psnr": "Image sharpness on a fixed test set the model NEVER trained on (TartanAir oldtown, 64 frames). This is the real comparison number; higher = better. Dashed lines for DLSS/FSR/XeSS are public-source estimates, not measured on our test data.",
   "held-out-lpips": "How real the output looks on a fixed test set the model NEVER trained on. Lower = better. Dashed competitor lines are public-source estimates, not measured on our data.",
   gpu: "Live GPU usage on the training machine. High utilization = working hard. High memory = normal (model sized to fit).",
+  "gpu-mem": "GPU memory used by the active training host over the last 30 minutes. The red threshold marks 95% of total memory.",
   cost: "Local cost uses measured or estimated 3080 Ti wall-clock, 400 W board power, and OSS_KWH_USD (default $0.15/kWh). Cloud projection extrapolates the current loss trend to DLSS 4-class quality.",
   "bad-data": "Off by default. Hides runs that aren't apples-to-apples with the current models — different test sets, failure modes. Toggle on for transparency.",
   "v4-two-points": "v4 was the first single-frame model. It looks fine on its training data but fails badly when you change the content (~22 dB cliff). v5 and v6 were designed to NOT do this.",
@@ -1689,6 +1692,7 @@ const CHART_SLUGS = new Set([
   "lpips-live",
   "psnr-held-out",
   "lpips-held-out",
+  "gpu-mem",
   "cross-version-psnr",
   "cross-version-lpips",
 ]);
@@ -3050,6 +3054,7 @@ function chartSlugForId(chartId) {
   if (/^psnr-chart-\d+$/.test(chartId)) return "psnr-live";
   if (/^lpips-chart-\d+$/.test(chartId)) return "lpips-live";
   if (/^heldout-chart-\d+$/.test(chartId)) return "psnr-held-out";
+  if (/^gpu-mem-chart-\d+$/.test(chartId)) return "gpu-mem";
   if (chartId === "cross-version-psnr-chart") return "cross-version-psnr";
   if (chartId === "cross-version-lpips-chart") return "cross-version-lpips";
   return chartId.replace(/-chart(?:-\d+)?$/, "");
@@ -4438,6 +4443,86 @@ function renderHeldoutChart(canvas, run) {
   return bindChartControls(new Chart(canvas, { type: "line", data: { datasets }, options }), canvas);
 }
 
+function gpuMemoryRows(run) {
+  return (run?.gpu_mem_log || [])
+    .map((sample) => {
+      if (!Array.isArray(sample) || sample.length < 2) return null;
+      const ts = Number(sample[0]);
+      const mb = Number(sample[1]);
+      if (!Number.isFinite(ts) || !Number.isFinite(mb)) return null;
+      return { x: ts, y: mb };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.x - b.x);
+}
+
+function gpuMemoryExceeded(run) {
+  const total = Number(run?.gpu_status?.memory_total_mib || 0);
+  if (!Number.isFinite(total) || total <= 0) return false;
+  const threshold = total * 0.95;
+  return gpuMemoryRows(run).some((point) => point.y > threshold);
+}
+
+function renderGpuMemoryChart(canvas, run) {
+  const rows = gpuMemoryRows(run);
+  if (!rows.length) return null;
+  const total = Number(run?.gpu_status?.memory_total_mib || 0);
+  const threshold = Number.isFinite(total) && total > 0 ? total * 0.95 : null;
+  const datasets = [
+    {
+      label: "memory used",
+      data: rows,
+      borderColor: gpuMemoryExceeded(run) ? colors.gpuLimit : colors.gpuMem,
+      backgroundColor: gpuMemoryExceeded(run) ? colors.gpuLimit : colors.gpuMem,
+      pointRadius: rows.length >= 12 ? 0 : 2,
+      pointHitRadius: 6,
+      pointHoverRadius: 4,
+      borderWidth: 2,
+      tension: 0,
+    },
+  ];
+  if (threshold !== null) {
+    datasets.push({
+      label: "95% total",
+      data: [
+        { x: rows[0].x, y: threshold },
+        { x: rows[rows.length - 1].x, y: threshold },
+      ],
+      borderColor: colors.gpuLimit,
+      backgroundColor: colors.gpuLimit,
+      pointRadius: 0,
+      pointHitRadius: 6,
+      borderWidth: 1.5,
+      borderDash: [5, 4],
+      tension: 0,
+    });
+  }
+  const options = chartOptions({ yTitle: "GPU memory (MB)" });
+  options.scales.x.title.text = "time";
+  options.scales.x.ticks.callback = (value) => {
+    const seconds = Number(value);
+    if (!Number.isFinite(seconds)) return "";
+    return new Date(seconds * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  };
+  if (threshold !== null) {
+    options.scales.y.suggestedMax = Math.max(threshold, ...rows.map((point) => point.y)) * 1.05;
+  }
+  options.plugins.tooltip = {
+    mode: "point",
+    intersect: true,
+    callbacks: {
+      title(items) {
+        const seconds = Number(items[0]?.parsed?.x);
+        return Number.isFinite(seconds) ? new Date(seconds * 1000).toLocaleTimeString() : "";
+      },
+      label(item) {
+        return `${item.dataset.label}: ${fmtNumber(item.parsed.y, 0)} MB`;
+      },
+    },
+  };
+  return bindChartControls(new Chart(canvas, { type: "line", data: { datasets }, options }), canvas);
+}
+
 function renderScoreTable(host, run) {
   const comparisonRows = run.cross_version_points || [];
   if (comparisonRows.length) {
@@ -5375,9 +5460,12 @@ function renderRun(run, index, openByRun = new Map()) {
   const psnrChartId = `psnr-chart-${index}`;
   const lpipsChartId = `lpips-chart-${index}`;
   const heldoutChartId = `heldout-chart-${index}`;
+  const gpuMemChartId = `gpu-mem-chart-${index}`;
   const scoreId = `score-table-${index}`;
   const vizId = `viz-strip-${index}`;
   const rows = run.loss_curve || [];
+  const gpuMemRows = gpuMemoryRows(run);
+  const gpuMemAlert = gpuMemoryExceeded(run);
   const psnrTitle = trainingPsnrTitle(rows);
   const chartBody = rows.length
     ? `<div class="chart-wrap mt-3"><canvas id="${chartId}"></canvas></div>`
@@ -5394,6 +5482,17 @@ function renderRun(run, index, openByRun = new Map()) {
   const heldoutChartBody = (run.score_log || []).length
     ? `<div class="chart-wrap mt-3"><canvas id="${heldoutChartId}"></canvas></div>`
     : `<p class="mt-3 rounded border border-zinc-800 bg-zinc-950/40 px-4 py-5 text-sm text-zinc-400" data-muted-surface data-subtext>No held-out score_log.json rows published for this run.</p>`;
+  const gpuMemChartBody = gpuMemRows.length
+    ? `<div class="chart-wrap mt-3"><canvas id="${gpuMemChartId}"></canvas></div>`
+    : `<p class="mt-3 rounded border border-zinc-800 bg-zinc-950/40 px-4 py-5 text-sm text-zinc-400" data-muted-surface data-subtext>No GPU memory samples published yet.</p>`;
+  const gpuMemCard = run.active ? `<article class="chart-card min-w-0 rounded-md border ${gpuMemAlert ? "border-red-700 bg-red-950/20" : "border-zinc-800 bg-zinc-950/25"} p-4" ${chartCardAttrs(gpuMemChartId)} data-muted-surface data-gpu-mem-card>
+          <div class="flex items-center justify-between gap-3">
+            <h3 class="title-with-info text-base font-semibold text-zinc-50" data-text><span>GPU memory (last 30 min)</span>${infoButtonHtml("gpu-mem")}</h3>
+            <span class="text-sm ${gpuMemAlert ? "text-red-300" : "text-zinc-500"}" data-dim>${gpuMemRows.length} points</span>
+          </div>
+          <div class="metric-direction" data-direction="${gpuMemAlert ? "lower" : "neutral"}">${gpuMemAlert ? "Above 95% of total memory during this window." : "MB used on the training host."}</div>
+          ${gpuMemChartBody}
+        </article>` : "";
   return `<details ${open} class="rounded-md border ${activeClass}" data-run-name="${escapeHtml(run.name)}" data-surface>
     <summary class="flex cursor-pointer items-start gap-3 p-4">
       <span class="summary-chevron mt-1 text-zinc-500 transition-transform">›</span>
@@ -5418,6 +5517,7 @@ function renderRun(run, index, openByRun = new Map()) {
         ${progress}
         ${cost}
         ${gpu}
+        ${gpuMemCard}
         ${note}
         <article class="chart-card min-w-0 rounded-md border border-zinc-800 bg-zinc-950/25 p-4" ${chartCardAttrs(chartId)} data-muted-surface>
           <div class="flex items-center justify-between gap-3">
@@ -5504,6 +5604,11 @@ function renderRuns(data) {
     const heldoutCanvas = document.getElementById(`heldout-chart-${index}`);
     if (heldoutCanvas) {
       const chart = renderHeldoutChart(heldoutCanvas, run);
+      if (chart) charts.push(chart);
+    }
+    const gpuMemCanvas = document.getElementById(`gpu-mem-chart-${index}`);
+    if (gpuMemCanvas) {
+      const chart = renderGpuMemoryChart(gpuMemCanvas, run);
       if (chart) charts.push(chart);
     }
     renderScoreTable(document.getElementById(`score-table-${index}`), run);
