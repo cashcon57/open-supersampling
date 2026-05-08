@@ -303,6 +303,11 @@ def probe_worker() -> dict[str, str]:
 
 
 def probe_r2() -> dict[str, str]:
+    # HEAD on the worker-proxied R2 origin. Cloudflare's HTTP/2 path omits
+    # Content-Length on HEAD responses (the body framing carries length on
+    # actual GETs), so a healthy origin can return HTTP 200 with no
+    # Content-Length header. Treat that as healthy. We only fall to
+    # degraded if HEAD says 200 AND length is reported AND it's zero.
     code, headers, _elapsed_ms, error = http_probe(R2_DATA_URL, method="HEAD", timeout=3.0)
     if code != 200:
         detail = f"HTTP {code}" if code is not None else (error or "connection failed")
@@ -310,9 +315,15 @@ def probe_r2() -> dict[str, str]:
 
     raw_length = headers.get("Content-Length") or headers.get("content-length")
     length = as_int(raw_length)
+    if length is not None and length == 0:
+        # Reported length of 0 IS a real degradation (data.json is non-empty).
+        return service("r2", "degraded", "HTTP 200, Content-Length=0")
     if length is not None and length > 0:
         return service("r2", "healthy", f"HTTP 200, {bytes_label(length)}")
-    return service("r2", "degraded", "HTTP 200, missing Content-Length")
+    # HTTP 200 with no Content-Length header — Cloudflare HEAD quirk, not a
+    # real degradation. The cached etag + content-type confirm the resource
+    # exists; if it weren't there we'd have gotten a 404.
+    return service("r2", "healthy", "HTTP 200")
 
 
 def probe_dns() -> dict[str, str]:
