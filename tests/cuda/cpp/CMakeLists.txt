@@ -33,6 +33,7 @@ FetchContent_MakeAvailable(googletest)
 add_executable(test_oss_cuda
   test_preprocess.cu
   test_build_pairs.cu
+  test_rasterize.cu
   "${OSS_CUDA_SRC}/rasterizer_fwd.cu"
 )
 
@@ -41,10 +42,36 @@ target_include_directories(test_oss_cuda PRIVATE
   "${OSS_CUDA_SRC}" ${OSS_CUDA_EXTRA_INCLUDES}
 )
 target_compile_options(test_oss_cuda PRIVATE
-  $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr --expt-extended-lambda -lineinfo>
+  $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr --expt-extended-lambda -allow-unsupported-compiler -ftz=true -prec-div=false -lineinfo>
 )
 target_link_libraries(test_oss_cuda PRIVATE GTest::gtest_main CUDA::cudart)
 set_target_properties(test_oss_cuda PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
 
 include(GoogleTest)
 gtest_discover_tests(test_oss_cuda)
+
+option(OSS_ENABLE_NVBENCH "Build nvbench rasterizer benchmark" ON)
+if(OSS_ENABLE_NVBENCH AND CMAKE_VERSION VERSION_GREATER_EQUAL 3.30.4)
+  FetchContent_Declare(
+    nvbench
+    GIT_REPOSITORY https://github.com/NVIDIA/nvbench.git
+    GIT_TAG main
+  )
+  FetchContent_MakeAvailable(nvbench)
+
+  add_executable(bench_oss_cuda
+    bench_rasterize.cu
+    "${OSS_CUDA_SRC}/rasterizer_fwd.cu"
+  )
+  target_compile_definitions(bench_oss_cuda PRIVATE OSS_CUDA_KERNELS_ONLY)
+  target_include_directories(bench_oss_cuda PRIVATE
+    "${OSS_CUDA_SRC}" ${OSS_CUDA_EXTRA_INCLUDES}
+  )
+  target_compile_options(bench_oss_cuda PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr --expt-extended-lambda -allow-unsupported-compiler -ftz=true -prec-div=false -lineinfo>
+  )
+  target_link_libraries(bench_oss_cuda PRIVATE nvbench::main CUDA::cudart)
+  set_target_properties(bench_oss_cuda PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+elseif(OSS_ENABLE_NVBENCH)
+  message(WARNING "Skipping nvbench target: current nvbench requires CMake >= 3.30.4")
+endif()

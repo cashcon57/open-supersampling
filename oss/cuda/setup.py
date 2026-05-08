@@ -6,6 +6,9 @@ from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 NVCC_FLAGS = [
     "-O3", "-std=c++17",
     "--expt-relaxed-constexpr", "--expt-extended-lambda",
+    "-allow-unsupported-compiler",
+    "-ftz=true",
+    "-prec-div=false",
     "-lineinfo",
     "-gencode=arch=compute_80,code=sm_80",
     "-gencode=arch=compute_86,code=sm_86",
@@ -26,7 +29,7 @@ if CUDA_HOME:
 
 setup(
     name="oss_cuda",
-    version="0.2.0+phase2b",
+    version="0.2.0+phase2c",
     packages=["oss_cuda"],
     ext_modules=[
         CUDAExtension(

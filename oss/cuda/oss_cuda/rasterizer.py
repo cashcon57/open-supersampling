@@ -1,7 +1,8 @@
 """
 OSS custom rasterizer -- autograd Function wrapper around the C++ extension.
 
-Phase 1: forward delegates to oss.gaussian.renderer.rasterizer.Rasterizer._render_reference.
+Phase 2c: forward calls the native CUDA rasterizer. The Python reference is
+kept as an OSS_CUDA_RASTER_DEBUG=1 fallback through Phase 2d.
 Backward not yet implemented -- raises NotImplementedError.
 """
 
@@ -12,7 +13,7 @@ from importlib import import_module
 import torch
 from torch.autograd import Function
 
-# Phase 1 import gate. The compiled extension exposes _C.rasterize_forward.
+# Import gate. The compiled extension exposes _C.rasterize_forward.
 try:
     from . import _C
 
@@ -27,7 +28,7 @@ except ImportError:
 
 
 def _phase1_ref_forward(xy, scale, rot, feat, h, w, tile_size, topk_norm):
-    """Called from C++ binding in Phase 1 only."""
+    """Called from C++ binding only when OSS_CUDA_RASTER_DEBUG=1."""
     from oss.gaussian.renderer.rasterizer import GaussianBatch, Rasterizer
 
     batch = GaussianBatch(xy=xy, scale=scale, rot=rot, feat=feat)
@@ -44,6 +45,8 @@ class _RasterizeGaussians(Function):
                 "Run: pip install -e ./oss/cuda"
             )
         out = _C.rasterize_forward(xy, scale, rot, feat, h, w, tile_size, topk_norm)
+        # TODO(Phase 3): save sorted ids, tile offsets, conics, and weight_sum
+        # once the binding returns the backward scratch tuple.
         ctx.save_for_backward(xy, scale, rot, feat)
         ctx.h, ctx.w = int(h), int(w)
         ctx.tile_size, ctx.topk_norm = int(tile_size), bool(topk_norm)
@@ -52,11 +55,11 @@ class _RasterizeGaussians(Function):
     @staticmethod
     def backward(ctx, grad_out):
         raise NotImplementedError(
-            "Rasterizer backward is not implemented in Phase 1. "
+            "Rasterizer backward is not implemented in Phase 2c. "
             "Use OSS_USE_CUDA_KERNELS=0 (default) for training."
         )
 
 
 def rasterize_gaussians(xy, scale, rot, feat, h, w, tile_size=16, topk_norm=True):
-    """Phase-1 stub: forward only, calls Python reference."""
+    """Forward-only CUDA rasterizer wrapper."""
     return _RasterizeGaussians.apply(xy, scale, rot, feat, h, w, tile_size, topk_norm)

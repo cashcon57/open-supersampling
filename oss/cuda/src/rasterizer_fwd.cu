@@ -105,6 +105,104 @@ __global__ void build_tile_pairs(
     }
 }
 
+__global__ void build_full_tile_pairs(
+    int N,
+    int num_tiles,
+    int* __restrict__ gid_out,
+    int* __restrict__ tile_offsets_out
+) {
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    const int total_pairs = N * num_tiles;
+    if (idx < total_pairs) {
+        gid_out[idx] = idx % N;
+    }
+    if (idx <= num_tiles) {
+        tile_offsets_out[idx] = idx * N;
+    }
+}
+
+__global__ __launch_bounds__(OSS_RASTER_BLOCK, 4)
+void rasterize_sum(
+    int H, int W, int num_tiles_x, int num_tiles_y,
+    int F_chunk, int F_offset, int F_total,
+    const int*    __restrict__ gaussian_idx_sorted,
+    const int*    __restrict__ tile_offsets,
+    const float2* __restrict__ xy,
+    const float3* __restrict__ conic,
+    const float*  __restrict__ feat,
+    float*        __restrict__ out
+) {
+    const int tile_x = static_cast<int>(blockIdx.x);
+    const int tile_y = static_cast<int>(blockIdx.y);
+    if (tile_x >= num_tiles_x || tile_y >= num_tiles_y) {
+        return;
+    }
+
+    const int lane = static_cast<int>(threadIdx.y) * OSS_TILE_SIZE + static_cast<int>(threadIdx.x);
+    const int px = tile_x * OSS_TILE_SIZE + static_cast<int>(threadIdx.x);
+    const int py = tile_y * OSS_TILE_SIZE + static_cast<int>(threadIdx.y);
+    const bool inside = px < W && py < H;
+    const int tile_id = tile_y * num_tiles_x + tile_x;
+
+    __shared__ int id_batch[OSS_RASTER_BLOCK];
+    __shared__ float2 xy_batch[OSS_RASTER_BLOCK];
+    __shared__ float3 conic_batch[OSS_RASTER_BLOCK];
+
+    float pix_out[OSS_F_CHUNK];
+#pragma unroll
+    for (int c = 0; c < OSS_F_CHUNK; ++c) {
+        pix_out[c] = 0.0f;
+    }
+
+    const int start = tile_offsets[tile_id];
+    const int end = tile_offsets[tile_id + 1];
+    for (int batch_start = start; batch_start < end; batch_start += OSS_RASTER_BLOCK) {
+        const int load_idx = batch_start + lane;
+        if (load_idx < end) {
+            const int gid = gaussian_idx_sorted[load_idx];
+            id_batch[lane] = gid;
+            xy_batch[lane] = xy[gid];
+            conic_batch[lane] = conic[gid];
+        }
+        __syncthreads();
+
+        const int remaining = end - batch_start;
+        const int batch_count = remaining < OSS_RASTER_BLOCK ? remaining : OSS_RASTER_BLOCK;
+        if (inside) {
+            for (int t = 0; t < batch_count; ++t) {
+                const int gid = id_batch[t];
+                const float2 center = xy_batch[t];
+                const float3 k = conic_batch[t];
+                const float dx = static_cast<float>(px) - center.x;
+                const float dy = static_cast<float>(py) - center.y;
+                const float q = k.x * dx * dx + 2.0f * k.y * dx * dy + k.z * dy * dy;
+                if (!isfinite(q) || q < 0.0f) {
+                    continue;
+                }
+                const float weight = expf(-0.5f * q);
+                const int feat_base = gid * F_total + F_offset;
+#pragma unroll
+                for (int c = 0; c < OSS_F_CHUNK; ++c) {
+                    if (c < F_chunk) {
+                        pix_out[c] += weight * feat[feat_base + c];
+                    }
+                }
+            }
+        }
+        __syncthreads();
+    }
+
+    if (inside) {
+        const int pix_id = py * W + px;
+#pragma unroll
+        for (int c = 0; c < OSS_F_CHUNK; ++c) {
+            if (c < F_chunk) {
+                out[(F_offset + c) * H * W + pix_id] = pix_out[c];
+            }
+        }
+    }
+}
+
 #ifndef OSS_CUDA_KERNELS_ONLY
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> preprocess_gaussians_cuda(
     torch::Tensor xy,
@@ -257,5 +355,114 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, int64_t> pair_constructi
     );
 
     return std::make_tuple(gid_sorted, tile_offsets, conic, total_pairs);
+}
+
+torch::Tensor rasterize_forward_cuda(
+    torch::Tensor xy,
+    torch::Tensor scale,
+    torch::Tensor rot,
+    torch::Tensor feat,
+    int64_t H,
+    int64_t W,
+    int64_t tile_size,
+    bool topk_norm
+) {
+    (void)topk_norm;
+    check_preprocess_input(xy, "xy");
+    check_preprocess_input(scale, "scale");
+    check_preprocess_input(rot, "rot");
+    check_preprocess_input(feat, "feat");
+    TORCH_CHECK(xy.dim() == 2 && xy.size(1) == 2, "xy must be (N,2)");
+    TORCH_CHECK(scale.dim() == 2 && scale.size(1) == 2, "scale must be (N,2)");
+    TORCH_CHECK(rot.dim() == 1, "rot must be (N,)");
+    TORCH_CHECK(feat.dim() == 2, "feat must be (N,F)");
+    TORCH_CHECK(xy.size(0) == scale.size(0), "xy/scale N mismatch");
+    TORCH_CHECK(xy.size(0) == rot.size(0), "xy/rot N mismatch");
+    TORCH_CHECK(xy.size(0) == feat.size(0), "xy/feat N mismatch");
+    TORCH_CHECK(H >= 0 && W >= 0, "H and W must be non-negative");
+    TORCH_CHECK(tile_size == OSS_TILE_SIZE, "tile_size must be 16");
+
+    const int64_t N64 = xy.size(0);
+    const int64_t F64 = feat.size(1);
+    TORCH_CHECK(N64 <= std::numeric_limits<int>::max(), "N exceeds int32 range");
+    TORCH_CHECK(F64 <= 64, "F must be <= 64");
+    TORCH_CHECK(F64 >= 0, "F must be non-negative");
+    TORCH_CHECK(H <= std::numeric_limits<int>::max(), "H exceeds int32 range");
+    TORCH_CHECK(W <= std::numeric_limits<int>::max(), "W exceeds int32 range");
+
+    const int N = static_cast<int>(N64);
+    const int F_total = static_cast<int>(F64);
+    const int h = static_cast<int>(H);
+    const int w = static_cast<int>(W);
+    const int num_tiles_x = (w + OSS_TILE_SIZE - 1) / OSS_TILE_SIZE;
+    const int num_tiles_y = (h + OSS_TILE_SIZE - 1) / OSS_TILE_SIZE;
+    const int64_t num_tiles = static_cast<int64_t>(num_tiles_x) * num_tiles_y;
+    TORCH_CHECK(num_tiles <= std::numeric_limits<int>::max(), "number of tiles exceeds int32 range");
+    TORCH_CHECK(
+        N64 == 0 || num_tiles <= std::numeric_limits<int>::max() / N64,
+        "full-frame raster pair count exceeds int32 range"
+    );
+
+    auto out = torch::zeros({F_total, h, w}, feat.options().dtype(torch::kFloat32));
+    if (N == 0 || F_total == 0 || h == 0 || w == 0) {
+        return out;
+    }
+
+    auto f32_options = xy.options().dtype(torch::kFloat32);
+    auto i32_options = xy.options().dtype(torch::kInt32);
+    torch::Tensor conic = torch::empty({N, 3}, f32_options);
+    torch::Tensor aabb = torch::empty({N, 4}, i32_options);
+    torch::Tensor pair_count = torch::empty({N}, i32_options);
+
+    const dim3 preprocess_block(OSS_PREPROCESS_BLOCK);
+    const dim3 preprocess_grid((N + OSS_PREPROCESS_BLOCK - 1) / OSS_PREPROCESS_BLOCK);
+    preprocess_gaussians<<<preprocess_grid, preprocess_block>>>(
+        N, h, w, OSS_TILE_SIZE, num_tiles_x, num_tiles_y,
+        reinterpret_cast<const float2*>(xy.data_ptr<float>()),
+        reinterpret_cast<const float2*>(scale.data_ptr<float>()),
+        rot.data_ptr<float>(),
+        reinterpret_cast<float3*>(conic.data_ptr<float>()),
+        reinterpret_cast<int4*>(aabb.data_ptr<int>()),
+        pair_count.data_ptr<int>()
+    );
+    C10_CUDA_CHECK(cudaGetLastError());
+
+    // The Phase 2c reference sums the full Gaussian tail, while the Phase 2b
+    // pair-construction helper keeps the 3-sigma tile AABB contract. Use a
+    // full-frame tile map here so forward equivalence remains exact.
+    const int64_t total_pairs = static_cast<int64_t>(N) * num_tiles;
+    torch::Tensor gid_sorted = torch::empty({total_pairs}, i32_options);
+    torch::Tensor tile_offsets = torch::empty({num_tiles + 1}, i32_options);
+    const int full_pairs_threads = static_cast<int>(std::max(total_pairs, num_tiles + 1));
+    const dim3 full_pairs_block(OSS_PREPROCESS_BLOCK);
+    const dim3 full_pairs_grid((full_pairs_threads + OSS_PREPROCESS_BLOCK - 1) / OSS_PREPROCESS_BLOCK);
+    build_full_tile_pairs<<<full_pairs_grid, full_pairs_block>>>(
+        N,
+        static_cast<int>(num_tiles),
+        gid_sorted.data_ptr<int>(),
+        tile_offsets.data_ptr<int>()
+    );
+    C10_CUDA_CHECK(cudaGetLastError());
+
+    const dim3 grid(num_tiles_x, num_tiles_y);
+    const dim3 block(OSS_TILE_SIZE, OSS_TILE_SIZE);
+    const int F_chunks = (F_total + OSS_F_CHUNK - 1) / OSS_F_CHUNK;
+    for (int chunk = 0; chunk < F_chunks; ++chunk) {
+        const int F_offset = chunk * OSS_F_CHUNK;
+        const int F_chunk = std::min(OSS_F_CHUNK, F_total - F_offset);
+        rasterize_sum<<<grid, block>>>(
+            h, w, num_tiles_x, num_tiles_y,
+            F_chunk, F_offset, F_total,
+            gid_sorted.data_ptr<int>(),
+            tile_offsets.data_ptr<int>(),
+            reinterpret_cast<const float2*>(xy.data_ptr<float>()),
+            reinterpret_cast<const float3*>(conic.data_ptr<float>()),
+            feat.data_ptr<float>(),
+            out.data_ptr<float>()
+        );
+        C10_CUDA_CHECK(cudaGetLastError());
+    }
+
+    return out;
 }
 #endif

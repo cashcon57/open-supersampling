@@ -1,0 +1,16 @@
+{
+  "device": "NVIDIA GeForce RTX 4070 Laptop GPU",
+  "iters": 20,
+  "kernel_ms": 136.37999499997022,
+  "phase": "2c",
+  "pytorch_ref_ms": 9555.652630000623,
+  "ref_iters": 1,
+  "shape": {
+    "F": 64,
+    "H": 540,
+    "N": 4096,
+    "W": 960
+  },
+  "speedup": 70.06638055678701,
+  "warmup": 3
+}

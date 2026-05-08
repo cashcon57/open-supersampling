@@ -21,6 +21,17 @@ def kernels_built():
 
 
 @pytest.fixture(autouse=True)
+def _disable_tf32():
+    prev_matmul = torch.backends.cuda.matmul.allow_tf32
+    prev_cudnn = torch.backends.cudnn.allow_tf32
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
+    yield
+    torch.backends.cuda.matmul.allow_tf32 = prev_matmul
+    torch.backends.cudnn.allow_tf32 = prev_cudnn
+
+
+@pytest.fixture(autouse=True)
 def _seed():
     torch.manual_seed(0xC0DA)
     if torch.cuda.is_available():
