@@ -1,0 +1,109 @@
+name: Deploy dashboard to R2
+
+# Belt-and-suspenders deploy. The 3080 Ti watcher is the primary publisher
+# (also pushes data.json, viz strips, status.json), but it can fall behind
+# if its `git pull` cycle stalls or the process dies. This workflow ships
+# the static dashboard files directly to R2 on every push to main that
+# touches them. Result: dashboard HTML/JS deploys are decoupled from the
+# 3080 Ti's availability.
+#
+# Security: this workflow uses ONLY repo secrets (WORKER_UPLOAD_URL +
+# WORKER_SHARED_SECRET) and local filesystem paths under dashboard-public/.
+# It does NOT consume any github.event.* fields (issue titles, PR bodies,
+# commit messages) in `run:` commands, so workflow-injection vectors via
+# untrusted input are not present. See SECURITY notes below for review.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "dashboard-public/**"
+  workflow_dispatch: {}  # manual trigger from the Actions tab
+
+# Single in-flight deploy at a time; cancel any prior run if a newer push
+# arrives. Avoids racing PUTs to R2 for the same key.
+concurrency:
+  group: deploy-dashboard
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: PUT dashboard files to R2 via worker
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Verify required secrets are set
+        env:
+          WORKER_UPLOAD_URL: ${{ secrets.WORKER_UPLOAD_URL }}
+          WORKER_SHARED_SECRET: ${{ secrets.WORKER_SHARED_SECRET }}
+        run: |
+          if [ -z "$WORKER_UPLOAD_URL" ]; then
+            echo "::error::WORKER_UPLOAD_URL secret not set; configure in repo settings"
+            exit 1
+          fi
+          if [ -z "$WORKER_SHARED_SECRET" ]; then
+            echo "::error::WORKER_SHARED_SECRET secret not set; configure in repo settings"
+            exit 1
+          fi
+
+      - name: Upload dashboard files to R2
+        env:
+          WORKER_UPLOAD_URL: ${{ secrets.WORKER_UPLOAD_URL }}
+          WORKER_SHARED_SECRET: ${{ secrets.WORKER_SHARED_SECRET }}
+        run: |
+          set -euo pipefail
+
+          deploy() {
+            local local_path="$1"
+            local r2_key="$2"
+            local ctype="$3"
+            if [ ! -f "$local_path" ]; then
+              echo "  skip: $local_path (not present)"
+              return 0
+            fi
+            local response code size
+            response=$(curl -sS -o /tmp/upload-resp -w '%{http_code}|%{size_upload}' \
+              --max-time 120 \
+              -X PUT "${WORKER_UPLOAD_URL}/upload/${r2_key}" \
+              -H "Authorization: Bearer ${WORKER_SHARED_SECRET}" \
+              -H "Content-Type: ${ctype}" \
+              --data-binary "@${local_path}")
+            size="${response#*|}"
+            code="${response%%|*}"
+            if [ "$code" != "200" ]; then
+              echo "::error::PUT ${r2_key} failed (HTTP $code)"
+              cat /tmp/upload-resp || true
+              return 1
+            fi
+            echo "  PUT ${r2_key} ok (HTTP 200, ${size} bytes)"
+          }
+
+          echo "=== uploading dashboard files ==="
+          deploy dashboard-public/index.html               index.html               "text/html; charset=utf-8"
+          deploy dashboard-public/embed.html               embed.html               "text/html; charset=utf-8"
+          deploy dashboard-public/embed-chart-builder.js   embed-chart-builder.js   "application/javascript; charset=utf-8"
+          deploy dashboard-public/oss-logo.svg             oss-logo.svg             "image/svg+xml"
+          deploy dashboard-public/crt-shader.js            crt-shader.js            "application/javascript; charset=utf-8"
+
+      - name: Verify live deploy
+        run: |
+          set -euo pipefail
+          # Pull index.html from the public origin and confirm hash match.
+          # Cloudflare may serve a stale cached copy for a few seconds; retry.
+          local_sha=$(shasum -a 256 dashboard-public/index.html | awk '{print $1}')
+          for i in 1 2 3 4 5 6; do
+            sleep 8
+            live_sha=$(curl -sS https://opensupersampling.com/index.html | shasum -a 256 | awk '{print $1}')
+            if [ "$local_sha" = "$live_sha" ]; then
+              echo "  live SHA matches local: $live_sha"
+              exit 0
+            fi
+            echo "  attempt $i: live=$live_sha local=$local_sha (CDN may be warming)"
+          done
+          echo "::warning::Live R2 SHA does not match local after 48s. CDN may still be warming; check manually if persistent."
+          # Don't fail the workflow; the PUT itself succeeded, CDN is what's lagging.
