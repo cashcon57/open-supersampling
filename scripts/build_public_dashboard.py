@@ -462,6 +462,7 @@ def build_data() -> dict[str, Any]:
             runs.append(run)
 
     return {
+        "schema_version": "2026-05-07",
         "generated_at": utc_now_iso(),
         "runs": runs,
     }

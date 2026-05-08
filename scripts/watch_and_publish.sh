@@ -171,6 +171,13 @@ while :; do
       --out "${STAGING_DIR}" >/dev/null 2>&1 || \
       echo "[watch_and_publish] build_public_dashboard.py failed, continuing"
   fi
+  if [[ -f "${REPO_ROOT}/tools/check_data_schema.py" ]]; then
+    if ! python3 "${REPO_ROOT}/tools/check_data_schema.py" "${STAGING_DIR}/data.json" >/dev/null 2>&1; then
+      echo "[watch_and_publish] schema check FAILED; skipping publish this cycle"
+      sleep "$INTERVAL"
+      continue
+    fi
+  fi
   # Canonical index.html lives in dashboard-public/ (edited by codex/hand).
   # build_public_dashboard.py only regenerates it when __PITCH_HTML__ marker
   # is still present, which means once the staging copy has been substituted

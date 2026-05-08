@@ -52,6 +52,13 @@ jobs:
               --output-dir /tmp/oss-smoke \
               --device cpu
 
+      - name: Validate dashboard data schema
+        run: |
+          python scripts/build_public_dashboard.py \
+            --runs-dir tests/fixtures/public-dashboard/runs \
+            --out /tmp/test-dashboard
+          python tools/check_data_schema.py /tmp/test-dashboard/data.json
+
   lint:
     name: ruff lint (non-blocking)
     runs-on: ubuntu-latest
