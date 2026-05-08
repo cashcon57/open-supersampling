@@ -8,7 +8,8 @@ runs, or pre-v4 prototypes.
 
 | Run | Status | Reason |
 | --- | --- | --- |
-| `srcnn-v6.1-pico-001` | Active | Current training run and default dashboard focus. |
+| `srcnn-v6.2-pico-002` | Active | Current training run (launched 2026-05-08); v6.2 architecture (DisocclusionSpawner + ConcatFusion + R=16). Default dashboard focus. |
+| `srcnn-v6.1-pico-001` | Stopped early | Stippling regression at ~step 14k (2026-05-08); kept for the lineage story. |
 | `srcnn-v6-pico-001` | Superseded | Shows the stopped v6 Pico run and the grid-artifact diagnosis that led to v6.1. |
 | `srcnn-v6-heavy-001` | Parked | Short HAT-L v6 startup trace; useful context for the heavy branch that was paused before v6.1. |
 | `srcnn-v5-pixel-temporal-validated` | Measured | Canonical v5 baseline with held-out PSNR/LPIPS and viz strips. |
