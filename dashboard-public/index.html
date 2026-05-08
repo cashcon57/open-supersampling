@@ -4725,9 +4725,9 @@ function renderHeldoutChart(canvas, run) {
     title: { display: true, text: "held-out LPIPS", color: "#a1a1aa" },
   };
   const datasets = [
-    { label: "model PSNR", yAxisID: "y", data: modelPsnr, borderColor: colors.psnr, backgroundColor: colors.psnr, pointRadius: 3, pointHitRadius: 6, borderWidth: 2, tension: 0 },
-    { label: "bicubic PSNR", yAxisID: "y", data: bicubicPsnr, borderColor: colors.bicubic, backgroundColor: colors.bicubic, pointRadius: 3, pointHitRadius: 6, borderWidth: 1.7, borderDash: [5, 4], tension: 0 },
-    { label: "model LPIPS", yAxisID: "y1", data: modelLpips, borderColor: colors.lpips, backgroundColor: colors.lpips, pointRadius: 3, pointHitRadius: 6, borderWidth: 2, tension: 0 },
+    { label: `${run.label || run.name} — PSNR ↑`, yAxisID: "y", data: modelPsnr, borderColor: colors.psnr, backgroundColor: colors.psnr, pointRadius: 3, pointHitRadius: 6, borderWidth: 2, tension: 0 },
+    { label: "Bicubic baseline — PSNR", yAxisID: "y", data: bicubicPsnr, borderColor: colors.bicubic, backgroundColor: colors.bicubic, pointRadius: 3, pointHitRadius: 6, borderWidth: 1.7, borderDash: [5, 4], tension: 0 },
+    { label: `${run.label || run.name} — LPIPS ↓`, yAxisID: "y1", data: modelLpips, borderColor: colors.lpips, backgroundColor: colors.lpips, pointRadius: 3, pointHitRadius: 6, borderWidth: 2, tension: 0 },
   ].filter((dataset) => dataset.data.length);
 
   // Industry reference lines (overlay when "Show industry refs" is checked).
@@ -4874,7 +4874,17 @@ function renderScoreTable(host, run) {
   const keys = Array.from(new Set(rows.flatMap((row) => Object.keys(row))))
     .filter((key) => /step|psnr|lpips|temporal|ratio|latency/i.test(key))
     .slice(0, 6);
-  const head = keys.map((key) => `<th class="px-3 py-2 text-left font-medium">${escapeHtml(key)}</th>`).join("");
+  const KEY_LABELS = {
+    step: "step",
+    model_psnr_mean: `${run.label || run.name} PSNR ↑`,
+    model_lpips_mean: `${run.label || run.name} LPIPS ↓`,
+    bicubic_psnr_mean: "bicubic PSNR ↑",
+    bicubic_lpips_mean: "bicubic LPIPS ↓",
+    temporal_ratio: "temporal ratio ↓",
+    latency_ms: "latency ms",
+  };
+  const labelFor = (key) => KEY_LABELS[key] || key.replace(/_/g, " ");
+  const head = keys.map((key) => `<th class="px-3 py-2 text-left font-medium">${escapeHtml(labelFor(key))}</th>`).join("");
   const body = rows.map((row) => `<tr class="border-t border-zinc-800 ${shouldMarkNewForVisit(run, row.step) ? "score-row-new" : ""}">${keys.map((key) => `<td class="px-3 py-2 font-mono">${escapeHtml(fmtNumber(row[key], 4))}</td>`).join("")}</tr>`).join("");
   host.innerHTML = `<div class="score-scroll overflow-x-auto rounded border border-zinc-800"><table class="min-w-full text-sm text-zinc-300"><thead class="bg-zinc-950/50 text-xs uppercase text-zinc-500"><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
