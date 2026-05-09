@@ -137,6 +137,22 @@ print('\n'.join(RUN_CONFIG.keys()))
         cp -p "$png" "$dst_run/viz/$base" 2>/dev/null || true
       done
     fi
+    # Held-out per-step frame dumps for the dashboard's video player. Tree
+    # is heldout-frames/step-NNNNNNNN/{model,gt,bicubic,baseline}/sample-XXX.png.
+    # Sync mirror-style: only copy PNGs newer than dest. Skip if source dir
+    # absent. Use find + while-read so we don't hit ARG_MAX with thousands
+    # of files at full pico-002 trajectory.
+    if [[ -d "$src_run/heldout-frames" ]]; then
+      while IFS= read -r -d '' png; do
+        local rel; rel="${png#$src_run/}"
+        local dst="$dst_run/$rel"
+        if [[ -f "$dst" ]] && [[ "$dst" -nt "$png" || "$dst" -ef "$png" ]]; then
+          continue
+        fi
+        mkdir -p "$(dirname "$dst")"
+        cp -p "$png" "$dst" 2>/dev/null || true
+      done < <(find "$src_run/heldout-frames" -type f -name '*.png' -print0 2>/dev/null)
+    fi
   done
 }
 

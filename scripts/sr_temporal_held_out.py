@@ -401,6 +401,21 @@ def _make_12ch(lr, depth, motion, normals, canvas):
     return torch.cat([lr, depth, motion, normals, canvas], dim=1)
 
 
+def _save_chw_as_png(tensor, dest: Path) -> None:
+    """Save a (3, H, W) tensor as an 8-bit RGB PNG. Clamps to [0, 1]."""
+    import torch
+    from PIL import Image
+    arr = tensor.detach().clamp(0.0, 1.0).cpu().float()
+    if arr.ndim != 3 or arr.shape[0] not in (1, 3):
+        raise ValueError(f"expected (C, H, W) with C in (1,3); got {tuple(arr.shape)}")
+    if arr.shape[0] == 1:
+        arr = arr.repeat(3, 1, 1)
+    arr_u8 = (arr.mul(255.0).round().to(torch.uint8)
+              .permute(1, 2, 0).contiguous().numpy())
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    Image.fromarray(arr_u8, mode="RGB").save(dest, format="PNG")
+
+
 def _eval_loader(
     loader,
     *,
@@ -409,6 +424,8 @@ def _eval_loader(
     lpips_fn,
     n_samples_remaining: int,
     device: str,
+    frames_dir: Path | None = None,
+    sample_offset: int = 0,
 ) -> dict[str, list[float]]:
     """Run held-out eval on a single dataset loader.
 
@@ -555,6 +572,26 @@ def _eval_loader(
             for b_idx in range(p_lr.shape[0]):
                 if len(psnr_temp) >= n_samples_remaining:
                     break
+                # Per-sample frame dump for the held-out video player. We
+                # write the current ckpt's prediction every eval (it changes
+                # per ckpt). GT/bicubic/baseline are deterministic per
+                # held-out batch, so we only write them when missing -- that
+                # collapses storage from ~180 MB/eval to ~45 MB/eval after
+                # the first run.
+                if frames_dir is not None:
+                    sample_idx = sample_offset + len(psnr_temp)  # global sample id
+                    sample_str = f"sample-{sample_idx:03d}"
+                    model_path = frames_dir / "model" / f"{sample_str}.png"
+                    _save_chw_as_png(temp_out_tp1[b_idx], model_path)
+                    for stream, tensor in (
+                        ("gt", p_gt[b_idx]),
+                        ("bicubic", bic_tp1[b_idx]),
+                        ("baseline", base_out_tp1[b_idx]),
+                    ):
+                        dest = frames_dir / stream / f"{sample_str}.png"
+                        if not dest.exists():
+                            _save_chw_as_png(tensor, dest)
+
                 psnr_temp.append(_psnr(temp_out_tp1[b_idx], p_gt[b_idx]))
                 psnr_base.append(_psnr(base_out_tp1[b_idx], p_gt[b_idx]))
                 psnr_bic.append(_psnr(bic_tp1[b_idx], p_gt[b_idx]))
@@ -735,6 +772,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="LR synth blur sigma checked against --manifest.")
     p.add_argument("--jpeg-quality", type=int, default=85,
                    help="LR synth JPEG quality checked against --manifest.")
+    p.add_argument("--write-frames-to", type=Path, default=None,
+                   help="When set, save each held-out sample's prediction + GT/bicubic/baseline "
+                        "as PNG sequences into this directory. Used by the dashboard's per-step "
+                        "video player. GT/bicubic/baseline are written only if missing.")
     p.add_argument("--score-log", type=Path, default=None,
                    help="Optional dashboard-compatible JSON score log to append/update.")
     return p.parse_args(argv)
@@ -819,8 +860,13 @@ def main(argv: list[str] | None = None) -> int:
         else max(1, math.ceil(args.n_samples / len(loaders)))
     )
     per_dataset_results: dict[str, dict[str, list[float]]] = {}
+    sample_offset = 0
     for name, loader in loaders:
         print(f"-- evaluating {name} (target ~{per_loader} samples) --")
+        # Frames dir gets one subdir per dataset so loaders can't clobber
+        # each other's per-sample writes when both contribute to the same
+        # held-out batch (TartanAir + Sintel).
+        frames_subdir = (args.write_frames_to / name) if args.write_frames_to else None
         per_dataset_results[name] = _eval_loader(
             loader,
             model_temporal=model_temporal,
@@ -828,7 +874,10 @@ def main(argv: list[str] | None = None) -> int:
             lpips_fn=lpips_fn,
             n_samples_remaining=per_loader,
             device=device,
+            frames_dir=frames_subdir,
+            sample_offset=sample_offset,
         )
+        sample_offset += len(per_dataset_results[name].get("psnr_temporal", []))
 
     merged = _merge_results(*per_dataset_results.values())
     n = len(merged["psnr_temporal"])

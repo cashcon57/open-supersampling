@@ -112,7 +112,12 @@ while ($true) {
 
     foreach ($ck in $ready) {
         $step = StepFromCkptName -name $ck.Name
-        Log "starting eval: run=$activeRun step=$step ckpt=$($ck.FullName)"
+        # Per-step frame dump dir for the held-out video player. Eval will
+        # write 4 streams (model, gt, bicubic, baseline) of 64 PNGs each.
+        # GT/bicubic/baseline are skipped after the first eval that wrote
+        # them, so only "model" grows per step.
+        $framesDir = "$runDir\heldout-frames\step-$($step.ToString('D8'))"
+        Log "starting eval: run=$activeRun step=$step ckpt=$($ck.FullName) frames=$framesDir"
         $args = @(
             "scripts\sr_temporal_held_out.py",
             "--ckpt-temporal", "$($ck.FullName)",
@@ -120,6 +125,7 @@ while ($true) {
             "--tartanair-root", "$tartanairRoot",
             "--manifest", "$manifest",
             "--score-log", "$scoreLog",
+            "--write-frames-to", "$framesDir",
             "--n-samples", "$nSamples",
             "--device", "cuda"
         ) -join ' '
