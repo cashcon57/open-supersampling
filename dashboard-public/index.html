@@ -1121,14 +1121,35 @@
       border: none;
       color: inherit;
       font: inherit;
-      padding: 0;
+      padding: 0 18px 0 0;
       cursor: pointer;
       max-width: 200px;
       text-overflow: ellipsis;
       appearance: none;
+      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 16 16'><path fill='none' stroke='%2367e8f9' stroke-width='1.6' d='M3 6l5 5 5-5'/></svg>");
+      background-repeat: no-repeat;
+      background-position: right 2px center;
     }
+    .viz-compare-panel-select:hover { color: #67e8f9; }
     .viz-compare-panel-select:focus-visible { outline: 1px solid #22d3ee; outline-offset: 2px; }
     .viz-compare-panel-select option { background: #18181b; color: #f4f4f5; }
+    .viz-compare-source { color: #a1a1aa; font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; }
+    .viz-compare-mode-select {
+      appearance: none;
+      background: rgba(8, 8, 10, 0.7);
+      border: 1px solid rgba(63,63,70,0.7);
+      color: #e4e4e7;
+      padding: 4px 22px 4px 8px;
+      border-radius: 4px;
+      font: inherit;
+      font-size: 12px;
+      cursor: pointer;
+      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 16 16'><path fill='none' stroke='%2367e8f9' stroke-width='1.6' d='M3 6l5 5 5-5'/></svg>");
+      background-repeat: no-repeat;
+      background-position: right 4px center;
+    }
+    .viz-compare-mode-select:hover { border-color: rgba(34,211,238,0.6); }
+    .viz-compare-mode-select option { background: #18181b; color: #f4f4f5; }
     .viz-compare-panel-label {
       position: absolute;
       top: 8px;
@@ -1658,10 +1679,22 @@
   <dialog id="viz-compare-modal" class="viz-compare-dialog" aria-label="Visualization column comparison viewer">
     <div id="viz-compare-backdrop" class="viz-compare-backdrop">
       <div class="viz-compare-toolbar">
-        <div id="viz-compare-title" class="viz-compare-title"></div>
-        <div class="viz-compare-row-toggle" aria-label="Comparison row">
-          <button class="viz-compare-row-button" type="button" data-viz-compare-row="0" aria-pressed="true">seq A</button>
-          <button class="viz-compare-row-button" type="button" data-viz-compare-row="1" aria-pressed="false">seq B</button>
+        <div class="flex flex-col gap-1">
+          <div id="viz-compare-title" class="viz-compare-title"></div>
+          <div id="viz-compare-source" class="viz-compare-source">SOURCE — held-out · TartanAir oldtown · 64 frames</div>
+        </div>
+        <div class="flex items-center gap-3">
+          <label class="flex items-center gap-2 text-xs text-zinc-300">
+            <span class="text-zinc-400">Mode</span>
+            <select id="viz-compare-mode" class="viz-compare-mode-select" aria-label="Compare mode">
+              <option value="upscalers">Compare upscalers (same step)</option>
+              <option value="checkpoints">Compare checkpoints (same upscaler)</option>
+            </select>
+          </label>
+          <div class="viz-compare-row-toggle" aria-label="Comparison row">
+            <button class="viz-compare-row-button" type="button" data-viz-compare-row="0" aria-pressed="true">seq A</button>
+            <button class="viz-compare-row-button" type="button" data-viz-compare-row="1" aria-pressed="false">seq B</button>
+          </div>
         </div>
       </div>
       <div id="viz-compare-grid" class="viz-compare-grid"></div>
@@ -1832,6 +1865,14 @@ const compareState = {
   naturalHeight: 0,
   pointers: new Map(),
   gestureStart: null,
+  // v6.2 additions: each panel tracks its own (columnIndex, file) so the
+  // modal supports both "compare upscalers (same step, varying column)"
+  // and "compare checkpoints (same column, varying step)" modes.
+  mode: "upscalers",            // "upscalers" | "checkpoints"
+  panels: [],                   // [{ columnIndex, file }]
+  allColumns: [],               // [{ index, label, shortLabel }]
+  allFiles: [],                 // [{ file, step, url }]
+  runMeta: null,                // { runLabel, run } for re-render
 };
 let lastTap = { time: 0, x: 0, y: 0 };
 let lastActiveStep = null;

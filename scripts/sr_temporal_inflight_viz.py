@@ -240,6 +240,14 @@ def _load_v6_model(ckpt_path: Path, device: str, fallback_backbone: str = "hat-l
     cfg_kwargs.setdefault("in_channels", int(args.get("in_channels", 9)))
     cfg_kwargs.setdefault("scale", int(args.get("scale", 2)))
     cfg_kwargs.setdefault("color_activation", args.get("color_activation", "softplus"))
+    # v6.2 architectural switches must be honored or we instantiate the
+    # wrong fusion/spawner path and silently render misleading viz strips.
+    if "fusion_mode" in args:
+        cfg_kwargs.setdefault("fusion_mode", str(args["fusion_mode"]))
+    if "spawner_mode" in args:
+        cfg_kwargs.setdefault("spawner_mode", str(args["spawner_mode"]))
+    if "latent_rank" in args:
+        cfg_kwargs.setdefault("latent_rank", int(args["latent_rank"]))
     model = V6Model(V6Config(**cfg_kwargs)).to(device)
 
     state = None

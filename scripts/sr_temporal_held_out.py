@@ -130,6 +130,17 @@ def _load_temporal(ckpt_path: Path, device: str):
         cfg_kwargs.setdefault(
             "rasterizer_overlap", int(saved.get("rasterizer_overlap", 0))
         )
+        # v6.2 architectural switches: pico-002 trains with fusion_mode=concat
+        # + spawner_mode=disocclusion + latent_rank=16. Without these the
+        # eval instantiates V6Model with the v6.1-default cross_attention path
+        # which (a) cannot load the concat-trained weights and (b) OOMs on
+        # 12 GB GPUs trying to allocate the global Q@K^T tensor.
+        if "fusion_mode" in saved:
+            cfg_kwargs.setdefault("fusion_mode", str(saved["fusion_mode"]))
+        if "spawner_mode" in saved:
+            cfg_kwargs.setdefault("spawner_mode", str(saved["spawner_mode"]))
+        if "latent_rank" in saved:
+            cfg_kwargs.setdefault("latent_rank", int(saved["latent_rank"]))
         model = V6Model(V6Config(**cfg_kwargs)).to(device)
         state = None
         for key in ("v6_model", "model", "model_state_dict", "generator", "state_dict"):
