@@ -5774,10 +5774,241 @@ function handleCompareWheel(event) {
   applyCompareTransform();
 }
 
+// --- Held-out video player ---
+// Plays the per-sample model predictions as a 64-frame video. Four streams
+// (model, gt, bicubic, baseline) animate in lockstep. Step slider switches
+// to a different ckpt's evaluated frames. Speed slider controls fps. Frame
+// slider scrubs through the 64 samples in the current ckpt.
+const heldoutPlayer = {
+  run: null,
+  steps: [],            // sorted ints, evaluated steps with frames
+  stepIdx: 0,           // index into steps
+  numSamples: 64,
+  sampleIdx: 0,
+  isPlaying: true,
+  speed: 1.0,           // playback rate multiplier
+  baseFps: 12,          // base frames-per-second; effective = baseFps * speed
+  intervalHandle: null,
+  imgs: { model: null, gt: null, bicubic: null, baseline: null },
+};
+
+function _heldoutFrameUrl(run, step, stream, sampleIdx) {
+  const stepStr = String(step).padStart(8, "0");
+  const sampleStr = `sample-${String(sampleIdx).padStart(3, "0")}.png`;
+  // Per-loader subdir in the eval write tree (tartanair / sintel). For now
+  // the only loader is "tartanair"; multi-loader runs would need a loader
+  // selector here. Keep it as a single guess for now and fall back gracefully.
+  return `runs/${encodeURIComponent(run.name)}/heldout-frames/step-${stepStr}/tartanair/${stream}/${sampleStr}`;
+}
+
+function _heldoutAdvanceFrame() {
+  const player = heldoutPlayer;
+  if (!player.run || !player.steps.length) return;
+  player.sampleIdx = (player.sampleIdx + 1) % player.numSamples;
+  _heldoutRenderFrame();
+}
+
+function _heldoutRenderFrame() {
+  const player = heldoutPlayer;
+  const step = player.steps[player.stepIdx];
+  if (step == null) return;
+  for (const stream of Object.keys(player.imgs)) {
+    const img = player.imgs[stream];
+    if (!img) continue;
+    img.src = _heldoutFrameUrl(player.run, step, stream, player.sampleIdx);
+  }
+  // Sync the frame slider + label
+  const slider = document.getElementById("heldout-video-frame-slider");
+  const val = document.getElementById("heldout-video-frame-value");
+  if (slider && Number(slider.value) !== player.sampleIdx) slider.value = String(player.sampleIdx);
+  if (val) val.textContent = `${player.sampleIdx}/${player.numSamples}`;
+}
+
+function _heldoutScheduleTick() {
+  if (heldoutPlayer.intervalHandle) {
+    window.clearInterval(heldoutPlayer.intervalHandle);
+    heldoutPlayer.intervalHandle = null;
+  }
+  if (!heldoutPlayer.isPlaying) return;
+  const fps = Math.max(1, heldoutPlayer.baseFps * heldoutPlayer.speed);
+  const interval = Math.max(20, Math.round(1000 / fps));
+  heldoutPlayer.intervalHandle = window.setInterval(_heldoutAdvanceFrame, interval);
+}
+
+function _heldoutBuildGrid() {
+  const grid = document.getElementById("heldout-video-grid");
+  if (!grid) return;
+  grid.replaceChildren();
+  const streams = [
+    { key: "model", label: "v6.2 (model)" },
+    { key: "gt", label: "Ground truth" },
+    { key: "bicubic", label: "Bicubic baseline" },
+    { key: "baseline", label: "v4 baseline" },
+  ];
+  for (const s of streams) {
+    const panel = document.createElement("div");
+    panel.className = "heldout-video-panel";
+    const lbl = document.createElement("div");
+    lbl.className = "heldout-video-panel-label";
+    lbl.textContent = s.label;
+    const img = document.createElement("img");
+    img.alt = s.label;
+    img.loading = "eager";
+    img.decoding = "async";
+    img.draggable = false;
+    panel.append(lbl, img);
+    grid.appendChild(panel);
+    heldoutPlayer.imgs[s.key] = img;
+  }
+}
+
+function _heldoutResolveSteps(run) {
+  // We can't filesystem-list R2 from JS, so derive available steps from the
+  // run's score_log. Each scored step *should* have a frames dir written by
+  // the supervisor / backfill. Rows that predate the frame-dump feature
+  // will 404 the image fetches; that's acceptable until the backfill
+  // catches up.
+  const rows = run.score_log || [];
+  const steps = rows
+    .map((r) => Number(r.step))
+    .filter((s) => Number.isFinite(s) && s > 0)
+    .sort((a, b) => a - b);
+  return Array.from(new Set(steps));
+}
+
+function openHeldoutVideoModal(run, atStep) {
+  if (!run) return;
+  const dialog = document.getElementById("heldout-video-modal");
+  if (!dialog) return;
+  const player = heldoutPlayer;
+  player.run = run;
+  player.steps = _heldoutResolveSteps(run);
+  if (!player.steps.length) {
+    window.alert("No held-out evaluations have been scored for this run yet.");
+    return;
+  }
+  // Default step = the requested one if available, else the latest.
+  const requestedIdx = atStep != null
+    ? player.steps.findIndex((s) => s === Number(atStep))
+    : -1;
+  player.stepIdx = requestedIdx >= 0 ? requestedIdx : player.steps.length - 1;
+  player.sampleIdx = 0;
+  player.isPlaying = true;
+  _heldoutBuildGrid();
+
+  // Title / source line
+  const title = document.getElementById("heldout-video-title");
+  if (title) title.textContent = `${run.label || run.name} — held-out playback`;
+
+  // Step slider
+  const stepSlider = document.getElementById("heldout-video-step-slider");
+  const stepVal = document.getElementById("heldout-video-step-value");
+  if (stepSlider) {
+    stepSlider.min = "0";
+    stepSlider.max = String(player.steps.length - 1);
+    stepSlider.step = "1";
+    stepSlider.value = String(player.stepIdx);
+  }
+  if (stepVal) stepVal.textContent = player.steps[player.stepIdx].toLocaleString();
+
+  // Frame slider
+  const frameSlider = document.getElementById("heldout-video-frame-slider");
+  const frameVal = document.getElementById("heldout-video-frame-value");
+  if (frameSlider) {
+    frameSlider.min = "0";
+    frameSlider.max = String(player.numSamples - 1);
+    frameSlider.value = "0";
+  }
+  if (frameVal) frameVal.textContent = `0/${player.numSamples}`;
+
+  // Speed slider
+  const speedSlider = document.getElementById("heldout-video-speed-slider");
+  const speedVal = document.getElementById("heldout-video-speed-value");
+  if (speedSlider) speedSlider.value = String(player.speed);
+  if (speedVal) speedVal.textContent = `${player.speed.toFixed(1)}×`;
+
+  const playBtn = document.getElementById("heldout-video-playpause");
+  if (playBtn) playBtn.textContent = "⏸";
+
+  _heldoutRenderFrame();
+  _heldoutScheduleTick();
+
+  if (!dialog.open) {
+    dialog.showModal();
+    document.body.classList.add("lightbox-open");
+  }
+}
+
+function closeHeldoutVideoModal() {
+  const dialog = document.getElementById("heldout-video-modal");
+  if (!dialog) return;
+  if (heldoutPlayer.intervalHandle) {
+    window.clearInterval(heldoutPlayer.intervalHandle);
+    heldoutPlayer.intervalHandle = null;
+  }
+  heldoutPlayer.isPlaying = false;
+  if (dialog.open) dialog.close();
+}
+
+function _bindHeldoutVideoModalControls() {
+  const dialog = document.getElementById("heldout-video-modal");
+  if (!dialog || dialog._oss_bound) return;
+  dialog._oss_bound = true;
+  document.getElementById("heldout-video-dismiss")?.addEventListener("click", closeHeldoutVideoModal);
+  dialog.addEventListener("close", () => {
+    document.body.classList.remove("lightbox-open");
+    if (heldoutPlayer.intervalHandle) {
+      window.clearInterval(heldoutPlayer.intervalHandle);
+      heldoutPlayer.intervalHandle = null;
+    }
+  });
+  document.getElementById("heldout-video-playpause")?.addEventListener("click", () => {
+    heldoutPlayer.isPlaying = !heldoutPlayer.isPlaying;
+    const btn = document.getElementById("heldout-video-playpause");
+    if (btn) btn.textContent = heldoutPlayer.isPlaying ? "⏸" : "▶";
+    _heldoutScheduleTick();
+  });
+  document.getElementById("heldout-video-speed-slider")?.addEventListener("input", (event) => {
+    heldoutPlayer.speed = Number(event.target.value) || 1.0;
+    const val = document.getElementById("heldout-video-speed-value");
+    if (val) val.textContent = `${heldoutPlayer.speed.toFixed(1)}×`;
+    _heldoutScheduleTick();
+  });
+  document.getElementById("heldout-video-step-slider")?.addEventListener("input", (event) => {
+    const idx = Number(event.target.value);
+    if (!Number.isFinite(idx)) return;
+    heldoutPlayer.stepIdx = Math.max(0, Math.min(heldoutPlayer.steps.length - 1, idx));
+    const val = document.getElementById("heldout-video-step-value");
+    if (val) val.textContent = (heldoutPlayer.steps[heldoutPlayer.stepIdx] ?? 0).toLocaleString();
+    _heldoutRenderFrame();
+  });
+  document.getElementById("heldout-video-frame-slider")?.addEventListener("input", (event) => {
+    const idx = Number(event.target.value);
+    if (!Number.isFinite(idx)) return;
+    heldoutPlayer.sampleIdx = Math.max(0, Math.min(heldoutPlayer.numSamples - 1, idx));
+    const val = document.getElementById("heldout-video-frame-value");
+    if (val) val.textContent = `${heldoutPlayer.sampleIdx}/${heldoutPlayer.numSamples}`;
+    _heldoutRenderFrame();
+  });
+  // Delegated click handler for "Watch held-out video" buttons that get
+  // sprinkled through every renderRun call.
+  document.addEventListener("click", (event) => {
+    const target = event.target instanceof Element ? event.target.closest("[data-heldout-video-run]") : null;
+    if (!target) return;
+    const runName = target.dataset.heldoutVideoRun;
+    if (!runName) return;
+    const run = (lastKnownData?.runs || []).find((r) => r.name === runName);
+    if (!run) return;
+    event.preventDefault();
+    openHeldoutVideoModal(run);
+  }, true);
+}
+
 function initCompareModal() {
   const dialog = document.getElementById("viz-compare-modal");
   const backdrop = document.getElementById("viz-compare-backdrop");
   const grid = document.getElementById("viz-compare-grid");
+  _bindHeldoutVideoModalControls();
   document.getElementById("viz-compare-dismiss").addEventListener("click", closeCompareModal);
   document.querySelectorAll("[data-viz-compare-row]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -6618,11 +6849,14 @@ function renderRun(run, index, openByRun = new Map()) {
         <article class="chart-card min-w-0 rounded-md border border-zinc-800 bg-zinc-950/25 p-4" ${chartCardAttrs(heldoutChartId)} data-muted-surface>
           <div class="flex flex-wrap items-center justify-between gap-2">
             <h3 class="title-with-info text-base font-semibold text-zinc-50" data-text><span>Held-out scores</span>${infoButtonHtml("held-out-psnr")}</h3>
-            <label class="chart-toggle text-xs">
-              <input class="show-industry-refs" type="checkbox">
-              <span>Industry refs</span>
-              <button class="info-btn" data-info-key="industry-refs" type="button" aria-label="What is this?">(i)</button>
-            </label>
+            <div class="flex items-center gap-2 text-xs">
+              <button class="viz-compare-cta" type="button" data-heldout-video-run="${escapeHtml(run.name)}" aria-label="Open held-out video player">▶ Watch held-out video</button>
+              <label class="chart-toggle">
+                <input class="show-industry-refs" type="checkbox">
+                <span>Industry refs</span>
+                <button class="info-btn" data-info-key="industry-refs" type="button" aria-label="What is this?">(i)</button>
+              </label>
+            </div>
           </div>
           <div class="metric-direction" data-direction="mixed">PSNR ↑ higher is better / LPIPS ↓ lower is better / temporal ratio ↓ lower is better</div>
           ${heldoutChartBody}
