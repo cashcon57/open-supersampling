@@ -156,7 +156,13 @@
       touch-action: pan-x;
       -webkit-overflow-scrolling: touch;
     }
-    .viz-frame { scroll-snap-align: start; }
+    .viz-frame { scroll-snap-align: start; transition: outline-color 120ms ease, box-shadow 120ms ease; }
+    .viz-frame-playing {
+      outline: 2px solid #67e8f9;
+      outline-offset: 2px;
+      box-shadow: 0 0 0 4px rgba(34,211,238,0.18);
+      border-radius: 6px;
+    }
     .visit-banner {
       display: flex;
       align-items: center;
@@ -1226,6 +1232,38 @@
     }
     .viz-compare-panel-step-bar .viz-compare-slider { flex: 1 1 auto; width: auto; }
     .viz-compare-panel-step-bar .viz-compare-step-value { min-width: 56px; }
+    .heldout-video-grid {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .heldout-video-panel {
+      position: relative;
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+      border: 1px solid #404040;
+      border-radius: 6px;
+      background: #0a0a0a;
+      display: flex; align-items: center; justify-content: center;
+      max-height: min(72vh, 640px);
+    }
+    .heldout-video-panel img {
+      width: 100%; height: 100%;
+      object-fit: contain;
+      transform-origin: var(--zoom-x, 50%) var(--zoom-y, 50%);
+      transform: scale(var(--zoom, 1));
+      transition: transform 60ms ease-out;
+    }
+    .heldout-video-panel-label {
+      position: absolute; top: 8px; left: 12px; z-index: 1;
+      padding: 3px 8px;
+      background: rgba(0,0,0,0.65);
+      border: 1px solid rgba(212,212,216,0.22);
+      border-radius: 4px;
+      color: #d4d4d8;
+      font-family: ui-monospace, monospace;
+      font-size: 12px;
+    }
     .viz-compare-panel-label {
       position: absolute;
       top: 8px;
@@ -1585,6 +1623,12 @@
           <label for="global-viz-run-select" class="text-zinc-400" data-dim>Run:</label>
           <select id="global-viz-run-select" class="rounded border border-zinc-700 bg-zinc-950 px-2 py-1 font-mono text-xs text-zinc-100 focus:outline-none focus:ring-1 focus:ring-cyan-400"></select>
           <button id="global-viz-compare-btn" type="button" class="viz-compare-cta" disabled>Side-by-side</button>
+          <button id="global-viz-play-btn" type="button" class="viz-compare-cta" aria-label="Play through training-progress checkpoints">▶ Play</button>
+          <label class="flex items-center gap-1 text-xs text-zinc-400" data-dim>
+            <span>fps</span>
+            <input id="global-viz-fps-slider" type="range" min="1" max="20" step="1" value="4" class="viz-compare-slider" aria-label="Playback fps">
+            <span id="global-viz-fps-value" class="font-mono text-zinc-300">4</span>
+          </label>
         </div>
       </header>
       <div id="global-viz-strip" class="viz-strip mt-4 flex gap-3 overflow-x-auto pb-2"></div>
@@ -1795,6 +1839,36 @@
         <div id="viz-compare-bare-image" class="viz-compare-bare-image" role="img" aria-label="Source viz strip"></div>
       </div>
       <button id="viz-compare-dismiss" class="viz-compare-dismiss" type="button" aria-label="Close comparison viewer">&times;</button>
+    </div>
+  </dialog>
+  <dialog id="heldout-video-modal" class="viz-compare-dialog" aria-label="Held-out per-frame video player">
+    <div class="viz-compare-backdrop">
+      <div class="viz-compare-toolbar">
+        <div class="flex flex-col gap-1">
+          <div id="heldout-video-title" class="viz-compare-title">Held-out video</div>
+          <div id="heldout-video-source" class="viz-compare-source">SOURCE — held-out · TartanAir oldtown</div>
+        </div>
+        <div class="flex items-center gap-3 flex-wrap justify-end">
+          <div class="viz-compare-global-step" aria-label="Step (which checkpoint's predictions)">
+            <span class="viz-compare-step-label" data-dim>Step</span>
+            <input id="heldout-video-step-slider" class="viz-compare-slider" type="range" min="0" max="0" step="1" value="0" aria-label="Step slider">
+            <span id="heldout-video-step-value" class="viz-compare-step-value">—</span>
+          </div>
+          <div class="viz-compare-global-step" aria-label="Playback">
+            <button id="heldout-video-playpause" class="viz-compare-sync-btn" type="button" aria-label="Toggle play / pause">⏸</button>
+            <span class="viz-compare-step-label" data-dim>Speed</span>
+            <input id="heldout-video-speed-slider" class="viz-compare-slider" type="range" min="0.1" max="4" step="0.1" value="1" aria-label="Playback speed">
+            <span id="heldout-video-speed-value" class="viz-compare-step-value">1.0×</span>
+          </div>
+          <div class="viz-compare-global-step" aria-label="Frame">
+            <span class="viz-compare-step-label" data-dim>Frame</span>
+            <input id="heldout-video-frame-slider" class="viz-compare-slider" type="range" min="0" max="63" step="1" value="0" aria-label="Frame within sequence">
+            <span id="heldout-video-frame-value" class="viz-compare-step-value">0/64</span>
+          </div>
+        </div>
+      </div>
+      <div id="heldout-video-grid" class="viz-compare-grid heldout-video-grid" data-cols="4"></div>
+      <button id="heldout-video-dismiss" class="viz-compare-dismiss" type="button" aria-label="Close held-out video player">&times;</button>
     </div>
   </dialog>
   <div id="embed-modal" class="embed-modal" hidden role="dialog" aria-modal="true" aria-labelledby="embed-modal-title">
@@ -5178,27 +5252,51 @@ function renderVizCompareControls(host, run) {
 const VIZ_BLANK_DATA_URI = "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
 
 // Single shared IntersectionObserver for all viz <img> elements on the page.
-// Threshold 0 means we fire on any partial intersection. rootMargin "200px"
-// means we start loading 200px before the frame enters the visible viewport,
-// and unload only after it's left by 200px — gives the user time to scroll
-// past without flicker. This is the dashboard memory fix: full-quality 4-22MB
-// viz PNGs were keeping decoded bitmaps resident → ~2.9 GB total page memory.
-let _vizObserver = null;
+// Two-phase margins: large LOAD margin (preload offscreen frames the user is
+// likely to scroll into next) + larger UNLOAD margin (keep decoded bitmaps
+// alive for a generous window after the frame leaves view). Different
+// observers because IO can't have asymmetric load/unload triggers natively.
+//
+// Bigger load margin = no black-flash when scrolling fast.
+// Bigger unload margin = no re-decode cost when scrolling back.
+const VIZ_LOAD_OBSERVER_MARGIN = "1200px 0px 1200px 0px";
+const VIZ_UNLOAD_OBSERVER_MARGIN = "2400px 0px 2400px 0px";
+let _vizLoadObserver = null;
+let _vizUnloadObserver = null;
 function ensureVizObserver() {
-  if (_vizObserver) return _vizObserver;
-  _vizObserver = new IntersectionObserver((entries) => {
+  if (_vizLoadObserver) return _vizLoadObserver;
+  _vizLoadObserver = new IntersectionObserver((entries) => {
     for (const entry of entries) {
       const img = entry.target;
       const realUrl = img.dataset.vizSrc;
       if (!realUrl) continue;
-      if (entry.isIntersecting) {
-        if (img.src !== realUrl) img.src = realUrl;
-      } else {
-        if (img.src !== VIZ_BLANK_DATA_URI) img.src = VIZ_BLANK_DATA_URI;
+      if (entry.isIntersecting && img.src !== realUrl) {
+        img.src = realUrl;
       }
     }
-  }, { rootMargin: "200px 0px 200px 0px", threshold: 0 });
-  return _vizObserver;
+  }, { rootMargin: VIZ_LOAD_OBSERVER_MARGIN, threshold: 0 });
+  _vizUnloadObserver = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      const img = entry.target;
+      // Only unload once the frame is well outside the unload margin.
+      if (!entry.isIntersecting && img.src !== VIZ_BLANK_DATA_URI) {
+        img.src = VIZ_BLANK_DATA_URI;
+      }
+    }
+  }, { rootMargin: VIZ_UNLOAD_OBSERVER_MARGIN, threshold: 0 });
+  // Wrap observe so callers don't have to know about both observers.
+  const wrapped = {
+    observe(img) {
+      _vizLoadObserver.observe(img);
+      _vizUnloadObserver.observe(img);
+    },
+    unobserve(img) {
+      _vizLoadObserver.unobserve(img);
+      _vizUnloadObserver.unobserve(img);
+    },
+  };
+  ensureVizObserver._wrapped = wrapped;
+  return wrapped;
 }
 
 function renderVizStrip(host, run, limit) {
@@ -6807,7 +6905,7 @@ function renderGlobalVizStrip(data) {
 
   // Render strips for the selected run
   const sel = runs.find((r) => r.name === selectedName) || runs[0];
-  renderVizStrip(host, sel, 6);
+  renderVizStrip(host, sel, 12);
 
   // Wire change handler (idempotent — replace prior listener)
   if (!select._oss_bound) {
@@ -6816,10 +6914,82 @@ function renderGlobalVizStrip(data) {
       const r = (lastKnownData?.runs || []).find((x) => x.name === select.value);
       if (r) renderVizStrip(host, r, 12);
       updateGlobalVizCompareBtn();
+      stopGlobalVizPlayback();
     });
     select._oss_bound = true;
   }
   updateGlobalVizCompareBtn();
+  bindGlobalVizPlaybackControls();
+}
+
+// --- Global viz strip step playback ---
+// Auto-advances the visible frame within the global strip at a user-chosen
+// fps. Default 4 fps. Loops at end. Pauses on user scroll inside the strip.
+const globalVizPlayback = {
+  intervalHandle: null,
+  fps: 4,
+  index: 0,
+};
+function _globalVizFrames() {
+  const host = document.getElementById("global-viz-strip");
+  if (!host) return [];
+  return Array.from(host.querySelectorAll(".viz-frame"));
+}
+function _globalVizScrollToIndex(idx) {
+  const frames = _globalVizFrames();
+  if (!frames.length) return;
+  const safeIdx = ((idx % frames.length) + frames.length) % frames.length;
+  globalVizPlayback.index = safeIdx;
+  const target = frames[safeIdx];
+  // Toggle a CSS marker so the user sees which frame is "now playing".
+  for (const f of frames) f.classList.remove("viz-frame-playing");
+  target.classList.add("viz-frame-playing");
+  target.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
+}
+function startGlobalVizPlayback() {
+  stopGlobalVizPlayback();
+  const interval = Math.max(50, Math.round(1000 / Math.max(1, globalVizPlayback.fps)));
+  globalVizPlayback.intervalHandle = window.setInterval(() => {
+    const frames = _globalVizFrames();
+    if (!frames.length) {
+      stopGlobalVizPlayback();
+      return;
+    }
+    _globalVizScrollToIndex(globalVizPlayback.index + 1);
+  }, interval);
+  const btn = document.getElementById("global-viz-play-btn");
+  if (btn) btn.textContent = "⏸ Pause";
+}
+function stopGlobalVizPlayback() {
+  if (globalVizPlayback.intervalHandle) {
+    window.clearInterval(globalVizPlayback.intervalHandle);
+    globalVizPlayback.intervalHandle = null;
+  }
+  const btn = document.getElementById("global-viz-play-btn");
+  if (btn) btn.textContent = "▶ Play";
+  // Drop the playing-frame marker so the strip looks idle.
+  for (const f of _globalVizFrames()) f.classList.remove("viz-frame-playing");
+}
+function bindGlobalVizPlaybackControls() {
+  const btn = document.getElementById("global-viz-play-btn");
+  const fpsSlider = document.getElementById("global-viz-fps-slider");
+  const fpsVal = document.getElementById("global-viz-fps-value");
+  if (btn && !btn._oss_bound) {
+    btn._oss_bound = true;
+    btn.addEventListener("click", () => {
+      if (globalVizPlayback.intervalHandle) stopGlobalVizPlayback();
+      else startGlobalVizPlayback();
+    });
+  }
+  if (fpsSlider && !fpsSlider._oss_bound) {
+    fpsSlider._oss_bound = true;
+    fpsSlider.addEventListener("input", () => {
+      globalVizPlayback.fps = Math.max(1, Number(fpsSlider.value) || 4);
+      if (fpsVal) fpsVal.textContent = String(globalVizPlayback.fps);
+      // Re-arm interval if currently playing so the new fps takes effect.
+      if (globalVizPlayback.intervalHandle) startGlobalVizPlayback();
+    });
+  }
 }
 
 // Pick 2-3 sensible default columns to compare for the global side-by-side
