@@ -5106,8 +5106,35 @@ function renderVizStrip(host, run, limit) {
     host.appendChild(frame);
   }
   host.querySelectorAll(".viz-button").forEach((button) => {
-    button.addEventListener("click", () => {
-      openLightbox(run, orderedFiles, button.dataset.file || orderedFiles[0]);
+    button.addEventListener("click", (event) => {
+      const file = button.dataset.file || orderedFiles[0];
+      // Shift-click falls back to the legacy single-image lightbox for
+      // anyone who wants the full strip in one frame. Default click is
+      // the side-by-side compare modal (per-panel column dropdowns +
+      // synchronized zoom/pan).
+      if (event.shiftKey) {
+        openLightbox(run, orderedFiles, file);
+        return;
+      }
+      const cols = (run.viz_columns || []).filter(Boolean);
+      if (cols.length < 2) {
+        openLightbox(run, orderedFiles, file);
+        return;
+      }
+      const allColumns = cols.map((label, index) => ({
+        index, label, shortLabel: vizColumnChipLabel(label),
+      }));
+      const selected = pickDefaultCompareColumns(cols);
+      if (selected.length < 2) {
+        openLightbox(run, orderedFiles, file);
+        return;
+      }
+      openCompareModal(selected, runUrl(run, file), {
+        runLabel: run.label || run.name,
+        file,
+        columnCount: cols.length,
+        allColumns,
+      });
     });
   });
 }
