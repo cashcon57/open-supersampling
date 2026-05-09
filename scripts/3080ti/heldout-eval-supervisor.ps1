@@ -33,16 +33,21 @@ function ResolveActiveRun {
 
 function StepsAlreadyEvaluated {
     param([string]$scoreLog)
+    # score_log.json is a JSON ARRAY of dashboard rows (deduped by step in
+    # _append_dashboard_score_row). Parse the whole file once and pull
+    # every step. Reading line-by-line as JSONL is wrong and silently
+    # returns @() -- which made every supervisor restart redundantly
+    # re-evaluate every ckpt from scratch.
     if (-not (Test-Path $scoreLog)) { return @() }
     try {
-        $lines = Get-Content $scoreLog -ErrorAction Stop
+        $raw = Get-Content $scoreLog -Raw -ErrorAction Stop
+        if ([string]::IsNullOrWhiteSpace($raw)) { return @() }
+        $payload = $raw | ConvertFrom-Json -ErrorAction Stop
         $steps = @()
-        foreach ($ln in $lines) {
-            if ([string]::IsNullOrWhiteSpace($ln)) { continue }
-            try {
-                $obj = $ln | ConvertFrom-Json
-                if ($obj.step -ne $null) { $steps += [int]$obj.step }
-            } catch {}
+        if ($payload -is [System.Array]) {
+            foreach ($row in $payload) {
+                if ($row -ne $null -and $row.step -ne $null) { $steps += [int]$row.step }
+            }
         }
         return $steps
     } catch {
