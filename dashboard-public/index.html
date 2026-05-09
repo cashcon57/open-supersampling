@@ -1075,6 +1075,46 @@
       background: rgba(6, 78, 59, 0.6);
       color: var(--neutral);
     }
+    .viz-compare-bare-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0 0.55rem;
+      min-height: 2rem;
+      border: 1px solid rgba(113, 113, 122, 0.7);
+      border-radius: 4px;
+      background: rgba(24, 24, 27, 0.8);
+      color: #d4d4d8;
+      font-family: "JetBrains Mono", ui-monospace, monospace;
+      font-size: 0.72rem;
+      cursor: pointer;
+      user-select: none;
+    }
+    .viz-compare-bare-toggle input[type="checkbox"] {
+      accent-color: #22d3ee;
+      cursor: pointer;
+    }
+    .viz-compare-bare-toggle:has(input:checked) {
+      background: rgba(6, 78, 59, 0.6);
+      color: var(--neutral);
+    }
+    .viz-compare-bare {
+      flex: 1 1 auto;
+      min-height: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      padding: 4px;
+    }
+    .viz-compare-bare-image {
+      max-width: 100%;
+      max-height: 100%;
+      background-repeat: no-repeat;
+      background-color: #09090b;
+      border: 1px solid rgba(63, 63, 70, 0.6);
+      border-radius: 4px;
+    }
     .viz-compare-grid {
       display: grid;
       min-height: 0;
@@ -1695,9 +1735,16 @@
             <button class="viz-compare-row-button" type="button" data-viz-compare-row="0" aria-pressed="true">seq A</button>
             <button class="viz-compare-row-button" type="button" data-viz-compare-row="1" aria-pressed="false">seq B</button>
           </div>
+          <label class="viz-compare-bare-toggle" title="Show the source viz strip with no per-panel comparison">
+            <input type="checkbox" id="viz-compare-bare-strip">
+            <span>Bare strip</span>
+          </label>
         </div>
       </div>
       <div id="viz-compare-grid" class="viz-compare-grid"></div>
+      <div id="viz-compare-bare" class="viz-compare-bare" hidden>
+        <div id="viz-compare-bare-image" class="viz-compare-bare-image" role="img" aria-label="Source viz strip"></div>
+      </div>
       <button id="viz-compare-dismiss" class="viz-compare-dismiss" type="button" aria-label="Close comparison viewer">&times;</button>
     </div>
   </dialog>
@@ -1873,6 +1920,7 @@ const compareState = {
   allColumns: [],               // [{ index, label, shortLabel }]
   allFiles: [],                 // [{ file, step, url }]
   runMeta: null,                // { runLabel, run } for re-render
+  bareStrip: false,             // when true, hide grid and show full source strip
 };
 let lastTap = { time: 0, x: 0, y: 0 };
 let lastActiveStep = null;
@@ -5207,6 +5255,40 @@ function updateCompareRow() {
   document.querySelectorAll(".viz-compare-panel-image").forEach((image) => {
     image.style.backgroundPosition = compareBackgroundPosition(Number(image.dataset.columnIndex || 0));
   });
+  updateCompareBareStrip();
+}
+
+function updateCompareBareStrip() {
+  const bare = document.getElementById("viz-compare-bare");
+  const image = document.getElementById("viz-compare-bare-image");
+  const grid = document.getElementById("viz-compare-grid");
+  if (!bare || !image || !grid) return;
+  const enabled = !!compareState.bareStrip;
+  bare.hidden = !enabled;
+  grid.style.display = enabled ? "none" : "";
+  if (!enabled || !compareState.vizUrl) return;
+  image.style.backgroundImage = `url("${cssUrl(compareState.vizUrl)}")`;
+  // Show one full strip row: scale background so 1 row of the source equals
+  // the element height, then offset vertically by rowIndex.
+  image.style.backgroundSize = `100% ${compareState.rowCount * 100}%`;
+  const yPct = compareState.rowCount > 1
+    ? (compareState.rowIndex / (compareState.rowCount - 1)) * 100
+    : 0;
+  image.style.backgroundPosition = `0% ${yPct}%`;
+  // Size the element to one row's aspect ratio inside the available space.
+  const rect = bare.getBoundingClientRect();
+  const rowWidth = compareState.naturalWidth;
+  const rowHeight = compareState.naturalHeight / Math.max(1, compareState.rowCount);
+  if (!rect.width || !rect.height || !rowWidth || !rowHeight) return;
+  const stripAspect = rowWidth / rowHeight;
+  const containerAspect = rect.width / rect.height;
+  if (containerAspect > stripAspect) {
+    image.style.height = `${rect.height}px`;
+    image.style.width = `${rect.height * stripAspect}px`;
+  } else {
+    image.style.width = `${rect.width}px`;
+    image.style.height = `${rect.width / stripAspect}px`;
+  }
 }
 
 function updateCompareImageSizing() {
@@ -5254,6 +5336,9 @@ function openCompareModal(selectedColumns, vizUrl, meta = {}) {
   compareState.allColumns = Array.isArray(meta.allColumns) && meta.allColumns.length
     ? meta.allColumns
     : selectedColumns.slice();
+  compareState.bareStrip = false;
+  const bareCheckbox = document.getElementById("viz-compare-bare-strip");
+  if (bareCheckbox) bareCheckbox.checked = false;
   resetCompareTransform();
   grid.replaceChildren();
   grid.dataset.cols = String(selectedColumns.length);
@@ -5314,6 +5399,7 @@ function openCompareModal(selectedColumns, vizUrl, meta = {}) {
     compareState.naturalWidth = probe.naturalWidth;
     compareState.naturalHeight = probe.naturalHeight;
     updateCompareImageSizing();
+    updateCompareBareStrip();
   };
   probe.src = vizUrl;
 
@@ -5321,7 +5407,10 @@ function openCompareModal(selectedColumns, vizUrl, meta = {}) {
     dialog.showModal();
     document.body.classList.add("lightbox-open");
   }
-  requestAnimationFrame(updateCompareImageSizing);
+  requestAnimationFrame(() => {
+    updateCompareImageSizing();
+    updateCompareBareStrip();
+  });
 }
 
 function closeCompareModal() {
@@ -5349,6 +5438,10 @@ function setCompareGestureStart() {
 
 function handleComparePointerDown(event) {
   if (event.pointerType === "mouse" && event.button !== 0) return;
+  // Bail on form controls — preventDefault + setPointerCapture on a bubbled
+  // pointerdown was killing native <select> open on mobile and (via pointer
+  // capture stealing focus) breaking it on desktop too.
+  if (event.target.closest("select, button, input, textarea, label, option")) return;
   event.preventDefault();
   if (event.currentTarget.setPointerCapture) {
     try { event.currentTarget.setPointerCapture(event.pointerId); } catch (_error) {}
@@ -5415,6 +5508,13 @@ function initCompareModal() {
   grid.addEventListener("pointerup", handleComparePointerUp);
   grid.addEventListener("pointercancel", handleComparePointerUp);
   grid.addEventListener("wheel", handleCompareWheel, { passive: false });
+  const bareCheckbox = document.getElementById("viz-compare-bare-strip");
+  if (bareCheckbox) {
+    bareCheckbox.addEventListener("change", () => {
+      compareState.bareStrip = bareCheckbox.checked;
+      updateCompareBareStrip();
+    });
+  }
   backdrop.addEventListener("click", (event) => {
     if (event.target === backdrop) closeCompareModal();
   });
@@ -5426,7 +5526,10 @@ function initCompareModal() {
   dialog.addEventListener("cancel", () => {
     document.body.classList.remove("lightbox-open");
   });
-  window.addEventListener("resize", updateCompareImageSizing);
+  window.addEventListener("resize", () => {
+    updateCompareImageSizing();
+    updateCompareBareStrip();
+  });
 }
 
 function lightboxCaption(item) {
