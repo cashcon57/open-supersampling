@@ -1174,22 +1174,55 @@
     .viz-compare-panel-select:focus-visible { outline: 1px solid #22d3ee; outline-offset: 2px; }
     .viz-compare-panel-select option { background: #18181b; color: #f4f4f5; }
     .viz-compare-source { color: #a1a1aa; font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; }
-    .viz-compare-mode-select {
-      appearance: none;
-      background: rgba(8, 8, 10, 0.7);
+    .viz-compare-global-step {
+      display: flex; align-items: center; gap: 8px;
+      padding: 4px 10px;
       border: 1px solid rgba(63,63,70,0.7);
-      color: #e4e4e7;
-      padding: 4px 22px 4px 8px;
       border-radius: 4px;
-      font: inherit;
+      background: rgba(8,8,10,0.7);
       font-size: 12px;
-      cursor: pointer;
-      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 16 16'><path fill='none' stroke='%2367e8f9' stroke-width='1.6' d='M3 6l5 5 5-5'/></svg>");
-      background-repeat: no-repeat;
-      background-position: right 4px center;
+      color: #e4e4e7;
     }
-    .viz-compare-mode-select:hover { border-color: rgba(34,211,238,0.6); }
-    .viz-compare-mode-select option { background: #18181b; color: #f4f4f5; }
+    .viz-compare-step-label { color: #a1a1aa; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
+    .viz-compare-step-value { font-family: ui-monospace, monospace; color: #67e8f9; min-width: 70px; text-align: right; }
+    .viz-compare-slider {
+      width: 200px; height: 14px; appearance: none; background: transparent; cursor: pointer;
+    }
+    .viz-compare-slider:focus-visible { outline: 1px solid #22d3ee; outline-offset: 2px; }
+    .viz-compare-slider::-webkit-slider-runnable-track {
+      height: 3px; background: rgba(82,82,91,0.85); border-radius: 2px;
+    }
+    .viz-compare-slider::-moz-range-track {
+      height: 3px; background: rgba(82,82,91,0.85); border-radius: 2px;
+    }
+    .viz-compare-slider::-webkit-slider-thumb {
+      appearance: none; width: 14px; height: 14px; border-radius: 50%;
+      background: #67e8f9; border: 2px solid #0c0c0d; margin-top: -6px;
+      cursor: pointer;
+    }
+    .viz-compare-slider::-moz-range-thumb {
+      width: 14px; height: 14px; border-radius: 50%;
+      background: #67e8f9; border: 2px solid #0c0c0d; cursor: pointer;
+    }
+    .viz-compare-sync-btn {
+      padding: 3px 10px; border: 1px solid rgba(167,139,250,0.55); border-radius: 4px;
+      background: transparent; color: #c4b5fd; font: inherit; font-size: 11px; cursor: pointer;
+    }
+    .viz-compare-sync-btn:hover { background: rgba(167,139,250,0.12); }
+    .viz-compare-sync-btn:focus-visible { outline: 1px solid #22d3ee; outline-offset: 2px; }
+    .viz-compare-panel-step-bar {
+      position: absolute; left: 12px; right: 12px; bottom: 8px;
+      display: flex; align-items: center; gap: 8px;
+      padding: 4px 8px;
+      background: rgba(0,0,0,0.55);
+      border: 1px solid rgba(63,63,70,0.7);
+      border-radius: 4px;
+      z-index: 1;
+      font-size: 11px;
+      color: #d4d4d8;
+    }
+    .viz-compare-panel-step-bar .viz-compare-slider { flex: 1 1 auto; width: auto; }
+    .viz-compare-panel-step-bar .viz-compare-step-value { min-width: 56px; }
     .viz-compare-panel-label {
       position: absolute;
       top: 8px;
@@ -1734,14 +1767,16 @@
           <div id="viz-compare-title" class="viz-compare-title"></div>
           <div id="viz-compare-source" class="viz-compare-source">SOURCE — held-out · TartanAir oldtown · 64 frames</div>
         </div>
-        <div class="flex items-center gap-3">
-          <label class="flex items-center gap-2 text-xs text-zinc-300">
-            <span class="text-zinc-400">Mode</span>
-            <select id="viz-compare-mode" class="viz-compare-mode-select" aria-label="Compare mode">
-              <option value="upscalers">Compare upscalers (same step)</option>
-              <option value="checkpoints">Compare checkpoints (same upscaler)</option>
-            </select>
-          </label>
+        <div class="flex items-center gap-3 flex-wrap justify-end">
+          <div class="viz-compare-global-step" aria-label="Global step">
+            <span class="viz-compare-step-label" data-dim>Step</span>
+            <input id="viz-compare-global-slider" class="viz-compare-slider"
+                   type="range" min="0" max="0" step="1" value="0"
+                   aria-label="Global step slider — moves every panel to this step">
+            <span id="viz-compare-global-step-value" class="viz-compare-step-value">—</span>
+            <button id="viz-compare-sync-btn" class="viz-compare-sync-btn" type="button"
+                    aria-label="Re-sync all panel sliders to the global step">Sync</button>
+          </div>
           <div class="viz-compare-row-toggle" aria-label="Comparison row">
             <button class="viz-compare-row-button" type="button" data-viz-compare-row="0" aria-pressed="true">seq A</button>
             <button class="viz-compare-row-button" type="button" data-viz-compare-row="1" aria-pressed="false">seq B</button>
@@ -5115,11 +5150,16 @@ function renderVizCompareControls(host, run) {
       .sort((a, b) => a - b)
       .map((index) => allColumns[index])
       .filter(Boolean);
+    const allFiles = (run.viz_pngs || [])
+      .map((f) => ({ file: f, step: stepFromName(f), url: runUrl(run, f) }))
+      .filter((x) => Number.isFinite(x.step) && x.step >= 0)
+      .sort((a, b) => a.step - b.step);
     openCompareModal(selectedColumns, runUrl(run, file), {
       runLabel: run.label || run.name,
       file,
       columnCount: columns.length,
       allColumns,
+      allFiles,
     });
   });
 
@@ -5229,11 +5269,16 @@ function renderVizStrip(host, run, limit) {
         openLightbox(run, orderedFiles, file);
         return;
       }
+      const allFiles = orderedFiles
+        .map((f) => ({ file: f, step: stepFromName(f), url: runUrl(run, f) }))
+        .filter((x) => Number.isFinite(x.step) && x.step >= 0)
+        .sort((a, b) => a.step - b.step);
       openCompareModal(selected, runUrl(run, file), {
         runLabel: run.label || run.name,
         file,
         columnCount: cols.length,
         allColumns,
+        allFiles,
       });
     });
   });
@@ -5330,6 +5375,68 @@ function resetCompareTransform() {
   applyCompareTransform();
 }
 
+// Snap an arbitrary target step to the nearest step actually present in
+// `files` (sorted ascending by step). Returns the file entry or null.
+function _nearestFileForStep(files, targetStep) {
+  if (!files || !files.length) return null;
+  // Largest file whose step <= target. If target < first.step, return first.
+  let chosen = files[0];
+  for (const f of files) {
+    if (f.step <= targetStep) chosen = f;
+    else break;
+  }
+  return chosen;
+}
+
+function _renderComparePanelImage(panel) {
+  const stage = panel.querySelector(".viz-compare-panel-stage");
+  const image = stage?.querySelector(".viz-compare-panel-image");
+  if (!image) return;
+  const url = panel._currentFile?.url || "";
+  image.style.backgroundImage = `url("${cssUrl(url)}")`;
+  image.style.backgroundSize = `${compareState.columnCount * 100}% ${compareState.rowCount * 100}%`;
+  image.style.backgroundPosition = compareBackgroundPosition(Number(image.dataset.columnIndex || 0));
+  image.style.transform = compareTransform();
+  // Update step-bar value text
+  const valEl = panel.querySelector(".viz-compare-panel-step-value");
+  if (valEl && panel._currentFile) {
+    valEl.textContent = panel._currentFile.step.toLocaleString();
+  }
+}
+
+function _setPanelToStep(panel, targetStep, { synced = false } = {}) {
+  const files = panel._allFiles || [];
+  const file = _nearestFileForStep(files, targetStep);
+  if (!file) return;
+  panel._currentFile = file;
+  panel._isSynced = !!synced;
+  // Reflect in the per-panel slider too
+  const slider = panel.querySelector(".viz-compare-panel-slider");
+  if (slider && Number(slider.value) !== file.step) {
+    slider.value = String(file.step);
+  }
+  _renderComparePanelImage(panel);
+}
+
+function _updateGlobalSliderState() {
+  const slider = document.getElementById("viz-compare-global-slider");
+  const val = document.getElementById("viz-compare-global-step-value");
+  if (slider) {
+    slider.min = String(compareState.globalStepMin || 0);
+    slider.max = String(compareState.globalStepMax || 0);
+    slider.value = String(compareState.globalStep || compareState.globalStepMin || 0);
+  }
+  if (val) val.textContent = (compareState.globalStep || 0).toLocaleString();
+}
+
+function _syncAllPanelsToGlobal() {
+  const grid = document.getElementById("viz-compare-grid");
+  if (!grid) return;
+  grid.querySelectorAll(".viz-compare-panel").forEach((panel) => {
+    _setPanelToStep(panel, compareState.globalStep, { synced: true });
+  });
+}
+
 function openCompareModal(selectedColumns, vizUrl, meta = {}) {
   const dialog = document.getElementById("viz-compare-modal");
   const grid = document.getElementById("viz-compare-grid");
@@ -5341,38 +5448,50 @@ function openCompareModal(selectedColumns, vizUrl, meta = {}) {
   compareState.vizUrl = vizUrl;
   compareState.naturalWidth = 0;
   compareState.naturalHeight = 0;
-  // Full column list (all available in the source PNG) so each panel's
-  // dropdown can swap to any column. Falls back to `selectedColumns` when
-  // the caller didn't pass the full set (legacy entry points).
   compareState.allColumns = Array.isArray(meta.allColumns) && meta.allColumns.length
     ? meta.allColumns
     : selectedColumns.slice();
   compareState.bareStrip = false;
   const bareCheckbox = document.getElementById("viz-compare-bare-strip");
   if (bareCheckbox) bareCheckbox.checked = false;
+  // Step list: sorted ascending by step. Each entry has {file, step, url}.
+  // For now all panels share one run + one step list; the UI logic supports
+  // per-panel step lists (so cross-run comparisons can land later without
+  // a second refactor).
+  compareState.allFiles = Array.isArray(meta.allFiles) && meta.allFiles.length
+    ? meta.allFiles.slice().sort((a, b) => a.step - b.step)
+    : [];
+  // If caller didn't pass allFiles, fall back to the single vizUrl as one
+  // step so the modal still renders.
+  if (!compareState.allFiles.length) {
+    compareState.allFiles = [{ file: meta.file || "", step: stepFromName(meta.file || ""), url: vizUrl }];
+  }
+  // Initial global step = the file the user clicked from (or last available).
+  const initial = compareState.allFiles.find((f) => f.file === (meta.file || "")) || compareState.allFiles[compareState.allFiles.length - 1];
+  compareState.globalStep = initial.step;
+  compareState.globalStepMin = compareState.allFiles[0].step;
+  compareState.globalStepMax = compareState.allFiles[compareState.allFiles.length - 1].step;
   resetCompareTransform();
   grid.replaceChildren();
   grid.dataset.cols = String(selectedColumns.length);
-  title.textContent = `${meta.runLabel || "viz"} / step ${stepFromName(meta.file).toLocaleString()} / ${selectedColumns.length} columns`;
+  title.textContent = `${meta.runLabel || "viz"} · ${selectedColumns.length} panels`;
 
   selectedColumns.forEach((column) => {
     const panel = document.createElement("section");
     panel.className = "viz-compare-panel";
     panel.dataset.columnIndex = String(column.index);
     panel.dataset.columnLabel = column.label;
+    panel._allFiles = compareState.allFiles;
+    panel._currentFile = initial;
+    panel._isSynced = true;
+
     const stage = document.createElement("div");
     stage.className = "viz-compare-panel-stage";
     const image = document.createElement("div");
     image.className = "viz-compare-panel-image";
     image.dataset.columnIndex = String(column.index);
-    image.style.backgroundImage = `url("${cssUrl(vizUrl)}")`;
-    image.style.backgroundSize = `${compareState.columnCount * 100}% ${compareState.rowCount * 100}%`;
-    image.style.backgroundPosition = compareBackgroundPosition(column.index);
-    image.style.transform = compareTransform();
 
-    // Per-panel column selector. Lets the user swap which column this
-    // panel renders without leaving the modal — same source PNG, just
-    // shifts the CSS background-position to expose a different slice.
+    // Column-picker label (top-left)
     const label = document.createElement("div");
     label.className = "viz-compare-panel-label";
     const select = document.createElement("select");
@@ -5392,17 +5511,69 @@ function openCompareModal(selectedColumns, vizUrl, meta = {}) {
       panel.dataset.columnIndex = String(replacement.index);
       panel.dataset.columnLabel = replacement.label;
       image.dataset.columnIndex = String(replacement.index);
-      image.style.backgroundPosition = compareBackgroundPosition(replacement.index);
-      // Update the in-memory selection list so other features (close/reopen,
-      // future toggles) see the freshly swapped columns.
+      _renderComparePanelImage(panel);
       const slot = compareState.selectedColumns.findIndex((c) => c === column);
       if (slot >= 0) compareState.selectedColumns[slot] = replacement;
     });
     label.appendChild(select);
+
+    // Per-panel step bar (bottom)
+    const stepBar = document.createElement("div");
+    stepBar.className = "viz-compare-panel-step-bar";
+    const stepSlider = document.createElement("input");
+    stepSlider.type = "range";
+    stepSlider.className = "viz-compare-slider viz-compare-panel-slider";
+    stepSlider.min = String(compareState.allFiles[0].step);
+    stepSlider.max = String(compareState.allFiles[compareState.allFiles.length - 1].step);
+    stepSlider.step = "1";
+    stepSlider.value = String(initial.step);
+    stepSlider.setAttribute("aria-label", "Per-panel step slider");
+    const stepVal = document.createElement("span");
+    stepVal.className = "viz-compare-step-value viz-compare-panel-step-value";
+    stepVal.textContent = initial.step.toLocaleString();
+    stepBar.append(stepSlider, stepVal);
+
+    stepSlider.addEventListener("input", () => {
+      const target = Number(stepSlider.value);
+      _setPanelToStep(panel, target, { synced: false });
+    });
+
     stage.appendChild(image);
-    panel.append(stage, label);
+    panel.append(stage, label, stepBar);
     grid.appendChild(panel);
+
+    // Initial render
+    _renderComparePanelImage(panel);
   });
+
+  // Wire global slider + sync button (bind once; replace handlers on each open
+  // by reading from compareState which the per-open code populates).
+  _updateGlobalSliderState();
+  const globalSlider = document.getElementById("viz-compare-global-slider");
+  if (globalSlider && !globalSlider._oss_bound) {
+    globalSlider._oss_bound = true;
+    globalSlider.addEventListener("input", () => {
+      compareState.globalStep = Number(globalSlider.value);
+      const val = document.getElementById("viz-compare-global-step-value");
+      if (val) val.textContent = compareState.globalStep.toLocaleString();
+      // Move every panel to nearest available step. Panels whose individual
+      // sliders have been dragged out of sync still follow the global, since
+      // the user spec says "top slider always moves progress for each side
+      // by side model through their respective steps." Sync state is only
+      // re-set explicitly via the Sync button.
+      const grid2 = document.getElementById("viz-compare-grid");
+      grid2?.querySelectorAll(".viz-compare-panel").forEach((panel) => {
+        _setPanelToStep(panel, compareState.globalStep, { synced: panel._isSynced });
+      });
+    });
+  }
+  const syncBtn = document.getElementById("viz-compare-sync-btn");
+  if (syncBtn && !syncBtn._oss_bound) {
+    syncBtn._oss_bound = true;
+    syncBtn.addEventListener("click", () => {
+      _syncAllPanelsToGlobal();
+    });
+  }
 
   updateCompareRow();
   const probe = new Image();
@@ -5412,7 +5583,7 @@ function openCompareModal(selectedColumns, vizUrl, meta = {}) {
     updateCompareImageSizing();
     updateCompareBareStrip();
   };
-  probe.src = vizUrl;
+  probe.src = initial.url;
 
   if (!dialog.open) {
     dialog.showModal();
@@ -6702,11 +6873,16 @@ function updateGlobalVizCompareBtn() {
     const allColumns = cols2.map((label, index) => ({
       index, label, shortLabel: vizColumnChipLabel(label),
     }));
+    const allFiles = (r.viz_pngs || [])
+      .map((f) => ({ file: f, step: stepFromName(f), url: runUrl(r, f) }))
+      .filter((x) => Number.isFinite(x.step) && x.step >= 0)
+      .sort((a, b) => a.step - b.step);
     openCompareModal(selected, runUrl(r, file2), {
       runLabel: r.label || r.name,
       file: file2,
       columnCount: cols2.length,
       allColumns,
+      allFiles,
     });
   });
 }
