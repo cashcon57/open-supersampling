@@ -3649,7 +3649,15 @@ function bindAxisScaleDrag(chart, canvas) {
     setCursor(region?.cursor || "");
   }
 
-  function onMouseUp() {
+  function onMouseUp(event) {
+    // Always release pointer capture on mouseup, even when no axis drag was
+    // active. Without this, an axis-drag that captured the pointer keeps it
+    // beyond the drag's lifetime, and Chart.js's plot-area pan handler then
+    // receives events under a stuck capture state -- producing the symptom
+    // "drag works initially, but stops working after I scale an axis".
+    if (typeof canvas.releasePointerCapture === "function" && event?.pointerId !== undefined) {
+      try { canvas.releasePointerCapture(event.pointerId); } catch (_) {}
+    }
     if (!state.active) return;
     state.active = null;
     setCursor("");
@@ -3666,6 +3674,7 @@ function bindAxisScaleDrag(chart, canvas) {
   canvas.addEventListener("pointercancel", onMouseUp);
   document.addEventListener("mousemove", onMouseMove);
   document.addEventListener("mouseup", onMouseUp);
+  document.addEventListener("pointerup", onMouseUp);
   canvas._axisScaleDrag = state;
 }
 

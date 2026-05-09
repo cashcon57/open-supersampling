@@ -382,6 +382,36 @@ def per_frame_payload(row: dict[str, Any]) -> tuple[dict[str, list[float]] | Non
     )
 
 
+def _downsampled_loss_curve(metrics: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return loss-curve rows for the public data.json.
+
+    Old behavior was a hard tail of the last 1000 rows. That hides the
+    full-history descent once a run crosses step 1000 — at step 5k+ the
+    chart shows a near-flat 4500-5500 window even when the early descent
+    was steep. We instead keep the last 1000 rows at full resolution and
+    decimate the earlier history evenly to ~1500 rows. Total payload is
+    bounded around ~2500 rows even for 100k-step runs, while preserving
+    the shape of the full trajectory.
+    """
+    TAIL_FULL_RES = 1000
+    EARLY_TARGET = 1500
+    rows = list(metrics or [])
+    if len(rows) <= TAIL_FULL_RES + EARLY_TARGET:
+        return [slim_row(row) for row in rows]
+    tail = rows[-TAIL_FULL_RES:]
+    early = rows[: len(rows) - TAIL_FULL_RES]
+    if len(early) <= EARLY_TARGET:
+        kept_early = early
+    else:
+        stride = max(1, len(early) // EARLY_TARGET)
+        # Keep every `stride`-th row from the early window, plus the very
+        # last "early" row so the join with the full-res tail isn't gappy.
+        kept_early = early[::stride]
+        if early and (not kept_early or kept_early[-1] is not early[-1]):
+            kept_early.append(early[-1])
+    return [slim_row(row) for row in (kept_early + tail)]
+
+
 def slim_row(row: dict[str, Any], *, enrich_score: bool = False) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for key, value in row.items():
@@ -802,7 +832,7 @@ def build_run(name: str, previous: dict[str, Any] | None) -> dict[str, Any] | No
         "history": history_for_run(name, config),
         "latest_step": latest_step,
         "latest_metrics": latest,
-        "loss_curve": [slim_row(row) for row in metrics[-1000:]],
+        "loss_curve": _downsampled_loss_curve(metrics),
         "score_log": [slim_row(row, enrich_score=True) for row in scores],
         "viz_pngs": viz_pngs,
         "viz_columns": viz_columns,
