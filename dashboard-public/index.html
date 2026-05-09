@@ -1134,6 +1134,9 @@
       border: 1px solid #404040;
       border-radius: 6px;
       background: #0a0a0a;
+      /* Cap panel height on desktop so the modal never balloons past the
+       * viewport. Mobile already has a smaller min-height rule below. */
+      max-height: min(78vh, 720px);
     }
     .viz-compare-panel-stage {
       position: absolute;
