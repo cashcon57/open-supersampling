@@ -1116,6 +1116,19 @@
       will-change: transform;
     }
     .viz-compare-panel-stage:active .viz-compare-panel-image { cursor: grabbing; }
+    .viz-compare-panel-select {
+      background: transparent;
+      border: none;
+      color: inherit;
+      font: inherit;
+      padding: 0;
+      cursor: pointer;
+      max-width: 200px;
+      text-overflow: ellipsis;
+      appearance: none;
+    }
+    .viz-compare-panel-select:focus-visible { outline: 1px solid #22d3ee; outline-offset: 2px; }
+    .viz-compare-panel-select option { background: #18181b; color: #f4f4f5; }
     .viz-compare-panel-label {
       position: absolute;
       top: 8px;
@@ -4995,13 +5008,18 @@ function renderVizCompareControls(host, run) {
 
   cta.addEventListener("click", () => {
     if (selected.size < 2) return;
+    const allColumns = columns.map((label, index) => ({
+      index, label, shortLabel: vizColumnChipLabel(label),
+    }));
     const selectedColumns = Array.from(selected)
       .sort((a, b) => a - b)
-      .map((index) => ({ index, label: columns[index], shortLabel: vizColumnChipLabel(columns[index]) }));
+      .map((index) => allColumns[index])
+      .filter(Boolean);
     openCompareModal(selectedColumns, runUrl(run, file), {
       runLabel: run.label || run.name,
       file,
       columnCount: columns.length,
+      allColumns,
     });
   });
 
@@ -5162,6 +5180,12 @@ function openCompareModal(selectedColumns, vizUrl, meta = {}) {
   compareState.vizUrl = vizUrl;
   compareState.naturalWidth = 0;
   compareState.naturalHeight = 0;
+  // Full column list (all available in the source PNG) so each panel's
+  // dropdown can swap to any column. Falls back to `selectedColumns` when
+  // the caller didn't pass the full set (legacy entry points).
+  compareState.allColumns = Array.isArray(meta.allColumns) && meta.allColumns.length
+    ? meta.allColumns
+    : selectedColumns.slice();
   resetCompareTransform();
   grid.replaceChildren();
   grid.dataset.cols = String(selectedColumns.length);
@@ -5181,9 +5205,36 @@ function openCompareModal(selectedColumns, vizUrl, meta = {}) {
     image.style.backgroundSize = `${compareState.columnCount * 100}% ${compareState.rowCount * 100}%`;
     image.style.backgroundPosition = compareBackgroundPosition(column.index);
     image.style.transform = compareTransform();
+
+    // Per-panel column selector. Lets the user swap which column this
+    // panel renders without leaving the modal — same source PNG, just
+    // shifts the CSS background-position to expose a different slice.
     const label = document.createElement("div");
     label.className = "viz-compare-panel-label";
-    label.textContent = column.shortLabel || column.label;
+    const select = document.createElement("select");
+    select.className = "viz-compare-panel-select";
+    select.setAttribute("aria-label", "Choose column to display in this panel");
+    for (const opt of compareState.allColumns) {
+      const optEl = document.createElement("option");
+      optEl.value = String(opt.index);
+      optEl.textContent = opt.shortLabel || opt.label;
+      if (opt.index === column.index) optEl.selected = true;
+      select.appendChild(optEl);
+    }
+    select.addEventListener("change", () => {
+      const newIdx = Number(select.value);
+      const replacement = compareState.allColumns.find((c) => c.index === newIdx)
+        || { index: newIdx, label: String(newIdx), shortLabel: String(newIdx) };
+      panel.dataset.columnIndex = String(replacement.index);
+      panel.dataset.columnLabel = replacement.label;
+      image.dataset.columnIndex = String(replacement.index);
+      image.style.backgroundPosition = compareBackgroundPosition(replacement.index);
+      // Update the in-memory selection list so other features (close/reopen,
+      // future toggles) see the freshly swapped columns.
+      const slot = compareState.selectedColumns.findIndex((c) => c === column);
+      if (slot >= 0) compareState.selectedColumns[slot] = replacement;
+    });
+    label.appendChild(select);
     stage.appendChild(image);
     panel.append(stage, label);
     grid.appendChild(panel);
@@ -6466,10 +6517,14 @@ function updateGlobalVizCompareBtn() {
     if (cols2.length < 2 || !file2) return;
     const selected = pickDefaultCompareColumns(cols2);
     if (selected.length < 2) return;
+    const allColumns = cols2.map((label, index) => ({
+      index, label, shortLabel: vizColumnChipLabel(label),
+    }));
     openCompareModal(selected, runUrl(r, file2), {
       runLabel: r.label || r.name,
       file: file2,
       columnCount: cols2.length,
+      allColumns,
     });
   });
 }
