@@ -1352,13 +1352,21 @@
       .magnifier-readout { display: none; }
       .viz-compare-backdrop {
         overflow-y: auto;
-        padding-top: max(4rem, env(safe-area-inset-top));
+        padding: max(0.75rem, env(safe-area-inset-top)) max(0.75rem, env(safe-area-inset-right)) max(0.75rem, env(safe-area-inset-bottom)) max(0.75rem, env(safe-area-inset-left));
+        gap: 8px;
       }
       .viz-compare-toolbar {
         align-items: flex-start;
         flex-direction: column;
-        padding-right: 0;
+        gap: 0.5rem;
+        padding-right: 3rem;
       }
+      .viz-compare-toolbar > .flex {
+        flex-wrap: wrap;
+        gap: 0.5rem;
+      }
+      .viz-compare-title { white-space: normal; }
+      .viz-compare-mode-select { max-width: 100%; }
       .viz-compare-grid,
       .viz-compare-grid[data-cols] {
         grid-template-columns: 1fr;
@@ -1366,7 +1374,10 @@
         overflow: visible;
       }
       .viz-compare-panel {
-        min-height: min(72dvh, 34rem);
+        min-height: min(45dvh, 20rem);
+      }
+      .viz-compare-bare {
+        min-height: min(40dvh, 18rem);
       }
       .info-tooltip.is-sheet {
         left: 0 !important;
