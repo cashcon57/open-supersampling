@@ -1867,7 +1867,12 @@ const warnedUrlRuns = new Set();
 const warnedUrlTargets = new Set();
 const DASHBOARD_TITLE_BASE = "OpenSuperSampling";
 const LOSS_DIVERGENCE_WINDOW = 100;
-const LOSS_DIVERGENCE_SIGMA = 2;
+// 2σ on a 100-sample window fires ~2.5% of the time on Gaussian noise -- one
+// false alarm every ~40 steps for a loss that's just normally jittery. Bump
+// to 5σ AND require 3 consecutive divergent samples below before raising the
+// alarm, so we only fire on a sustained drift, not a single noisy uptick.
+const LOSS_DIVERGENCE_SIGMA = 5;
+const LOSS_DIVERGENCE_CONSECUTIVE = 3;
 const LOSS_DIVERGENCE_RECOVERY_STEPS = 50;
 const lossDivergenceState = {
   runName: null,
@@ -2841,9 +2846,14 @@ function updateLossDivergenceAlarm(data) {
     return;
   }
 
+  // Sustained-divergence test: only fire when the LAST N consecutive samples
+  // ALL exceeded the rolling sigma band. Single-sample blips are noise.
+  const tailDiverged = samples.slice(-LOSS_DIVERGENCE_CONSECUTIVE).every((s) => s.diverged);
+  const fireLatest = tailDiverged ? latest : null;
+
   if (!lossDivergenceState.active) {
     lossDivergenceState.lastProcessedStep = latest.step;
-    if (latest.diverged) activateLossDivergenceAlarm(run, latest);
+    if (fireLatest) activateLossDivergenceAlarm(run, fireLatest);
     else syncLossDivergenceBanner();
     return;
   }
