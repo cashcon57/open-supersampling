@@ -141,3 +141,27 @@ Remaining gaps not addressed in this pass:
 
 - The Pass 3 held-out video native-close/session-token findings remain open; this pass only covered the three deferred items requested above.
 - Held-out frame PNG publication still uses the existing direct writer/copy behavior described in earlier findings; no `.complete` marker or atomic PNG publish protocol was added here.
+
+## Pass 5 — final closure review
+
+### Item-by-item verdict (PASS / FAIL / PARTIAL with rationale)
+
+- **Score-log race: PARTIAL.** The new helper serializes cooperating callers correctly: `scripts/_score_log_io.py` uses a per-process thread lock plus `fcntl.flock`/`msvcrt.locking` on `score_log.json.lock`, releases the OS lock and closes the fd in `finally` blocks, reads/modifies/writes under that lock, and commits via `os.replace`. Read failures, JSON decode failures, write failures, and exceptions during sort/merge do not leak the held lock. A crashed process releases the kernel lock, so a leftover sidecar file is harmless; however, there is no timeout for a live wedged lock holder. The remaining blocker is compatibility with non-cooperating writers: `scripts/sr_v6_held_out.py` still does unlocked read/append/write against `score_log.json` and the same fixed `score_log.json.tmp`, so it can race with the new helper and lose rows or collide on temp files. Existing JSON-array score logs read normally; malformed non-list files still fail, and non-dict entries are silently dropped.
+- **Slug rollout: PARTIAL.** Current published asset URLs use `run.slug || run.name`: viz strip/lightbox/compare paths go through `runUrl()`, and held-out frame URLs go through `runSlug()`. The watcher stages `SOURCE_DIR/<name>` into `runs/<slug>`, and all currently published slugs equal names, so existing `runs/<name>/*` R2 objects remain reachable. This is not a full migration path for path-significant names: `run_storage_slug()` computes a deterministic slug but rejects any name whose slug would differ, so future unsafe names fail with an actionable builder error rather than being mapped. The schema only requires `slug` to be a string; it does not validate non-empty/storage-safe/unique or relationship-to-name constraints. `dashboard-public/data.json` has `slug` for each of its six checked-in runs, but it is stale relative to the current seven-run source config and does not include `srcnn-v6.2-pico-002`.
+- **Bare-strip sync: PASS for behavior, PARTIAL for coverage.** Actual resolution order is last writer wins: modal open seeds `bareStripFile` to the clicked/global initial file; moving panel A sets it to panel A's nearest file, moving panel B overwrites it, and toggling bare-strip on renders panel B's file. With bare-strip already enabled, moving the global slider updates all panels, sets `bareStripFile` from the global nearest file, and immediately calls `updateCompareBareStrip()`. Column dropdown and per-panel step-slider listeners remain intact; the pointer handler still exits on form controls. I found no automated test coverage for the bare-strip A-then-B-toggle order or global-slider live update.
+
+### Any new regressions or concerns
+
+- The score-log closure is not complete while `scripts/sr_v6_held_out.py` bypasses the sidecar lock and uses the same temp filename. This is a remaining multi-writer risk, not something I fixed in this pass.
+- `tests/test_score_log_io.py` covers replacement, stale trainer merge, and a five-thread append race, but not multi-process `flock`/`msvcrt` behavior.
+- `dashboard-public/data.json` validates today (`runs=6`) and contains slug fields, but its checked-in contents are older than the current dashboard source config that includes active `srcnn-v6.2-pico-002`.
+
+Verification run:
+
+- `python3 -m pytest -q tests/test_score_log_io.py tests/test_public_dashboard_schema.py tests/test_repro_manifest.py` passed (`8 passed, 2 skipped`).
+- `python3 tools/check_data_schema.py dashboard-public/data.json` passed (`runs=6`).
+- `git diff --check` passed.
+
+### Sign-off
+
+Not signed off as full Pass 4 closure. The bare-strip behavior fix is closed for the reviewed paths, and the slug change is safe for current identity slugs, but the score-log race remains partially open due to an unlocked direct writer. Per instruction, I stopped at documentation and did not make source changes.
