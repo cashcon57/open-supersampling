@@ -144,7 +144,13 @@ for name in RUN_CONFIG.keys():
     # newer. cp -u is GNU coreutils; falls back to plain cp on BSD.
     for f in metrics.json score_log.json events.json gpu_status.json; do
       [[ -f "$src_run/$f" ]] || continue
-      cp -p "$src_run/$f" "$dst_run/$f" 2>/dev/null || true
+      local src="$src_run/$f"
+      local dst="$dst_run/$f"
+      if [[ -f "$dst" ]] && [[ ! "$src" -nt "$dst" ]]; then
+        continue
+      fi
+      local tmp="${dst}.tmp.$$.$RANDOM"
+      cp -p "$src" "$tmp" 2>/dev/null && mv "$tmp" "$dst" 2>/dev/null || rm -f "$tmp"
     done
     if [[ -d "$src_run/viz" ]]; then
       # Sync only PNGs from viz/. The previous skip condition relied on
@@ -158,7 +164,9 @@ for name in RUN_CONFIG.keys():
         if [[ -f "$dst_run/viz/$base" ]] && [[ ! "$png" -nt "$dst_run/viz/$base" ]]; then
           continue
         fi
-        cp -p "$png" "$dst_run/viz/$base" 2>/dev/null || true
+        local dst="$dst_run/viz/$base"
+        local tmp="${dst}.tmp.$$.$RANDOM"
+        cp -p "$png" "$tmp" 2>/dev/null && mv "$tmp" "$dst" 2>/dev/null || rm -f "$tmp"
       done
     fi
     # Held-out per-step frame dumps for the dashboard's video player. Skip
@@ -175,7 +183,8 @@ for name in RUN_CONFIG.keys():
           continue
         fi
         mkdir -p "$(dirname "$dst")"
-        cp -p "$png" "$dst" 2>/dev/null || true
+        local tmp="${dst}.tmp.$$.$RANDOM"
+        cp -p "$png" "$tmp" 2>/dev/null && mv "$tmp" "$dst" 2>/dev/null || rm -f "$tmp"
       done < <(find "$src_run/heldout-frames" -type f -name '*.png' -print0 2>/dev/null)
     fi
   done

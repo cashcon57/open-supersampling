@@ -15,7 +15,6 @@ compare against bicubic upsample of the same LR input.
 from __future__ import annotations
 
 import argparse
-import json
 import math
 import os
 import re
@@ -28,6 +27,8 @@ from typing import Any, Mapping, Sequence
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
+
+from scripts._score_log_io import append_score_log_row  # noqa: E402
 
 
 DEFAULT_SCALE = 2.0
@@ -361,22 +362,8 @@ def _score_row(*, ckpt: Path, manifest: Path, result: dict[str, list[float]]) ->
     }
 
 
-def _read_score_log(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    with path.open("r") as f:
-        data = json.load(f)
-    if not isinstance(data, list):
-        raise ValueError(f"{path} must contain a JSON array")
-    return [dict(row) for row in data]
-
-
-def _write_score_log(path: Path, rows: list[dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with tmp.open("w") as f:
-        json.dump(rows, f, indent=2)
-    tmp.replace(path)
+def _update_score_log(path: Path, row: Mapping[str, Any]) -> None:
+    append_score_log_row(path, row)
 
 
 def _try_scp_missing_file(local: Path, remote_path: str) -> None:
@@ -441,7 +428,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--append",
         action="store_true",
-        help="Append to existing score_log.json instead of overwriting",
+        help="Accepted for compatibility; score_log.json updates are always merged safely",
     )
     p.add_argument("--batch-size", type=int, default=1)
     p.add_argument("--scale", type=float, default=DEFAULT_SCALE)
@@ -479,9 +466,7 @@ def main(argv: list[str] | None = None) -> int:
     row = _score_row(ckpt=ckpt, manifest=manifest, result=result)
 
     score_path = args.output_dir / "score_log.json"
-    rows = _read_score_log(score_path) if args.append else []
-    rows.append(row)
-    _write_score_log(score_path, rows)
+    _update_score_log(score_path, row)
 
     print(
         "held-out: "
