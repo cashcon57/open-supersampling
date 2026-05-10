@@ -199,8 +199,20 @@ print(json.dumps(payload, indent=2, sort_keys=True))
 
 publish_changed() {
   # Walk the staging tree, hash each file, upload only changed.
+  #
+  # held-out frame PNGs are excluded by default. The full backfill writes
+  # ~10k PNGs per run; pushing all of them every cycle saturates the
+  # worker (Connection-reset / Send-failure errors blocked metrics.json
+  # from publishing). Set OSS_UPLOAD_HELDOUT_FRAMES=1 to opt in once a
+  # less flood-prone uploader is wired (e.g., a nightly batch with
+  # rate-limiting). The frames stay locally staged + the dashboard's
+  # video player will 404 the frame URLs gracefully.
+  local find_excludes=( -not -path '*/.last-hashes' -not -path '*/\.*' )
+  if [[ "${OSS_UPLOAD_HELDOUT_FRAMES:-0}" != "1" ]]; then
+    find_excludes+=( -not -path '*/heldout-frames/*' )
+  fi
   local now_hashes
-  now_hashes="$(cd "$STAGING_DIR" && find . -type f -not -path '*/.last-hashes' -not -path '*/\.*' -print0 | \
+  now_hashes="$(cd "$STAGING_DIR" && find . -type f "${find_excludes[@]}" -print0 | \
     xargs -0 -P4 -I{} sh -c 'printf "%s  %s\n" "$(shasum -a 256 "$1" | cut -d" " -f1)" "${1#./}"' _ {} | sort)"
   local prev_hashes=""
   [[ -f "$HASH_FILE" ]] && prev_hashes="$(cat "$HASH_FILE")"
