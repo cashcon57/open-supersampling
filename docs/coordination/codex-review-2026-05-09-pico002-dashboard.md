@@ -165,3 +165,15 @@ Verification run:
 ### Sign-off
 
 Not signed off as full Pass 4 closure. The bare-strip behavior fix is closed for the reviewed paths, and the slug change is safe for current identity slugs, but the score-log race remains partially open due to an unlocked direct writer. Per instruction, I stopped at documentation and did not make source changes.
+
+## Pass 6 — staging atomic + sr_v6 lock
+
+- **Staging publish race fixed — `590f95e`**: `scripts/watch_and_publish.sh` now stages `metrics.json`, `score_log.json`, `events.json`, `gpu_status.json`, `viz/*.png`, and opt-in held-out frame PNGs through sibling temp files followed by `mv` into place. Existing freshness skips are preserved, and the top-level JSON files now skip when the source is not newer than the staged destination.
+- **Git Bash CRLF staging key fix — `46e2331`**: the watcher strips the trailing `\r` from Python-emitted RUN_CONFIG lines before deriving `run` and `slug`. The first 3080 Ti verification attempt exposed duplicate CR-suffixed staging directories and R2 keys such as `runs/srcnn-v6.2-pico-002\r/metrics.json`; the final remote run used clean staging directories only.
+- **sr_v6 score-log writer fixed — `590f95e`**: `scripts/sr_v6_held_out.py` now routes score-log updates through `scripts._score_log_io.append_score_log_row`, removing the unlocked read/append/write path and fixed `score_log.json.tmp`. The legacy `--append` flag remains accepted, but updates are always merged through the locked helper.
+
+Verification run:
+
+- `venv-py312/bin/python -m pytest -q tests/test_score_log_io.py tests/sr/v6/test_held_out.py` passed (`5 passed`).
+- `venv-py312/bin/python -m py_compile scripts/sr_v6_held_out.py scripts/_score_log_io.py`, `bash -n scripts/watch_and_publish.sh`, and `git diff --check` passed.
+- 3080 Ti watcher verification on `46e2331`: pulled `main`, restarted the watcher, cleaned stale CR staging entries, seeded `.last-hashes` for steady-state observation, then watched five complete cycles. Final poll output was `poll cycles=5 read_errs=0 put_fails=0`; cycle lines were `[18:37:29] pushed=4 total=170`, `[18:38:27] pushed=4 total=170`, `[18:39:28] pushed=4 total=170`, `[18:40:34] pushed=4 total=170`, and `[18:41:39] pushed=5 total=171`.
