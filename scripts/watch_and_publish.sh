@@ -129,6 +129,9 @@ for name in RUN_CONFIG.keys():
     )
   fi
   for entry in "${allow_list[@]}"; do
+    # Windows python emits CRLF under Git Bash; strip the carriage return so
+    # staged run directories and R2 keys do not contain literal "\r" bytes.
+    entry="${entry%$'\r'}"
     local run="${entry%%$'\t'*}"
     local slug="$run"
     if [[ "$entry" == *$'\t'* ]]; then
