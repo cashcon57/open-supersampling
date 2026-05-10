@@ -85,13 +85,20 @@ if (Test-Path $scoreLog) {
     try {
         $raw = Get-Content $scoreLog -Raw -ErrorAction Stop
         if (-not [string]::IsNullOrWhiteSpace($raw)) {
-            $payload = @($raw | ConvertFrom-Json -ErrorAction Stop)
-            foreach ($r in $payload) {
-                if ($r -ne $null -and $r.step -ne $null) { $scoredSteps += [int]$r.step }
+            # See supervisor's StepsAlreadyEvaluated for the @()-collapse
+            # bug rationale. Direct assignment + IEnumerable test handles
+            # both multi-row arrays and single-row scalars.
+            $payload = ConvertFrom-Json $raw -ErrorAction Stop
+            if ($payload -is [System.Collections.IEnumerable] -and -not ($payload -is [string])) {
+                foreach ($r in $payload) {
+                    if ($r -ne $null -and $r.step -ne $null) { $scoredSteps += [int]$r.step }
+                }
+            } elseif ($payload -ne $null -and $payload.step -ne $null) {
+                $scoredSteps += [int]$payload.step
             }
         }
     } catch {
-        Log "could not parse score_log; nothing to backfill"
+        Log "could not parse score_log: $_"
         exit 0
     }
 }

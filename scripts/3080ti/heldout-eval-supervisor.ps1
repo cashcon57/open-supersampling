@@ -38,21 +38,29 @@ function StepsAlreadyEvaluated {
     # every step. Reading line-by-line as JSONL is wrong and silently
     # returns @() -- which made every supervisor restart redundantly
     # re-evaluate every ckpt from scratch.
-    if (-not (Test-Path $scoreLog)) { return @() }
+    if (-not (Test-Path $scoreLog)) { return ,@() }
     try {
         $raw = Get-Content $scoreLog -Raw -ErrorAction Stop
-        if ([string]::IsNullOrWhiteSpace($raw)) { return @() }
-        # @(...) wraps a single-row JSON-array unwrap into a real 1-element
-        # array. Without this, a one-row score log fails the array-type
-        # guard below and every supervisor restart re-evaluates the row.
-        $payload = @($raw | ConvertFrom-Json -ErrorAction Stop)
+        if ([string]::IsNullOrWhiteSpace($raw)) { return ,@() }
+        # PowerShell quirk: `@(ConvertFrom-Json $arr)` and `@($x | ConvertFrom-Json)`
+        # both COLLAPSE the resulting Object[] into a single-element array
+        # whose [0] is the original Object[]. Direct assignment preserves
+        # the array. We then check IEnumerable to handle both array (many
+        # rows) and scalar (single-row legacy) cases robustly.
+        $payload = ConvertFrom-Json $raw -ErrorAction Stop
         $steps = @()
-        foreach ($row in $payload) {
-            if ($row -ne $null -and $row.step -ne $null) { $steps += [int]$row.step }
+        if ($payload -is [System.Collections.IEnumerable] -and -not ($payload -is [string])) {
+            foreach ($row in $payload) {
+                if ($row -ne $null -and $row.step -ne $null) { $steps += [int]$row.step }
+            }
+        } elseif ($payload -ne $null -and $payload.step -ne $null) {
+            $steps += [int]$payload.step
         }
-        return $steps
+        # Comma-return prevents pipeline unrolling at the function boundary
+        # so a single-element array doesn't degenerate into a scalar.
+        return ,$steps
     } catch {
-        return @()
+        return ,@()
     }
 }
 
