@@ -402,7 +402,14 @@ def _make_12ch(lr, depth, motion, normals, canvas):
 
 
 def _save_chw_as_png(tensor, dest: Path) -> None:
-    """Save a (3, H, W) tensor as an 8-bit RGB PNG. Clamps to [0, 1]."""
+    """Save a (3, H, W) tensor as an 8-bit RGB PNG.
+
+    Atomic write: encode to a sibling .png.tmp file then os.replace into
+    place. Without this, a watcher mid-copy could publish a partial PNG
+    -- the dashboard's video player would then render a corrupt frame
+    or 404 a half-existent file.
+    """
+    import os
     import torch
     from PIL import Image
     arr = tensor.detach().clamp(0.0, 1.0).cpu().float()
@@ -413,7 +420,9 @@ def _save_chw_as_png(tensor, dest: Path) -> None:
     arr_u8 = (arr.mul(255.0).round().to(torch.uint8)
               .permute(1, 2, 0).contiguous().numpy())
     dest.parent.mkdir(parents=True, exist_ok=True)
-    Image.fromarray(arr_u8, mode="RGB").save(dest, format="PNG")
+    tmp = dest.with_suffix(dest.suffix + ".tmp")
+    Image.fromarray(arr_u8, mode="RGB").save(tmp, format="PNG")
+    os.replace(tmp, dest)
 
 
 def _eval_loader(

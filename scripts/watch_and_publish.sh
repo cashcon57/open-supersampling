@@ -88,20 +88,27 @@ stage_run_files() {
   # for which runs the dashboard publishes — adding a run there auto-
   # propagates here. Falls back to a static list if Python import fails.
   local -a allow_list=()
-  local _names
+  local _names _err
+  # Capture stderr separately so a fallback-trigger surfaces the actual
+  # cause (PYTHONPATH wrong, build_public_dashboard import error, python3
+  # not on PATH in Git Bash). Without this the WARN is uninformative and
+  # silently drops us to the static fallback every cycle.
+  local _stderr_file="${STAGING_DIR%/}/.run-config-stderr"
+  mkdir -p "$(dirname "$_stderr_file")"
   _names="$(python3 -c "
 import sys
 sys.path.insert(0, '${REPO_ROOT}/scripts')
 from build_public_dashboard import RUN_CONFIG
 print('\n'.join(RUN_CONFIG.keys()))
-" 2>/dev/null)" || _names=""
+" 2>"$_stderr_file")" || _names=""
   if [[ -n "$_names" ]]; then
     while IFS= read -r line; do
       [[ -n "$line" ]] && allow_list+=("$line")
     done <<< "$_names"
   fi
   if [[ ${#allow_list[@]} -eq 0 ]]; then
-    echo "[watch_and_publish] WARN: could not load RUN_CONFIG; using fallback allow-list" >&2
+    _err="$(head -c 400 "$_stderr_file" 2>/dev/null | tr '\n' ' ')"
+    echo "[watch_and_publish] WARN: could not load RUN_CONFIG; using fallback allow-list (err: ${_err:-no stderr})" >&2
     allow_list=(
       srcnn-v6.2-pico-002
       srcnn-v6.1-pico-001
@@ -126,27 +133,31 @@ print('\n'.join(RUN_CONFIG.keys()))
       cp -p "$src_run/$f" "$dst_run/$f" 2>/dev/null || true
     done
     if [[ -d "$src_run/viz" ]]; then
-      # Sync only PNGs from viz/. cp -un is GNU; cp -u is BSD; fall back to cp.
+      # Sync only PNGs from viz/. The previous skip condition relied on
+      # `dst -nt src` which is FALSE after `cp -p` (mtimes are equal),
+      # so every cycle re-copied every existing PNG. Use `! src -nt dst`:
+      # true when src is NOT newer than dst (i.e., equal or older), which
+      # correctly skips already-mirrored files.
       for png in "$src_run"/viz/*.png; do
         [[ -f "$png" ]] || continue
         local base; base="$(basename "$png")"
-        # Skip if dest exists and is at least as new
-        if [[ -f "$dst_run/viz/$base" ]] && [[ "$dst_run/viz/$base" -nt "$png" || "$dst_run/viz/$base" -ef "$png" ]]; then
+        if [[ -f "$dst_run/viz/$base" ]] && [[ ! "$png" -nt "$dst_run/viz/$base" ]]; then
           continue
         fi
         cp -p "$png" "$dst_run/viz/$base" 2>/dev/null || true
       done
     fi
-    # Held-out per-step frame dumps for the dashboard's video player. Tree
-    # is heldout-frames/step-NNNNNNNN/{model,gt,bicubic,baseline}/sample-XXX.png.
-    # Sync mirror-style: only copy PNGs newer than dest. Skip if source dir
-    # absent. Use find + while-read so we don't hit ARG_MAX with thousands
-    # of files at full pico-002 trajectory.
-    if [[ -d "$src_run/heldout-frames" ]]; then
+    # Held-out per-step frame dumps for the dashboard's video player. Skip
+    # the staging copy entirely by default -- the trees are huge (~10k PNGs
+    # at full pico-002 trajectory), the previous mirror logic re-copied
+    # every file every cycle (cp -p mtime bug), and the upload pipeline
+    # already excludes them. Opt back in via OSS_STAGE_HELDOUT_FRAMES=1
+    # when a less-flood-prone path lands.
+    if [[ "${OSS_STAGE_HELDOUT_FRAMES:-0}" == "1" && -d "$src_run/heldout-frames" ]]; then
       while IFS= read -r -d '' png; do
         local rel; rel="${png#$src_run/}"
         local dst="$dst_run/$rel"
-        if [[ -f "$dst" ]] && [[ "$dst" -nt "$png" || "$dst" -ef "$png" ]]; then
+        if [[ -f "$dst" ]] && [[ ! "$png" -nt "$dst" ]]; then
           continue
         fi
         mkdir -p "$(dirname "$dst")"
