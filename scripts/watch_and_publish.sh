@@ -88,16 +88,24 @@ stage_run_files() {
   # for which runs the dashboard publishes — adding a run there auto-
   # propagates here. Falls back to a static list if Python import fails.
   local -a allow_list=()
-  local _names _err
+  local _names _err _scripts_dir
   # Capture stderr separately so a fallback-trigger surfaces the actual
   # cause (PYTHONPATH wrong, build_public_dashboard import error, python3
   # not on PATH in Git Bash). Without this the WARN is uninformative and
   # silently drops us to the static fallback every cycle.
   local _stderr_file="${STAGING_DIR%/}/.run-config-stderr"
   mkdir -p "$(dirname "$_stderr_file")"
+  # Convert Git-Bash Unix path to a native form Windows python understands.
+  # cygpath -m returns mixed mode (E:/oss-gaussian-server/scripts) which
+  # python on Windows accepts. Falls back to the raw $REPO_ROOT/scripts
+  # for environments where cygpath isn't available.
+  _scripts_dir="${REPO_ROOT}/scripts"
+  if command -v cygpath >/dev/null 2>&1; then
+    _scripts_dir="$(cygpath -m "${REPO_ROOT}/scripts")"
+  fi
   _names="$(python3 -c "
 import sys
-sys.path.insert(0, '${REPO_ROOT}/scripts')
+sys.path.insert(0, '${_scripts_dir}')
 from build_public_dashboard import RUN_CONFIG
 print('\n'.join(RUN_CONFIG.keys()))
 " 2>"$_stderr_file")" || _names=""
