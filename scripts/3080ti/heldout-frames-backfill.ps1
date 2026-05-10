@@ -43,32 +43,99 @@ function Log {
     Write-Host "[$stamp] $msg"
 }
 
+# Shared GPU mutex (same path the supervisor uses). Backfill acquires per
+# eval, releases after, so the live supervisor can interleave fresh ckpts
+# without thrashing the GPU.
+$script:GpuLockPath = 'C:\temp\oss-heldout-eval.lock'
+$script:GpuLockStaleSec = 7200
+
+function AcquireGpuLock {
+    if (Test-Path $script:GpuLockPath) {
+        $existing = Get-Item $script:GpuLockPath -ErrorAction SilentlyContinue
+        if ($existing -and ((Get-Date) - $existing.LastWriteTime).TotalSeconds -gt $script:GpuLockStaleSec) {
+            Log "removing stale GPU lock from $($existing.LastWriteTime)"
+            Remove-Item $script:GpuLockPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+    try {
+        $null = New-Item -ItemType File -Path $script:GpuLockPath -Value "$PID" -ErrorAction Stop
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+function ReleaseGpuLock {
+    Remove-Item $script:GpuLockPath -Force -ErrorAction SilentlyContinue
+}
+
 $activeRun = ResolveActiveRun
 if (-not $activeRun) { Log "no active run; aborting"; exit 1 }
 $runDir = "$ckptRoot\$activeRun"
 $framesRoot = "$runDir\heldout-frames"
+$scoreLog = "$runDir\score_log.json"
 
 Log "backfill starting for run=$activeRun"
 
-$ckpts = Get-ChildItem $runDir -Filter "step-*.pt" -ErrorAction SilentlyContinue | Sort-Object Name
-Log "found $($ckpts.Count) ckpts"
+# Scoped to scored ckpts: backfill only fills frames for steps that have an
+# existing score_log row. New / unscored ckpts are the live supervisor's job
+# -- we should not race it on those.
+$scoredSteps = @()
+if (Test-Path $scoreLog) {
+    try {
+        $raw = Get-Content $scoreLog -Raw -ErrorAction Stop
+        if (-not [string]::IsNullOrWhiteSpace($raw)) {
+            $payload = @($raw | ConvertFrom-Json -ErrorAction Stop)
+            foreach ($r in $payload) {
+                if ($r -ne $null -and $r.step -ne $null) { $scoredSteps += [int]$r.step }
+            }
+        }
+    } catch {
+        Log "could not parse score_log; nothing to backfill"
+        exit 0
+    }
+}
+if (-not $scoredSteps -or $scoredSteps.Count -eq 0) {
+    Log "no scored steps yet; nothing to backfill"
+    exit 0
+}
+$scoredSet = @{}
+foreach ($s in $scoredSteps) { $scoredSet[$s] = $true }
+
+$ckpts = Get-ChildItem $runDir -Filter "step-*.pt" -ErrorAction SilentlyContinue |
+    Sort-Object Name |
+    Where-Object {
+        $s = StepFromCkptName -name $_.Name
+        $s -gt 0 -and $scoredSet.ContainsKey($s)
+    }
+Log "found $($ckpts.Count) scored ckpts to consider"
 
 foreach ($ck in $ckpts) {
     $step = StepFromCkptName -name $ck.Name
     if ($step -le 0) { continue }
     $stepStr = $step.ToString('D8')
     $framesDir = "$framesRoot\step-$stepStr"
-    $marker = "$framesDir\model\sample-000.png"
+    # Eval writer drops a per-loader subdir under $framesDir; idempotency
+    # marker must match. tartanair is the only loader pico-002 currently
+    # exercises. Multi-loader runs would write multiple subdirs and we'd
+    # check each.
+    $marker = "$framesDir\tartanair\model\sample-000.png"
     if (Test-Path $marker) {
         Log "skip step=$step (frames present)"
         continue
     }
 
-    # Wait for any in-flight eval to clear the GPU.
-    while ($true) {
-        $running = Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine -like '*sr_temporal_held_out*' }
-        if (-not $running) { break }
+    # Wait for the shared GPU lock. Same file the supervisor holds, so
+    # acquiring here serializes us against fresh-ckpt evals. Re-check the
+    # marker after acquiring in case the supervisor wrote frames while we
+    # were waiting.
+    while (-not (AcquireGpuLock)) {
         Start-Sleep -Seconds 20
+    }
+    if (Test-Path $marker) {
+        Log "skip step=$step (frames written by supervisor while we waited)"
+        ReleaseGpuLock
+        continue
     }
 
     Log "backfilling step=$step"
@@ -86,14 +153,24 @@ foreach ($ck in $ckpts) {
     $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmdLine }
     if ($r.ReturnValue -ne 0) {
         Log "spawn FAILED step=$step rc=$($r.ReturnValue)"
+        ReleaseGpuLock
         continue
     }
     Log "spawned pid=$($r.ProcessId) step=$step"
-    do {
+    # Fail-closed wait: CIM query failures keep us waiting rather than
+    # racing the next eval against an unkilled in-flight one.
+    $running = $true
+    while ($running) {
         Start-Sleep -Seconds 15
-        $still = Get-CimInstance Win32_Process -Filter "ProcessId=$($r.ProcessId)" -ErrorAction SilentlyContinue
-    } while ($still)
+        try {
+            $still = Get-CimInstance Win32_Process -Filter "ProcessId=$($r.ProcessId)" -ErrorAction Stop
+            $running = [bool]$still
+        } catch {
+            Log "CIM query transient failure waiting on pid=$($r.ProcessId); continuing wait"
+        }
+    }
     Log "completed step=$step"
+    ReleaseGpuLock
 }
 
 Log "backfill done"

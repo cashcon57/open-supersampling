@@ -42,12 +42,13 @@ function StepsAlreadyEvaluated {
     try {
         $raw = Get-Content $scoreLog -Raw -ErrorAction Stop
         if ([string]::IsNullOrWhiteSpace($raw)) { return @() }
-        $payload = $raw | ConvertFrom-Json -ErrorAction Stop
+        # @(...) wraps a single-row JSON-array unwrap into a real 1-element
+        # array. Without this, a one-row score log fails the array-type
+        # guard below and every supervisor restart re-evaluates the row.
+        $payload = @($raw | ConvertFrom-Json -ErrorAction Stop)
         $steps = @()
-        if ($payload -is [System.Array]) {
-            foreach ($row in $payload) {
-                if ($row -ne $null -and $row.step -ne $null) { $steps += [int]$row.step }
-            }
+        foreach ($row in $payload) {
+            if ($row -ne $null -and $row.step -ne $null) { $steps += [int]$row.step }
         }
         return $steps
     } catch {
@@ -65,6 +66,35 @@ function Log {
     param([string]$msg)
     $stamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
     Add-Content -Path $logFile -Value "[$stamp] $msg"
+}
+
+# File-based GPU mutex shared with heldout-frames-backfill.ps1. Prevents the
+# two scripts from racing the non-atomic check-then-spawn on Win32_Process
+# and starting two simultaneous evals that thrash the trainer for VRAM.
+$script:GpuLockPath = 'C:\temp\oss-heldout-eval.lock'
+$script:GpuLockStaleSec = 7200  # 2h: longer than any realistic single eval.
+
+function AcquireGpuLock {
+    # Stale-lock recovery: if the existing file is older than $GpuLockStaleSec,
+    # treat it as orphaned and remove it. Otherwise New-Item -ErrorAction Stop
+    # fails atomically when the file already exists -- which is the lock.
+    if (Test-Path $script:GpuLockPath) {
+        $existing = Get-Item $script:GpuLockPath -ErrorAction SilentlyContinue
+        if ($existing -and ((Get-Date) - $existing.LastWriteTime).TotalSeconds -gt $script:GpuLockStaleSec) {
+            Log "removing stale GPU lock from $($existing.LastWriteTime)"
+            Remove-Item $script:GpuLockPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+    try {
+        $null = New-Item -ItemType File -Path $script:GpuLockPath -Value "$PID" -ErrorAction Stop
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+function ReleaseGpuLock {
+    Remove-Item $script:GpuLockPath -Force -ErrorAction SilentlyContinue
 }
 
 Log "supervisor starting"
@@ -107,14 +137,15 @@ while ($true) {
         continue
     }
 
-    # Skip if a held-out eval is already running -- the eval is GPU-heavy
-    # and we don't want two competing for VRAM with the trainer.
-    $running = Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine -like '*sr_temporal_held_out*' }
-    if ($running) {
+    # GPU mutex acquired around the whole inner loop. Both supervisor and
+    # backfill use the same lock file, so only one of them runs an eval at
+    # a time. Falling through here means another holder has the lock --
+    # back off and re-check next outer loop iteration.
+    if (-not (AcquireGpuLock)) {
         Start-Sleep -Seconds 30
         continue
     }
-
+    try {
     foreach ($ck in $ready) {
         $step = StepFromCkptName -name $ck.Name
         # Per-step frame dump dir for the held-out video player. Eval will
@@ -143,14 +174,26 @@ while ($true) {
         }
         Log "spawned eval pid=$($r.ProcessId) step=$step"
         # Wait for THIS eval to finish before starting the next checkpoint.
-        # Avoids GPU contention and serializes appends to score_log.json.
-        do {
+        # CIM query failures fail closed: we keep waiting on transient
+        # errors instead of declaring completion.
+        $running = $true
+        while ($running) {
             Start-Sleep -Seconds 15
-            $still = Get-CimInstance Win32_Process -Filter "ProcessId=$($r.ProcessId)" -ErrorAction SilentlyContinue
-        } while ($still)
+            try {
+                $still = Get-CimInstance Win32_Process -Filter "ProcessId=$($r.ProcessId)" -ErrorAction Stop
+                $running = [bool]$still
+            } catch {
+                Log "CIM query transient failure waiting on pid=$($r.ProcessId); continuing wait"
+                # Stay in the wait loop on the assumption that the process
+                # is still alive -- safer than racing the GPU.
+            }
+        }
         Log "completed eval step=$step"
         # Re-read evaluated set for the next iteration.
         $evaluated = @(StepsAlreadyEvaluated -scoreLog $scoreLog)
+    }
+    } finally {
+        ReleaseGpuLock
     }
 
     Start-Sleep -Seconds 60

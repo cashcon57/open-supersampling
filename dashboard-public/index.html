@@ -5263,8 +5263,13 @@ const VIZ_LOAD_OBSERVER_MARGIN = "1200px 0px 1200px 0px";
 const VIZ_UNLOAD_OBSERVER_MARGIN = "2400px 0px 2400px 0px";
 let _vizLoadObserver = null;
 let _vizUnloadObserver = null;
+let _vizObserverWrapped = null;
 function ensureVizObserver() {
-  if (_vizLoadObserver) return _vizLoadObserver;
+  // Return the wrapper on every call so each img gets registered with both
+  // observers. The earlier early-return-the-load-observer bug only put the
+  // first image through the unload observer; everything after kept its
+  // decoded bitmap forever and defeated the memory ceiling.
+  if (_vizObserverWrapped) return _vizObserverWrapped;
   _vizLoadObserver = new IntersectionObserver((entries) => {
     for (const entry of entries) {
       const img = entry.target;
@@ -5278,14 +5283,12 @@ function ensureVizObserver() {
   _vizUnloadObserver = new IntersectionObserver((entries) => {
     for (const entry of entries) {
       const img = entry.target;
-      // Only unload once the frame is well outside the unload margin.
       if (!entry.isIntersecting && img.src !== VIZ_BLANK_DATA_URI) {
         img.src = VIZ_BLANK_DATA_URI;
       }
     }
   }, { rootMargin: VIZ_UNLOAD_OBSERVER_MARGIN, threshold: 0 });
-  // Wrap observe so callers don't have to know about both observers.
-  const wrapped = {
+  _vizObserverWrapped = {
     observe(img) {
       _vizLoadObserver.observe(img);
       _vizUnloadObserver.observe(img);
@@ -5295,8 +5298,7 @@ function ensureVizObserver() {
       _vizUnloadObserver.unobserve(img);
     },
   };
-  ensureVizObserver._wrapped = wrapped;
-  return wrapped;
+  return _vizObserverWrapped;
 }
 
 function renderVizStrip(host, run, limit) {
@@ -5304,6 +5306,13 @@ function renderVizStrip(host, run, limit) {
   const orderedFiles = (run && run.viz_pngs ? run.viz_pngs : [])
     .slice()
     .sort((a, b) => stepFromName(a) - stepFromName(b));
+  // Unobserve old viz images before destroying their DOM. Without this the
+  // observer keeps a reference to the detached <img>, which keeps the
+  // decoded bitmap and the IntersectionObserver internal state alive
+  // across rerenders -- exactly the regression the larger unload margin
+  // was supposed to bound, just leaked through DOM churn instead.
+  const wrapped = ensureVizObserver();
+  host.querySelectorAll("img[data-viz-src]").forEach((img) => wrapped.unobserve(img));
   host.replaceChildren();
   if (!files.length) {
     const empty = document.createElement("div");
@@ -5789,16 +5798,20 @@ const heldoutPlayer = {
   speed: 1.0,           // playback rate multiplier
   baseFps: 12,          // base frames-per-second; effective = baseFps * speed
   intervalHandle: null,
+  loaderName: "tartanair", // matches the eval's per-loader subdir
   imgs: { model: null, gt: null, bicubic: null, baseline: null },
 };
 
 function _heldoutFrameUrl(run, step, stream, sampleIdx) {
   const stepStr = String(step).padStart(8, "0");
   const sampleStr = `sample-${String(sampleIdx).padStart(3, "0")}.png`;
-  // Per-loader subdir in the eval write tree (tartanair / sintel). For now
-  // the only loader is "tartanair"; multi-loader runs would need a loader
-  // selector here. Keep it as a single guess for now and fall back gracefully.
-  return `runs/${encodeURIComponent(run.name)}/heldout-frames/step-${stepStr}/tartanair/${stream}/${sampleStr}`;
+  // The eval writes per-loader subdirs (e.g. tartanair/, sintel/). The
+  // active loader name comes from the score_log row's manifest where
+  // available; otherwise default to the only loader pico-002 currently
+  // uses. Future multi-loader runs surface a loader selector via
+  // heldoutPlayer.loaderName.
+  const loader = (heldoutPlayer.loaderName || "tartanair");
+  return `runs/${encodeURIComponent(run.name)}/heldout-frames/step-${stepStr}/${loader}/${stream}/${sampleStr}`;
 }
 
 function _heldoutAdvanceFrame() {
