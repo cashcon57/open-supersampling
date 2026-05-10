@@ -122,3 +122,22 @@ Reviewed commits `c324dd2`, `090fcf9`, `970d157`, `0e3b08a`, `dfb0aa7`, and `388
 - I did not find any other live PowerShell `ConvertFrom-Json` sites or `@(... ConvertFrom-Json ...)` collapse patterns outside `heldout-eval-supervisor.ps1` and `heldout-frames-backfill.ps1`. Other `@(...)` hits in the 3080 Ti scripts are literal CLI argument arrays or accumulator initialization.
 - Dropping the comma-return in `985aebb` is correct for the supervisor caller: `@(StepsAlreadyEvaluated -scoreLog $scoreLog)` collects the function's pipeline-emitted ints into a flat array, so `-notcontains` compares actual step numbers instead of a single nested array object.
 - The held-out missing-frame state is conservative once reached: `framesMissing` blocks `_heldoutAdvanceFrame()`, the play button cannot restart URL churn while the flag is set, and any mid-loop 404 stops further interval-driven requests.
+
+## Pass 4 — deferred items addressed
+
+- **HIGH score_log writer race fixed**: added `scripts/_score_log_io.py` and routed `scripts/sr_temporal_held_out.py`, `scripts/sr_train_temporal.py`, and `scripts/sr_train_gaussian_temporal.py` through it. The helper serializes access with `score_log.json.lock`, writes `score_log.json.tmp`, and commits with `os.replace`. Held-out appends still replace same-step rows and keep step order; legacy trainer flushes now merge under the lock and preserve existing same-step rows so stale in-memory trainer state cannot clobber newer held-out rows. Added `tests/test_score_log_io.py` with the requested 5-thread append race test.
+- **MEDIUM run URL slug contract fixed**: `scripts/build_public_dashboard.py` now emits `run.slug`, rejects names that do not already match their deterministic storage slug, and reads staged run files from `runs/<slug>`. `scripts/watch_and_publish.sh` stages each source run into `runs/<slug>`, including GPU status writes. `dashboard-public/index.html` uses `run.slug || run.name` for viz and held-out frame URLs. The checked-in `dashboard-public/data.json` was minimally updated so all current run slugs equal their names.
+- **LOW bare-strip slider bug fixed**: the compare modal now tracks a modal-level `bareStripFile`. Moving the global step slider updates bare-strip to the global nearest file, and moving an individual panel slider updates bare-strip to that panel's current file. Bare-strip updates immediately while enabled and uses the selected step when toggled on after slider movement.
+
+Verification run:
+
+- `venv-py312/bin/python -m pytest -q tests/test_score_log_io.py tests/test_public_dashboard_schema.py tests/test_repro_manifest.py` passed (`10 passed`).
+- `venv-py312/bin/python -m pytest -q tests/test_score_log_io.py tests/sr/temporal/test_train_smoke.py tests/sr/gaussian_temporal/test_train_smoke.py` passed (`7 passed`).
+- `venv-py312/bin/python scripts/build_public_dashboard.py --runs-dir dashboard-public/runs --out /tmp/oss-dashboard-current-build && venv-py312/bin/python tools/check_data_schema.py /tmp/oss-dashboard-current-build/data.json` passed; current generated slugs match names.
+- `venv-py312/bin/python tools/check_data_schema.py dashboard-public/data.json`, `venv-py312/bin/python -m py_compile ...`, `bash -n scripts/watch_and_publish.sh`, and `git diff --check` passed.
+- Playwright local dashboard check passed: after moving the global slider, bare-strip loaded `step-00000100.png`; after moving a per-panel slider, it switched to `step-00000500.png`.
+
+Remaining gaps not addressed in this pass:
+
+- The Pass 3 held-out video native-close/session-token findings remain open; this pass only covered the three deferred items requested above.
+- Held-out frame PNG publication still uses the existing direct writer/copy behavior described in earlier findings; no `.complete` marker or atomic PNG publish protocol was added here.

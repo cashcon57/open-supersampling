@@ -18290,6 +18290,7 @@
       ],
       "max_target_steps": 300000,
       "name": "srcnn-v6.1-pico-001",
+      "slug": "srcnn-v6.1-pico-001",
       "repro_manifest": {},
       "score_log": [
         {
@@ -34671,6 +34672,7 @@
       ],
       "max_target_steps": 300000,
       "name": "srcnn-v6-pico-001",
+      "slug": "srcnn-v6-pico-001",
       "repro_manifest": {},
       "score_log": [],
       "viz_columns": [
@@ -34749,6 +34751,7 @@
       "loss_curve": [],
       "max_target_steps": 300000,
       "name": "srcnn-v6-heavy-001",
+      "slug": "srcnn-v6-heavy-001",
       "repro_manifest": {},
       "score_log": [],
       "viz_columns": [
@@ -47834,6 +47837,7 @@
       ],
       "max_target_steps": 80000,
       "name": "srcnn-v5-pixel-temporal-validated",
+      "slug": "srcnn-v5-pixel-temporal-validated",
       "repro_manifest": {},
       "score_log": [
         {
@@ -47959,6 +47963,7 @@
       "loss_curve": [],
       "max_target_steps": 80000,
       "name": "srcnn-v5-pixel-temporal-clean-restart-override",
+      "slug": "srcnn-v5-pixel-temporal-clean-restart-override",
       "repro_manifest": {},
       "score_log": [],
       "viz_columns": [
@@ -60063,6 +60068,7 @@
       ],
       "max_target_steps": 420000,
       "name": "srcnn-prod-v4-lpips",
+      "slug": "srcnn-prod-v4-lpips",
       "repro_manifest": {},
       "score_log": [
         {

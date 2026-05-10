@@ -19,7 +19,7 @@ def _write_ckpt(tmp_path: Path, *, step: int = 1) -> tuple[Path, Path]:
     torch = _torch()
     run_dir = tmp_path / "runs" / "srcnn-v6.1-pico-001"
     ckpt_dir = run_dir / "ckpts"
-    ckpt_dir.mkdir(parents=True)
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
     manifest = ckpt_dir / "train_manifest.json"
     manifest.write_text(json.dumps({"pairs": [1, 2, 3]}), encoding="utf-8")
     ckpt = ckpt_dir / f"step-{step:08d}.pt"
@@ -79,6 +79,7 @@ def test_schema_accepts_repro_manifest_field() -> None:
         "runs": [
             {
                 "name": "run",
+                "slug": "run",
                 "label": "Run",
                 "active": False,
                 "latest_step": 0,
@@ -92,6 +93,7 @@ def test_schema_accepts_repro_manifest_field() -> None:
                 "events": [],
                 "cross_version_points": [],
                 "gpu_status": None,
+                "gpu_mem_log": [],
                 "repro_manifest": {},
                 "cost": {
                     "kwh": 0.0,

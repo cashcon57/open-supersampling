@@ -2031,6 +2031,7 @@ const compareState = {
   rowCount: 2,
   columnCount: 7,
   vizUrl: null,
+  bareStripFile: null,
   naturalWidth: 0,
   naturalHeight: 0,
   pointers: new Map(),
@@ -2806,8 +2807,12 @@ function agoText(iso) {
   return `updated ${Math.floor(hours / 24)} days ago`;
 }
 
+function runSlug(run) {
+  return encodeURIComponent(run?.slug || run?.name || "");
+}
+
 function runUrl(run, file) {
-  return `runs/${encodeURIComponent(run.name)}/viz/${encodeURIComponent(file)}`;
+  return `runs/${runSlug(run)}/viz/${encodeURIComponent(file)}`;
 }
 
 function xy(rows, key, ...aliases) {
@@ -5432,8 +5437,9 @@ function updateCompareBareStrip() {
   const enabled = !!compareState.bareStrip;
   bare.hidden = !enabled;
   grid.style.display = enabled ? "none" : "";
-  if (!enabled || !compareState.vizUrl) return;
-  image.style.backgroundImage = `url("${cssUrl(compareState.vizUrl)}")`;
+  const fileUrl = compareState.bareStripFile?.url || compareState.vizUrl;
+  if (!enabled || !fileUrl) return;
+  image.style.backgroundImage = `url("${cssUrl(fileUrl)}")`;
   // Show one full strip row: scale background so 1 row of the source equals
   // the element height, then offset vertically by rowIndex.
   image.style.backgroundSize = `100% ${compareState.rowCount * 100}%`;
@@ -5514,10 +5520,19 @@ function _renderComparePanelImage(panel) {
   }
 }
 
+function _setCompareBareStripFile(file) {
+  if (file?.url) {
+    compareState.bareStripFile = file;
+  }
+  if (compareState.bareStrip) {
+    updateCompareBareStrip();
+  }
+}
+
 function _setPanelToStep(panel, targetStep, { synced = false } = {}) {
   const files = panel._allFiles || [];
   const file = _nearestFileForStep(files, targetStep);
-  if (!file) return;
+  if (!file) return null;
   panel._currentFile = file;
   panel._isSynced = !!synced;
   // Reflect in the per-panel slider too
@@ -5526,6 +5541,7 @@ function _setPanelToStep(panel, targetStep, { synced = false } = {}) {
     slider.value = String(file.step);
   }
   _renderComparePanelImage(panel);
+  return file;
 }
 
 function _updateGlobalSliderState() {
@@ -5556,6 +5572,7 @@ function openCompareModal(selectedColumns, vizUrl, meta = {}) {
   compareState.columnCount = Math.max(1, Number(meta.columnCount || selectedColumns.length || 7));
   compareState.rowCount = 2;
   compareState.vizUrl = vizUrl;
+  compareState.bareStripFile = null;
   compareState.naturalWidth = 0;
   compareState.naturalHeight = 0;
   compareState.allColumns = Array.isArray(meta.allColumns) && meta.allColumns.length
@@ -5581,6 +5598,7 @@ function openCompareModal(selectedColumns, vizUrl, meta = {}) {
   compareState.globalStep = initial.step;
   compareState.globalStepMin = compareState.allFiles[0].step;
   compareState.globalStepMax = compareState.allFiles[compareState.allFiles.length - 1].step;
+  compareState.bareStripFile = initial;
   resetCompareTransform();
   grid.replaceChildren();
   grid.dataset.cols = String(selectedColumns.length);
@@ -5645,7 +5663,8 @@ function openCompareModal(selectedColumns, vizUrl, meta = {}) {
 
     stepSlider.addEventListener("input", () => {
       const target = Number(stepSlider.value);
-      _setPanelToStep(panel, target, { synced: false });
+      const file = _setPanelToStep(panel, target, { synced: false });
+      _setCompareBareStripFile(file);
     });
 
     stage.appendChild(image);
@@ -5675,6 +5694,7 @@ function openCompareModal(selectedColumns, vizUrl, meta = {}) {
       grid2?.querySelectorAll(".viz-compare-panel").forEach((panel) => {
         _setPanelToStep(panel, compareState.globalStep, { synced: panel._isSynced });
       });
+      _setCompareBareStripFile(_nearestFileForStep(compareState.allFiles, compareState.globalStep));
     });
   }
   const syncBtn = document.getElementById("viz-compare-sync-btn");
@@ -5811,7 +5831,7 @@ function _heldoutFrameUrl(run, step, stream, sampleIdx) {
   // uses. Future multi-loader runs surface a loader selector via
   // heldoutPlayer.loaderName.
   const loader = (heldoutPlayer.loaderName || "tartanair");
-  return `runs/${encodeURIComponent(run.name)}/heldout-frames/step-${stepStr}/${loader}/${stream}/${sampleStr}`;
+  return `runs/${runSlug(run)}/heldout-frames/step-${stepStr}/${loader}/${stream}/${sampleStr}`;
 }
 
 function _heldoutAdvanceFrame() {

@@ -193,6 +193,7 @@ GPU_CLASS_PROJECTION = {
     "4090": {"seconds_per_step": 0.88, "runpod_usd_per_hour": 0.69},
 }
 GPU_MEM_WINDOW_SECONDS = 30 * 60
+RUN_STORAGE_SLUG_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
 def utc_now_iso() -> str:
@@ -207,6 +208,21 @@ def configure_paths(runs_dir: Path, out_dir: Path) -> None:
     RUNS_DIR = runs_dir
     DATA_JSON = PUBLIC_DIR / "data.json"
     INDEX_HTML = PUBLIC_DIR / "index.html"
+
+
+def slugify_run_name(name: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip(".-")
+    return slug or "run"
+
+
+def run_storage_slug(name: str) -> str:
+    slug = slugify_run_name(name)
+    if slug != name or not RUN_STORAGE_SLUG_RE.fullmatch(name):
+        raise ValueError(
+            f"run name {name!r} is not storage-safe; choose a name containing "
+            "only letters, numbers, dots, underscores, and hyphens"
+        )
+    return slug
 
 
 def v6_revision_from_run_name(name: str) -> str | None:
@@ -746,8 +762,9 @@ def build_run(name: str, previous: dict[str, Any] | None) -> dict[str, Any] | No
     if DENY_RE.search(name) or name not in RUN_CONFIG:
         return None
 
+    slug = run_storage_slug(name)
     config = RUN_CONFIG[name]
-    run_dir = RUNS_DIR / name
+    run_dir = RUNS_DIR / slug
     metrics = read_rows(run_dir / "metrics.json")
     scores = read_rows(run_dir / "score_log.json")
     viz_pngs = list_viz_pngs(run_dir)
@@ -777,6 +794,7 @@ def build_run(name: str, previous: dict[str, Any] | None) -> dict[str, Any] | No
             ]
         cached["cached"] = True
         cached["label"] = label_for_run(name, config)
+        cached["slug"] = slug
         cached["active"] = config["active"]
         cached["history"] = history_for_run(name, config)
         gpu_status = read_gpu_status(run_dir) or cached.get("gpu_status")
@@ -800,6 +818,7 @@ def build_run(name: str, previous: dict[str, Any] | None) -> dict[str, Any] | No
         gpu_status = read_gpu_status(run_dir)
         return {
             "name": name,
+            "slug": slug,
             "label": label_for_run(name, config),
             "active": config["active"],
             "history": history_for_run(name, config),
@@ -827,6 +846,7 @@ def build_run(name: str, previous: dict[str, Any] | None) -> dict[str, Any] | No
     gpu_status = read_gpu_status(run_dir)
     return {
         "name": name,
+        "slug": slug,
         "label": label_for_run(name, config),
         "active": config["active"],
         "history": history_for_run(name, config),
@@ -1195,8 +1215,12 @@ function agoText(iso) {
   return `updated ${Math.floor(hours / 24)} days ago`;
 }
 
+function runSlug(run) {
+  return encodeURIComponent(run?.slug || run?.name || "");
+}
+
 function runUrl(run, file) {
-  return `runs/${encodeURIComponent(run.name)}/viz/${encodeURIComponent(file)}`;
+  return `runs/${runSlug(run)}/viz/${encodeURIComponent(file)}`;
 }
 
 function xy(rows, key, ...aliases) {
@@ -1551,6 +1575,8 @@ def parse_args() -> argparse.Namespace:
                         help="Print the canonical active run name (RUN_CONFIG with active=True) and exit. Used by watcher + viz-daemon supervisors.")
     parser.add_argument("--print-run-names", action="store_true",
                         help="Print the canonical run-name list (RUN_CONFIG keys, one per line) and exit.")
+    parser.add_argument("--print-run-slug", metavar="NAME",
+                        help="Print the storage slug for one run name and exit.")
     return parser.parse_args()
 
 
@@ -1564,6 +1590,9 @@ def main() -> None:
     if args.print_run_names:
         for name in RUN_CONFIG.keys():
             print(name)
+        return
+    if args.print_run_slug:
+        print(run_storage_slug(args.print_run_slug))
         return
     configure_paths(args.runs_dir, args.out)
     data = build_data()

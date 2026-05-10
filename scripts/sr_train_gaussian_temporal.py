@@ -60,6 +60,7 @@ from oss.sr.gaussian_temporal import (
     gaussian_regularization_loss,
 )
 from oss.train.losses import temporal_consistency_loss
+from scripts._score_log_io import write_score_log_rows
 
 log = logging.getLogger("oss.sr.gaussian_temporal.train")
 
@@ -664,8 +665,7 @@ def dump_metrics(
     with metrics_path.open("w") as f:
         json.dump({"train": metrics_log, "score": score_log}, f, indent=2)
     score_path = output_dir / "score_log.json"
-    with score_path.open("w") as f:
-        json.dump(score_log, f, indent=2)
+    write_score_log_rows(score_path, score_log)
 
 
 def _approx_psnr_from_l1(l1) -> float:

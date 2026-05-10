@@ -5,6 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from scripts import build_public_dashboard as dashboard
 
 
@@ -39,12 +41,18 @@ def test_public_dashboard_fixture_passes_schema(tmp_path: Path) -> None:
     )
 
     assert proc.returncode == 0, proc.stderr
-    assert "OK schema_version=2026-05-07 runs=6 models=" in proc.stdout
+    assert "OK schema_version=2026-05-07 runs=7 models=" in proc.stdout
     data = json.loads(data_json.read_text(encoding="utf-8"))
     assert len(data["models"]) >= 5
+    assert all(run["slug"] == run["name"] for run in data["runs"])
     latest = next(run for run in data["runs"] if run["name"] == "srcnn-v6.1-pico-001")["score_log"][-1]
     assert len(latest["per_frame"]["psnr"]) == 8
     assert 0.0 <= latest["stats"]["beats_bicubic_wilson95_lo"] <= 1.0
+
+
+def test_run_storage_slug_rejects_path_significant_names() -> None:
+    with pytest.raises(ValueError):
+        dashboard.run_storage_slug("future/run?bad#name%")
 
 
 def test_gpu_mem_log_rolls_30_min_window() -> None:

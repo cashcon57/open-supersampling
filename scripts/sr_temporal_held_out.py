@@ -51,6 +51,8 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from scripts._score_log_io import append_score_log_row
+
 # NOTE: torch and oss imports are deferred into ``main()`` and helpers below
 # so that ``--help`` (the Task 8 verification gate) works on a vanilla
 # Python interpreter without the heavy ML stack installed.
@@ -684,25 +686,6 @@ def _dashboard_score_row(
     }
 
 
-def _append_dashboard_score_row(path: Path, row: dict[str, Any]) -> None:
-    rows: list[dict[str, Any]] = []
-    if path.exists():
-        with path.open("r", encoding="utf-8") as f:
-            payload = json.load(f)
-        if isinstance(payload, list):
-            rows = [dict(r) for r in payload if isinstance(r, dict)]
-        else:
-            raise ValueError(f"{path} must contain a JSON array")
-    rows = [r for r in rows if r.get("step") != row.get("step")]
-    rows.append(row)
-    rows.sort(key=lambda r: int(r.get("step", -1)))
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with tmp.open("w", encoding="utf-8") as f:
-        json.dump(rows, f, indent=2)
-    tmp.replace(path)
-
-
 def _print_compact_result_block(label: str, result: dict[str, list[float]]) -> None:
     n = len(result["psnr_temporal"])
     if n == 0:
@@ -998,7 +981,7 @@ def main(argv: list[str] | None = None) -> int:
             manifest_paths=manifest_paths,
             result=merged,
         )
-        _append_dashboard_score_row(args.score_log, row)
+        append_score_log_row(args.score_log, row)
         print(f"updated {args.score_log}")
     return 0
 

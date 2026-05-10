@@ -383,6 +383,7 @@ def validate_run(run: object, index: int, errors: list[str], warnings: list[str]
         return
 
     require_str(run, "name", path, errors)
+    require_str(run, "slug", path, errors)
     require_str(run, "label", path, errors)
     require_bool(run, "active", path, errors)
     require_int_ge_zero(run, "latest_step", path, errors)
@@ -528,6 +529,7 @@ def self_test() -> int:
         "runs": [
             {
                 "name": "self-test-run",
+                "slug": "self-test-run",
                 "label": "self-test",
                 "active": False,
                 "latest_step": 1,

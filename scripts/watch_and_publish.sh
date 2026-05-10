@@ -106,8 +106,9 @@ stage_run_files() {
   _names="$(python3 -c "
 import sys
 sys.path.insert(0, '${_scripts_dir}')
-from build_public_dashboard import RUN_CONFIG
-print('\n'.join(RUN_CONFIG.keys()))
+from build_public_dashboard import RUN_CONFIG, run_storage_slug
+for name in RUN_CONFIG.keys():
+    print(f'{name}\t{run_storage_slug(name)}')
 " 2>"$_stderr_file")" || _names=""
   if [[ -n "$_names" ]]; then
     while IFS= read -r line; do
@@ -127,9 +128,14 @@ print('\n'.join(RUN_CONFIG.keys()))
       srcnn-prod-v4-lpips
     )
   fi
-  for run in "${allow_list[@]}"; do
+  for entry in "${allow_list[@]}"; do
+    local run="${entry%%$'\t'*}"
+    local slug="$run"
+    if [[ "$entry" == *$'\t'* ]]; then
+      slug="${entry#*$'\t'}"
+    fi
     local src_run="${SOURCE_DIR}/${run}"
-    local dst_run="${STAGING_DIR}/runs/${run}"
+    local dst_run="${STAGING_DIR}/runs/${slug}"
     [[ -d "$src_run" ]] || continue
     mkdir -p "$dst_run/viz"
     # Use cp instead of rsync because cwrsync (the Windows port we use on
@@ -190,7 +196,9 @@ capture_gpu_status() {
     active="$(python3 "${REPO_ROOT}/scripts/build_public_dashboard.py" --print-active-run 2>/dev/null)"
   fi
   [[ -n "$active" ]] || active="srcnn-v6.2-pico-002"
-  local dst="${STAGING_DIR}/runs/${active}"
+  local active_slug="$active"
+  active_slug="$(python3 "${REPO_ROOT}/scripts/build_public_dashboard.py" --print-run-slug "$active" 2>/dev/null)" || active_slug="$active"
+  local dst="${STAGING_DIR}/runs/${active_slug}"
   [[ -d "$dst" ]] || return 0
   local csv=""
   if command -v nvidia-smi >/dev/null 2>&1; then
