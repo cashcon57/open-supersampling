@@ -5817,8 +5817,35 @@ function _heldoutFrameUrl(run, step, stream, sampleIdx) {
 function _heldoutAdvanceFrame() {
   const player = heldoutPlayer;
   if (!player.run || !player.steps.length) return;
+  if (player.framesMissing) return;
   player.sampleIdx = (player.sampleIdx + 1) % player.numSamples;
   _heldoutRenderFrame();
+}
+
+function _heldoutShowMissingState() {
+  // Step has no frames published yet (eval scored it, but the supervisor /
+  // backfill hasn't dumped PNGs for that step). Stop the playback interval,
+  // blank the images, and show a sensible message so we don't sustain
+  // 404 storms against R2 at 12 fps × 4 streams.
+  const player = heldoutPlayer;
+  player.framesMissing = true;
+  if (player.intervalHandle) {
+    window.clearInterval(player.intervalHandle);
+    player.intervalHandle = null;
+  }
+  for (const img of Object.values(player.imgs)) {
+    if (img) {
+      img.removeAttribute("src");
+      img.alt = "frames not published yet for this step";
+    }
+  }
+  const playBtn = document.getElementById("heldout-video-playpause");
+  if (playBtn) playBtn.textContent = "▶";
+  player.isPlaying = false;
+  const title = document.getElementById("heldout-video-title");
+  if (title && player.run) {
+    title.textContent = `${player.run.label || player.run.name} — frames not published yet for step ${player.steps[player.stepIdx]}`;
+  }
 }
 
 function _heldoutRenderFrame() {
@@ -5835,6 +5862,22 @@ function _heldoutRenderFrame() {
   const val = document.getElementById("heldout-video-frame-value");
   if (slider && Number(slider.value) !== player.sampleIdx) slider.value = String(player.sampleIdx);
   if (val) val.textContent = `${player.sampleIdx}/${player.numSamples}`;
+}
+
+function _heldoutProbeStep(step) {
+  // Cheap pre-flight check before starting playback for a step. If the
+  // model/sample-000 image fails to load, treat the whole step as missing
+  // and bail playback. This prevents the sustained 404 loop that the
+  // codex review flagged.
+  const player = heldoutPlayer;
+  player.framesMissing = false;
+  return new Promise((resolve) => {
+    const probe = new Image();
+    const url = _heldoutFrameUrl(player.run, step, "model", 0);
+    probe.onload = () => resolve(true);
+    probe.onerror = () => resolve(false);
+    probe.src = url;
+  });
 }
 
 function _heldoutScheduleTick() {
@@ -5869,6 +5912,14 @@ function _heldoutBuildGrid() {
     img.loading = "eager";
     img.decoding = "async";
     img.draggable = false;
+    // Per-img onerror handler stops the playback loop the moment any
+    // stream returns 404 -- second line of defense after the
+    // _heldoutProbeStep() pre-flight check.
+    img.addEventListener("error", () => {
+      if (heldoutPlayer.run && heldoutPlayer.steps.length) {
+        _heldoutShowMissingState();
+      }
+    });
     panel.append(lbl, img);
     grid.appendChild(panel);
     heldoutPlayer.imgs[s.key] = img;
@@ -5943,23 +5994,46 @@ function openHeldoutVideoModal(run, atStep) {
   const playBtn = document.getElementById("heldout-video-playpause");
   if (playBtn) playBtn.textContent = "⏸";
 
-  _heldoutRenderFrame();
-  _heldoutScheduleTick();
-
+  // Pre-flight: if step's frames aren't on R2 yet, surface the missing
+  // state instead of starting a 404 loop. Open modal first so the user
+  // sees the "frames not published yet" copy.
   if (!dialog.open) {
     dialog.showModal();
     document.body.classList.add("lightbox-open");
   }
+  _heldoutProbeStep(player.steps[player.stepIdx]).then((ok) => {
+    if (!ok) {
+      _heldoutShowMissingState();
+      return;
+    }
+    _heldoutRenderFrame();
+    _heldoutScheduleTick();
+  });
 }
 
 function closeHeldoutVideoModal() {
   const dialog = document.getElementById("heldout-video-modal");
   if (!dialog) return;
+  // Tear down all retained refs so closing the modal actually frees the
+  // four full-resolution frame bitmaps + the steps/run references that
+  // would otherwise stay alive until the next open or page unload.
   if (heldoutPlayer.intervalHandle) {
     window.clearInterval(heldoutPlayer.intervalHandle);
     heldoutPlayer.intervalHandle = null;
   }
+  for (const key of Object.keys(heldoutPlayer.imgs)) {
+    const img = heldoutPlayer.imgs[key];
+    if (img) img.removeAttribute("src");
+    heldoutPlayer.imgs[key] = null;
+  }
+  const grid = document.getElementById("heldout-video-grid");
+  if (grid) grid.replaceChildren();
+  heldoutPlayer.run = null;
+  heldoutPlayer.steps = [];
+  heldoutPlayer.stepIdx = 0;
+  heldoutPlayer.sampleIdx = 0;
   heldoutPlayer.isPlaying = false;
+  heldoutPlayer.framesMissing = false;
   if (dialog.open) dialog.close();
 }
 
