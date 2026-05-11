@@ -151,8 +151,8 @@ def main() -> int:
         tartanair_root = args.tartanair_root
         sintel_root = None
         enable_jpeg = False
-        jpeg_quality = 90
-        blur_sigma = 0.0
+        jpeg_quality = 85    # matches v5_held_out_manifest.json
+        blur_sigma = 0.5     # matches v5_held_out_manifest.json
     lr_synth_args = _lr_synth_args_from_cli(_Args())
     loaders = _build_manifest_loaders(
         [args.manifest],
