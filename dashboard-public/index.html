@@ -6640,7 +6640,10 @@ function runCostPanelHtml(run) {
         <span class="${flagColor}">${escapeHtml(tier.local3080tiTime)}</span>
         <span class="ml-1 inline-block rounded border border-current px-1 text-[10px] uppercase tracking-wide ${flagColor}">${escapeHtml(tier.local3080tiFlag)}</span>
       </td>
-      <td class="px-3 py-2 text-right font-mono text-zinc-400 whitespace-nowrap text-xs">${escapeHtml(tier.cloudWallClock)}</td>
+      <td class="px-3 py-2 text-right font-mono whitespace-nowrap">
+        <span class="text-emerald-300">${escapeHtml(tier.cloudWallClock)}</span>
+        <span class="ml-1 inline-block rounded border border-current px-1 text-[10px] uppercase tracking-wide text-emerald-300">practical</span>
+      </td>
     </tr>`;
   }).join("");
   return `<div class="rounded-md border border-sky-900/60 bg-sky-950/20 p-4" data-surface data-cost-panel>
