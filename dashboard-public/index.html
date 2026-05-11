@@ -1485,19 +1485,29 @@
   </style>
 </head>
 <body class="min-h-screen bg-zinc-950 text-zinc-100 antialiased">
+  <script>
+    // Disable Chrome / Firefox / Safari auto-restoration of the previous
+    // scroll position on reload. This dashboard re-renders all its content
+    // asynchronously after data fetch, so the saved scroll offset usually
+    // lands on whatever was at that pixel offset before the reload (often
+    // mid-loss-decomp section). Combined with the in-app deep-link scroll
+    // suppression on reload (applyUrlState / isDeepLinkArrival), reloads
+    // now always land at the top.
+    if ("scrollRestoration" in history) history.scrollRestoration = "manual";
+  </script>
   <main class="mx-auto flex w-full max-w-screen-2xl flex-col gap-6 px-4 py-5 sm:px-6 lg:px-8 2xl:max-w-[1760px]">
     <header class="border-b border-zinc-800 pb-5">
       <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-        <div class="max-w-4xl">
+        <div class="flex-1 min-w-0">
           <img class="oss-logo" src="oss-logo.svg" alt="Open Super Sampling">
           <p class="mt-4 text-xs font-semibold uppercase tracking-wide text-cyan-300">OpenSuperSampling</p>
           <h1 id="page-headline" class="mt-2 text-3xl font-semibold tracking-normal text-zinc-50 sm:text-4xl" data-text>OpenSuperSampling — vendor-neutral SR + frame extrapolation</h1>
-          <p class="mt-3 max-w-3xl text-sm leading-6 text-zinc-300" data-subtext>OpenSuperSampling is training a unified game reconstruction pipeline for super-resolution and frame extrapolation from one temporal model.</p>
-          <div class="mt-3 max-w-3xl rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs leading-5 text-amber-100" role="note">
+          <p class="mt-3 max-w-6xl text-sm leading-6 text-zinc-300" data-subtext>OpenSuperSampling is training a unified game reconstruction pipeline for super-resolution and frame extrapolation from one temporal model.</p>
+          <div class="mt-3 rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs leading-5 text-amber-100" role="note">
             <span class="font-semibold uppercase tracking-wide text-amber-300">Research model — not the end-user inference model.</span>
             Every run shown on this dashboard (v5, v6.1, v6.2-pico-002, …) is a <strong>research / teacher</strong> model. The backbone (HAT-Tiny) is too expensive for real-time game upscaling: measured FP16 eager forward is ~54 ms at 270×480 LR and ~1,890 ms at 1920×1080 LR on RTX 3080 Ti (idle), versus a &lt;2 ms DLSS/FSR-class budget. The end-user shipping model will be a ≤1M-param student distilled from these teachers, in TensorRT FP8 + custom cross-vendor kernels — that student is not yet trained and is not on this dashboard. See <a class="underline hover:text-amber-200" href="https://github.com/cashcon57/open-supersampling/blob/main/docs/research/hypotheses/H006-hat-tiny-actual-ms.md">H006</a> and the v6.2 architecture spec.
           </div>
-          <p class="mt-2 max-w-3xl text-xs leading-5 text-zinc-500" data-dim>v6 notes: HAT-Tiny is the small HAT backbone used as the <strong>research teacher</strong> (not the shipping inference model); GS-STVSR and EWA describe the temporal canvas math; Net2Net is the expansion path; Charbonnier trains regression; Bicubic, DLSS, FSR, and XeSS are comparison anchors; PSNR and LPIPS stay as quality gauges; SDR ships first, HDR follows.</p>
+          <p class="mt-2 max-w-6xl text-xs leading-5 text-zinc-500" data-dim>v6 notes: HAT-Tiny is the small HAT backbone used as the <strong>research teacher</strong> (not the shipping inference model); GS-STVSR and EWA describe the temporal canvas math; Net2Net is the expansion path; Charbonnier trains regression; Bicubic, DLSS, FSR, and XeSS are comparison anchors; PSNR and LPIPS stay as quality gauges; SDR ships first, HDR follows.</p>
           <div class="mt-4 flex flex-wrap items-center gap-3 text-sm text-zinc-400" data-subtext>
             <a class="font-medium text-cyan-300 hover:text-cyan-200" href="https://github.com/cashcon57/open-supersampling">GitHub repo</a>
             <span class="hidden text-zinc-700 sm:inline">/</span>
@@ -4054,7 +4064,26 @@ function applyRunState(data, runToken) {
 }
 
 let lastScrolledUrlSignature = null;
-function resetUrlScrollMemo() { lastScrolledUrlSignature = null; }
+let urlScrollInitialized = false;
+function resetUrlScrollMemo() { lastScrolledUrlSignature = null; urlScrollInitialized = false; }
+// On a fresh page load (reload, or load from a same-origin link), do NOT
+// auto-scroll even if the URL still has stale chart/focus state from a
+// prior session. Chart auto-zoom on render writes those params back into
+// the URL via setDashboardState, which used to make every reload jump to
+// whichever chart re-zoomed first. Only honor the scroll when the user is
+// arriving from a real deep link they navigated to externally.
+function isDeepLinkArrival() {
+  const nav = (performance.getEntriesByType && performance.getEntriesByType("navigation"))?.[0];
+  const navType = nav?.type;
+  if (navType === "reload" || navType === "back_forward") return false;
+  try {
+    if (document.referrer) {
+      const ref = new URL(document.referrer);
+      if (ref.origin === location.origin) return false;
+    }
+  } catch { /* malformed referrer is fine */ }
+  return true;
+}
 function applyUrlState() {
   const state = getDashboardState();
   if (!lastKnownData) return;
@@ -4066,7 +4095,12 @@ function applyUrlState() {
   }
 
   const signature = `${state.chart || ""}|${state.focus || ""}|${state.run || ""}`;
-  const shouldScroll = signature !== lastScrolledUrlSignature;
+  const firstApply = !urlScrollInitialized;
+  urlScrollInitialized = true;
+  // First apply on a reload / same-origin nav: skip scroll, just record the
+  // signature so subsequent in-page state changes still scroll normally.
+  const suppressScroll = firstApply && !isDeepLinkArrival();
+  const shouldScroll = !suppressScroll && signature !== lastScrolledUrlSignature;
 
   const chartTarget = state.chart ? targetElementForChart(state.chart) : null;
   if (state.chart && chartTarget) {
@@ -4086,6 +4120,11 @@ function applyUrlState() {
   }
 
   if (shouldScroll && (chartTarget || focusTarget)) lastScrolledUrlSignature = signature;
+  // When the initial apply was suppressed (reload/same-origin nav), still
+  // record the signature so subsequent applyUrlState calls (e.g. background
+  // data refreshes) don't fire a delayed scroll when the signature is
+  // unchanged.
+  if (suppressScroll) lastScrolledUrlSignature = signature;
 }
 
 async function copyDashboardLink(button) {
