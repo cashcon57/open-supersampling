@@ -1616,6 +1616,8 @@
       </article>
     </section>
 
+    <div id="signal-cost-panel" class="mt-4"></div>
+
     <div class="terminal-divider" aria-hidden="true"><span class="td-corner">├─ viz strips ─</span><span class="td-rule"></span><span class="td-corner">─┤</span></div>
     <section id="global-viz-section" class="rounded-md border border-zinc-800 bg-zinc-900/60 p-5" data-surface aria-labelledby="global-viz-title">
       <header class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
@@ -1936,7 +1938,7 @@ const INFO_COPY = {
   "held-out-lpips": "How real the output looks on a fixed test set the model NEVER trained on. Lower = better. Dashed competitor lines are public-source estimates, not measured on our data.",
   gpu: "Live GPU usage on the training machine. High utilization = working hard. High memory = normal (model sized to fit).",
   "gpu-mem": "GPU memory used by the active training host over the last 30 minutes. The red threshold marks 95% of total memory.",
-  cost: "Local cost uses measured or estimated 3080 Ti wall-clock, 400 W board power, and OSS_KWH_USD (default $0.15/kWh). Cloud projection extrapolates the current loss trend to DLSS 4-class quality.",
+  cost: "Local cost uses measured or estimated 3080 Ti wall-clock, 400 W board power, and OSS_KWH_USD (default $0.15/kWh). Sponsorship tiers are planning estimates from docs/coordination/2026-05-11-heavy-cloud-training-cost-estimate.md, anchored on measured pico-002 step time and May 2026 cloud GPU pricing. Frontier quality target: ≥30 dB PSNR / ≤0.15 LPIPS cross-engine on game-engine footage, ≤2 ms student inference on RTX 4070-class — i.e. competitive with the leading real-time SR stack of the day, currently DLSS 4 SR transformer / FSR 4 ML / XeSS XMX.",
   "bad-data": "Off by default. Hides runs that aren't apples-to-apples with the current models — different test sets, failure modes. Toggle on for transparency.",
   "v4-two-points": "v4 was the first single-frame model. It looks fine on its training data but fails badly when you change the content (~22 dB cliff). v5 and v6 were designed to NOT do this.",
   "stopped-early-v61-pico-001": "Stopped early at ~step 12k on 2026-05-08. λ=2px stippling artifact (per-pixel checkerboard) was getting WORSE during training, not recovering. Root cause: spawner regresses Δxy with integer-pixel-aligned bias, and the in-flight `spawn_subpixel_jitter` fix in commit 221a325 was (a) defaulted off and (b) wrong-period (per-batch tile-grid offset, not per-Gaussian sub-pixel offset). Restart from scratch as v6.2-pico-002 with the v4 architecture: disocclusion-pixel-center spawn + DGP dictionary covariance + per-Gaussian (not per-batch) jitter. Memo: docs/superpowers/experiments/2026-05-08-v6.1-pico-001-stopped-stippling-not-fixable-mid-flight.md.",
@@ -6528,6 +6530,45 @@ function moneyText(value) {
   return `$${number.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
 }
 
+// Sponsorship-tier cost estimate (planning, static). Anchored on measured
+// pico-002 step time (4.5 s/step on RTX 3080 Ti, bf16, no torch.compile)
+// extrapolated to Heavy on H100/B200, plus May 2026 cloud GPU pricing.
+// Full derivation: docs/coordination/2026-05-11-heavy-cloud-training-cost-estimate.md
+// "3080 Ti time" is wall clock on cashc's single local 3080 Ti and is
+// flagged as impractical / impossible past the single-run tier.
+const SPONSORSHIP_TIERS = [
+  {
+    name: "Single Heavy run",
+    detail: "Heavy teacher only (300K steps, 1 config). Credibility checkpoint that the architecture converges at Heavy scale.",
+    h100Hours: "1.5K – 3K",
+    spotUsd: "$2.3K – $4.5K",
+    onDemandUsd: "$4.5K – $9K",
+    local3080tiTime: "≈ 2 years",
+    local3080tiFlag: "impractical",
+    cloudWallClock: "5 – 10 days on 8× H100",
+  },
+  {
+    name: "Heavy training cycle",
+    detail: "Heavy teacher + 5–10 ablations + hyperparameter sweep + Standard tier distillation + Pico tier shipping-student distillation + 3–5 cross-engine fine-tunes. One publishable v6.x Heavy result with student tiers ready to ship.",
+    h100Hours: "11K – 22K",
+    spotUsd: "$17K – $33K",
+    onDemandUsd: "$34K – $67K",
+    local3080tiTime: "≈ 15 – 25 years",
+    local3080tiFlag: "impossible",
+    cloudWallClock: "5 – 6 weeks on 8× H100",
+  },
+  {
+    name: "Path to frontier quality",
+    detail: "Multi-cycle (4 cycles): TartanAir + synthetic UE5, then real game captures via the OSS Capture Tool, then multi-engine + HDR retrain, then quality polish + DLL-shim integration. The number that actually matters: what it takes for an open Apache-2.0 cross-vendor SR stack to land at frontier real-time-SR quality (≥30 dB PSNR / ≤0.15 LPIPS cross-engine, ≤2 ms student inference on RTX 4070-class).",
+    h100Hours: "50K – 150K",
+    spotUsd: "$75K – $225K",
+    onDemandUsd: "$150K – $450K",
+    local3080tiTime: "≈ 100 – 300 years",
+    local3080tiFlag: "impossible",
+    cloudWallClock: "18 – 24 months overall",
+  },
+];
+
 function runCostPanelHtml(run) {
   const cost = run?.cost;
   if (!cost) {
@@ -6536,47 +6577,65 @@ function runCostPanelHtml(run) {
       <div class="mt-2 text-sm text-zinc-400" data-subtext>Cost data unavailable</div>
     </div>`;
   }
-  const projections = cost.projections || {};
-  const rows = ["B200", "H100", "A100", "4090"].map((gpuClass) => {
-    const projection = projections[gpuClass] || {};
-    return `<tr class="border-t border-zinc-800">
-      <td class="px-3 py-2 font-medium text-zinc-200">${escapeHtml(gpuClass)}</td>
-      <td class="px-3 py-2 text-right font-mono">${fmtNumber(projection.gpu_hours_to_dlss4_quality, 2)}h</td>
-      <td class="px-3 py-2 text-right font-mono">${moneyText(projection.usd_at_runpod_rate)}</td>
+  const tierRows = SPONSORSHIP_TIERS.map((tier) => {
+    const flagColor = tier.local3080tiFlag === "impossible"
+      ? "text-rose-300"
+      : tier.local3080tiFlag === "impractical"
+        ? "text-amber-300"
+        : "text-zinc-200";
+    return `<tr class="border-t border-zinc-800 align-top">
+      <td class="px-3 py-2">
+        <div class="font-semibold text-zinc-100">${escapeHtml(tier.name)}</div>
+        <div class="mt-1 text-xs leading-snug text-zinc-400">${escapeHtml(tier.detail)}</div>
+      </td>
+      <td class="px-3 py-2 text-right font-mono text-zinc-200 whitespace-nowrap">${escapeHtml(tier.h100Hours)}</td>
+      <td class="px-3 py-2 text-right font-mono text-sky-200 whitespace-nowrap">${escapeHtml(tier.spotUsd)}</td>
+      <td class="px-3 py-2 text-right font-mono text-sky-200 whitespace-nowrap">${escapeHtml(tier.onDemandUsd)}</td>
+      <td class="px-3 py-2 text-right font-mono whitespace-nowrap">
+        <span class="${flagColor}">${escapeHtml(tier.local3080tiTime)}</span>
+        <span class="ml-1 inline-block rounded border border-current px-1 text-[10px] uppercase tracking-wide ${flagColor}">${escapeHtml(tier.local3080tiFlag)}</span>
+      </td>
+      <td class="px-3 py-2 text-right font-mono text-zinc-400 whitespace-nowrap text-xs">${escapeHtml(tier.cloudWallClock)}</td>
     </tr>`;
   }).join("");
   return `<div class="rounded-md border border-sky-900/60 bg-sky-950/20 p-4" data-surface data-cost-panel>
     <div class="flex items-center justify-between gap-3">
       <div class="title-with-info text-sm uppercase text-zinc-500" data-dim><span>Cost</span>${infoButtonHtml("cost")}</div>
-      <div class="font-mono text-sm font-semibold text-sky-200">${moneyText(cost.usd)}</div>
+      <div class="font-mono text-sm font-semibold text-sky-200">${moneyText(cost.usd)} so far</div>
     </div>
     <div class="mt-3 grid gap-2 sm:grid-cols-3">
       <div class="rounded border border-zinc-800 bg-zinc-950/35 px-3 py-2" data-muted-surface>
-        <div class="text-xs uppercase text-zinc-500" data-dim>GPU-hours</div>
+        <div class="text-xs uppercase text-zinc-500" data-dim>GPU-hours (this run)</div>
         <div class="mt-1 font-mono text-zinc-100" data-text>${fmtNumber(cost.gpu_hours, 2)}</div>
       </div>
       <div class="rounded border border-zinc-800 bg-zinc-950/35 px-3 py-2" data-muted-surface>
-        <div class="text-xs uppercase text-zinc-500" data-dim>kWh</div>
+        <div class="text-xs uppercase text-zinc-500" data-dim>kWh (this run)</div>
         <div class="mt-1 font-mono text-zinc-100" data-text>${fmtNumber(cost.kwh, 2)}</div>
       </div>
       <div class="rounded border border-zinc-800 bg-zinc-950/35 px-3 py-2" data-muted-surface>
-        <div class="text-xs uppercase text-zinc-500" data-dim>USD</div>
+        <div class="text-xs uppercase text-zinc-500" data-dim>USD (this run)</div>
         <div class="mt-1 font-mono text-zinc-100" data-text>${moneyText(cost.usd)}</div>
       </div>
     </div>
-    <details class="mt-3 rounded border border-zinc-800 bg-zinc-950/30" data-muted-surface>
-      <summary class="cursor-pointer px-3 py-2 text-sm font-medium text-sky-200">Cloud projection</summary>
+    <details class="mt-3 rounded border border-zinc-800 bg-zinc-950/30" data-muted-surface open>
+      <summary class="cursor-pointer px-3 py-2 text-sm font-medium text-sky-200">Sponsorship tiers — what each scope of compute funding unlocks</summary>
       <div class="overflow-x-auto border-t border-zinc-800">
         <table class="min-w-full text-sm text-zinc-300">
           <thead class="text-xs uppercase text-zinc-500">
             <tr>
-              <th class="px-3 py-2 text-left font-medium">GPU</th>
-              <th class="px-3 py-2 text-right font-medium">Hours to DLSS 4</th>
-              <th class="px-3 py-2 text-right font-medium">RunPod USD</th>
+              <th class="px-3 py-2 text-left font-medium">Scope</th>
+              <th class="px-3 py-2 text-right font-medium whitespace-nowrap">H100-hours</th>
+              <th class="px-3 py-2 text-right font-medium whitespace-nowrap" title="Spot / preemptible cloud GPU instances, ~$1.50/hr">Spot (~$1.50/hr)</th>
+              <th class="px-3 py-2 text-right font-medium whitespace-nowrap" title="On-demand cloud GPU instances, ~$3/hr">On-demand (~$3/hr)</th>
+              <th class="px-3 py-2 text-right font-medium whitespace-nowrap" title="Wall clock on cashc's single local RTX 3080 Ti">3080 Ti wall clock</th>
+              <th class="px-3 py-2 text-right font-medium whitespace-nowrap">Cloud wall clock</th>
             </tr>
           </thead>
-          <tbody>${rows}</tbody>
+          <tbody>${tierRows}</tbody>
         </table>
+        <div class="px-3 py-2 text-xs leading-snug text-zinc-500" data-dim>
+          Anchored on measured pico-002 step time (4.5 s/step on RTX 3080 Ti, bf16, no torch.compile) and 2026-05 cloud GPU pricing. Full derivation including B200 alternative: <a class="underline hover:text-sky-200" href="https://github.com/cashcon57/open-supersampling/blob/main/docs/coordination/2026-05-11-heavy-cloud-training-cost-estimate.md">cost estimate memo</a>. 3080 Ti times past the single-run tier are flagged <span class="text-rose-300">impossible</span> not because the math doesn't divide but because Heavy at patch 256² won't fit in 12 GB VRAM and human lifetimes don't compose this way — the cloud GPUs are the unlock, not the optimization.
+        </div>
       </div>
     </details>
     <a class="mt-3 inline-flex w-full items-center justify-center rounded-md border border-pink-500 px-3 py-2 text-sm font-medium text-pink-200 hover:bg-pink-500 hover:text-zinc-950" href="mailto:cashcon57@gmail.com">Sponsor / Contact</a>
@@ -6729,7 +6788,21 @@ function renderHero(data) {
   document.getElementById("hero-gpu").innerHTML = gpuPanelHtml(active).replace("rounded-md border ", "");
   renderHeroBestCard(data);
   renderHeroEtaBanner(active);
+  renderSignalCostPanel(active);
   setupVisitBanner(active);
+}
+
+// Render the (previously per-run) cost panel into the bottom-of-signal host.
+// One copy on the page, sourced from the active run's cost data when present
+// and falling back to a "no live spend" stub so the static sponsorship tiers
+// still render when no run is active.
+function renderSignalCostPanel(active) {
+  const host = document.getElementById("signal-cost-panel");
+  if (!host) return;
+  const runForPanel = active && active.cost
+    ? active
+    : { active: true, cost: { gpu_hours: 0, kwh: 0, usd: 0, projections: {} } };
+  host.innerHTML = runCostPanelHtml(runForPanel);
 }
 
 // Find the best run by max held-out PSNR and populate the hero best-card.
@@ -6863,7 +6936,9 @@ function renderRun(run, index, openByRun = new Map()) {
     </button>`).join("");
   const note = history.note ? `<p class="rounded border border-amber-900/60 bg-amber-950/20 px-4 py-3 text-sm text-amber-100">${escapeHtml(history.note)}</p>` : "";
   const gpu = run.active ? gpuPanelHtml(run) : "";
-  const cost = run.active ? runCostPanelHtml(run) : "";
+  // Cost panel was per-run; promoted to a single page-level "bottom of signal
+  // section" host (#signal-cost-panel) populated by renderHero. Keeping it
+  // here would render two copies for the active run.
   const progress = trainingProgressHtml(run);
   const ticker = trainingTickerHtml(run);
   const chartId = `loss-chart-${index}`;
@@ -6932,7 +7007,6 @@ function renderRun(run, index, openByRun = new Map()) {
         <div class="grid min-w-0 gap-3 sm:grid-cols-3">${headline}</div>
         ${ticker}
         ${progress}
-        ${cost}
         ${gpu}
         ${gpuMemCard}
         <article class="chart-card min-w-0 rounded-md border border-zinc-800 bg-zinc-950/25 p-4" ${chartCardAttrs(chartId)} data-muted-surface>

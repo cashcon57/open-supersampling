@@ -299,28 +299,33 @@ Every training run, ablation, and benchmark gets a memo in `docs/superpowers/exp
 
 ## What I'm asking for
 
-OSS is at the inflection where v5 has measured in-distribution results, v6 is wired and training, and the next step is **cross-game-engine generalization plus the per-vendor kernel work that closes the latency gap to DLSS/FSR/XeSS**. That is not a one-person job in any reasonable timeframe.
+OSS is at the inflection where v5 has measured in-distribution results, v6 is wired and training, and the next step is **cross-game-engine generalization plus the per-vendor kernel work that closes the latency gap to DLSS / FSR / XeSS**. That is not a one-person job in any reasonable timeframe.
 
-The arithmetic, anchored on measured pico-002 step time and 2026-05 cloud GPU prices ([full derivation](docs/coordination/2026-05-11-heavy-cloud-training-cost-estimate.md)):
+### Concrete cost tiers
 
-- **A single Heavy training run** costs **$2.3K – $9K** in cloud GPU time. Funds one credibility checkpoint at Heavy scale.
-- **One full Heavy training cycle** (teacher + ablations + hyperparameter sweep + Standard/Pico student distillation + cross-engine fine-tune) costs **$17K – $67K**. Funds one publishable v6.x Heavy result.
-- **The path to DLSS-class quality cross-engine** (multi-cycle, 18–24 months) costs **$75K – $450K** in compute plus **$13K – $72K** in cumulative storage. This is the number that matters: it's what it actually takes for an open, Apache-2.0, cross-vendor super-resolution stack to compete with DLSS on shipping titles.
+Anchored on measured pico-002 step time (4.5 s/step on RTX 3080 Ti, bf16, no torch.compile) extrapolated to Heavy on H100 SXM, May 2026 cloud GPU pricing. Full derivation: [`docs/coordination/2026-05-11-heavy-cloud-training-cost-estimate.md`](docs/coordination/2026-05-11-heavy-cloud-training-cost-estimate.md). H100 is the reference because it has stable multi-cloud pricing; B200 is ~2× faster per chip and ~0.85–0.95× the effective dollar cost when available.
 
-For context: that DLSS-class number is roughly the cost of **one senior engineer-year at a US AI lab, fully loaded** — paying for compute instead of headcount, with the deliverable being an open-source upscaler that any studio can ship on any GPU vendor's hardware without a license fee or an NGX runtime dependency. Sponsoring this work is the leverage point. In rough order of preference for how that sponsorship can land:
+| Scope | What it funds | H100-hours | Spot (~$1.50/hr) | On-demand (~$3/hr) | Wall clock on 8× H100 |
+| --- | --- | --- | --- | --- | --- |
+| **Single Heavy run** | One Heavy teacher training (300K steps, 1 config). Credibility checkpoint that the architecture converges at Heavy scale. | 1.5K – 3K | **$2.3K – $4.5K** | **$4.5K – $9K** | 5–10 days |
+| **Heavy training cycle** | Heavy teacher + 5–10 ablations + hyperparameter sweep + Standard tier distillation + Pico tier (shipping student) distillation + 3–5 cross-engine fine-tunes. One publishable v6.x Heavy result with student tiers ready to ship. | 11K – 22K | **$17K – $33K** | **$34K – $67K** | 5–6 weeks |
+| **Path to frontier quality** | Multi-cycle (4 cycles): TartanAir + synthetic UE5, then real game captures via the OSS Capture Tool (Cyberpunk 2077, Alan Wake 2, etc.), then multi-engine + HDR retrain, then quality polish + DLL-shim integration. The number that actually matters: what it takes for an open, Apache-2.0, cross-vendor SR stack to land at frontier real-time-SR quality (≥30 dB PSNR / ≤0.15 LPIPS cross-engine, ≤2 ms inference on RTX 4070-class). | 50K – 150K | **$75K – $225K** | **$150K – $450K** | 18–24 months overall |
 
-1. **A job, contract, or paid consulting role on vendor-neutral SR.** Available full-time, remote (US-based), comfortable with open-source as the deliverable. Equally interested in research-engineer, applied-research, or kernel-engineer work; cross-vendor SR is the throughline.
-2. **Hardware loaners.** A v6 cross-game-engine training run wants a sustained MI300X, B200, or H100 cluster footprint. Equivalent value: an Intel Battlemage Arc card or a Tenstorrent Wormhole/Blackhole node for the cross-vendor kernel work; an M-series Mac Studio for the MLX Pico-tier port; a Snapdragon dev kit for the handheld Pico target.
-3. **Free GPU compute hours.** Concrete tiered need, anchored on measured pico-002 step time (4.5 s/step on RTX 3080 Ti, bf16, no torch.compile) extrapolated to Heavy on H100 — see [`docs/coordination/2026-05-11-heavy-cloud-training-cost-estimate.md`](docs/coordination/2026-05-11-heavy-cloud-training-cost-estimate.md) for the full derivation:
+Storage: 50–200 TB of cross-engine game captures over 18–24 months on Cloudflare R2 at $15/TB/month = **$13K – $72K cumulative**. Engineering: currently solo, AI-augmented; one fully-loaded senior US AI-lab engineer-year is $300K – $500K if the project funds headcount instead of compute. Inference rig (one RTX 4070-class, one RX 7900-class, one Arc B-series, one M-series Mac, one Snapdragon dev kit): **$5K – $10K one-time** for cross-vendor kernel benchmarking.
 
-    | Scope | H100-hours | Spot cost (~$1.50/hr) | On-demand (~$3/hr) |
-    | --- | --- | --- | --- |
-    | Single Heavy training run (300K steps, 1 config) | 1.5K – 3K | $2.3K – $4.5K | $4.5K – $9K |
-    | Heavy training **cycle** (teacher + ablations + sweep + Standard/Pico distillation + cross-engine fine-tune) | 11K – 22K | $17K – $33K | $34K – $67K |
-    | **Path to DLSS-class quality** (multi-cycle, cross-engine, 18–24 months) | 50K – 150K | **$75K – $225K** | **$150K – $450K** |
+For context: the frontier-quality number is roughly the cost of **one senior engineer-year at a US AI lab, fully loaded** — paying for compute instead of headcount, with the deliverable being an open-source upscaler that any studio can ship on any GPU vendor's hardware without a license fee or an NGX-runtime dependency. Sponsoring this work is the leverage point.
 
-    Plus $13K – $72K cumulative storage (R2, 50–200 TB of game captures over 18–24 months). Lambda Research Grant, NSF ACCESS, NAIRR, Oracle for Research, NVIDIA Inception, HF community grants, and Modal OSS credits fit the single-run and cycle scopes; the multi-cycle DLSS-class path requires either a strategic vendor partnership or a corporate engineering investment.
-4. **Cash grants.** Lower priority for a solo pre-alpha project, but Apache 2.0 + a measured v5 result + v6 wired-in-code is enough surface area for some compute-flavored grants. AI Grant and Epic MegaGrants likely become realistic only once v6 ships and runs in a real engine.
+### How sponsorship can land
+
+In rough order of preference:
+
+1. **A job, contract, or paid consulting role on vendor-neutral SR.** Available full-time, remote (US-based), comfortable with open-source as the deliverable. Equally interested in research-engineer, applied-research, or kernel-engineer work; cross-vendor SR is the throughline. Salary band $300K – $500K fully loaded; alternatively, contract / consulting day-rates.
+2. **Cloud GPU credits** — see the cost table. $2K – $9K funds a single Heavy training run, fits an early-stage corporate dev-rel program or pilot research credit. $17K – $67K funds a complete Heavy cycle, fits an NSF ACCESS / NAIRR allocation, an Oracle for Research credit, an HF community grant, or a Lambda / Modal / NVIDIA Inception strategic allocation. $75K – $450K funds the frontier-quality multi-cycle path and typically requires a strategic vendor partnership (AMD, Intel, Cloudflare, CoreWeave, or NVIDIA having a strategic interest in open vendor-neutral SR) or a corporate engineering investment.
+3. **Hardware loaners.** A loaned **MI300X, B200, or H100 8-GPU node for 90 days** is roughly equivalent to **$30K – $70K of cloud spot credit** at sustained 80% utilization, and is what one Heavy training cycle physically runs on. A loaned **Intel Battlemage Arc, Tenstorrent Wormhole / Blackhole, M4 Max Mac Studio, or Snapdragon dev kit** unlocks the cross-vendor kernel sprint that turns "the model trains" into "the model ships on AMD / Intel / Apple / handheld hardware natively." A loaned Steam Deck dev kit unlocks the handheld Pico target.
+4. **Studio + game-engine partnerships.** A studio that has shipped DLSS / FSR / XeSS-integrated titles can **co-fund the OSS Capture Tool pipeline against their own title's footage**, in exchange for a vendor-neutral DLL-shim integration tuned for their engine. The marginal cost vs. their existing per-title vendor-stack tuning is small; the payoff is one upscaler that ships on every GPU their players own.
+5. **Cash grants.** Lower priority for a solo pre-alpha project, but Apache 2.0 + a measured v5 result + v6 wired-in-code is enough surface area for some compute-flavored grants. AI Grant and Epic MegaGrants likely become realistic only once v6 ships and runs in a real engine.
+
+What you get in return: OSS is **Apache-2.0** licensed; trained model weights are planned for **CC-BY-4.0** when they ship. Cross-vendor SR is the throughline. Any sponsor underwriting this work funds a public-good upscaler that runs everywhere, with no licensing footprint, no proprietary runtime dependency, and no per-title integration fee. That is the bet.
 
 If any of these fits something you can offer, please reach out: <cashcon57@gmail.com>.
 
