@@ -142,17 +142,17 @@ def main() -> int:
         f"feat_dim={model.feat_dim} latent_rank={model.rasterizer.feature_dim}"
     )
 
-    # Reuse the held-out-eval manifest loader (default lr_synth args).
+    # Reuse the held-out-eval manifest loader. We supply the LR-synth knobs
+    # the manifest expects (matches what sr_temporal_held_out's CLI defaults
+    # produce).
     class _Args:
         scale = 2.0
         batch_size = 1
         tartanair_root = args.tartanair_root
         sintel_root = None
-        cfa = "none"
-        downsample = "bicubic"
-        antialias_lr = False
-        gbuffer_noise_pct = 0.0
-        scale_jitter = 0.0
+        enable_jpeg = False
+        jpeg_quality = 90
+        blur_sigma = 0.0
     lr_synth_args = _lr_synth_args_from_cli(_Args())
     loaders = _build_manifest_loaders(
         [args.manifest],
