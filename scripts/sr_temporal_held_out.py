@@ -665,6 +665,18 @@ def _dashboard_score_row(
     bic_psnr = result["psnr_bicubic"]
     model_lpips = result["lpips_temporal"]
     bic_lpips = result["lpips_bicubic"]
+    # Temporal stability metrics. Lower is better; the dashboard treats
+    # tstab_ratio (model/baseline) as the headline -- the v4 baseline is
+    # frozen, so the ratio cleanly captures whether GAN warmup / new
+    # training disrupts frame-to-frame consistency. Per-pair values are
+    # kept for per-frame charts.
+    tstab_temporal = result.get("tstab_temporal") or []
+    tstab_baseline = result.get("tstab_baseline") or []
+    tstab_temporal_mean = _mean(tstab_temporal) if tstab_temporal else None
+    tstab_baseline_mean = _mean(tstab_baseline) if tstab_baseline else None
+    tstab_ratio = None
+    if tstab_temporal_mean is not None and tstab_baseline_mean and tstab_baseline_mean > 0:
+        tstab_ratio = tstab_temporal_mean / tstab_baseline_mean
     return {
         "step": _step_from_ckpt(ckpt),
         "model_psnr_mean": _mean(model_psnr),
@@ -680,6 +692,11 @@ def _dashboard_score_row(
             sum(1 for m, b in zip(model_lpips, bic_lpips) if m < b)
             if model_lpips else None
         ),
+        "tstab_temporal_mean": tstab_temporal_mean,
+        "tstab_baseline_mean": tstab_baseline_mean,
+        "tstab_ratio": tstab_ratio,
+        "per_frame_tstab_temporal": list(tstab_temporal),
+        "per_frame_tstab_baseline": list(tstab_baseline),
         "n_samples": len(model_psnr),
         "manifest": ",".join(str(p) for p in manifest_paths),
         "ckpt": str(ckpt),

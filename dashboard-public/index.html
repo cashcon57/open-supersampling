@@ -4977,6 +4977,12 @@ function renderHeldoutChart(canvas, run) {
   const modelPsnr = xy(rows, "model_psnr_mean");
   const bicubicPsnr = xy(rows, "bicubic_psnr_mean");
   const modelLpips = xy(rows, "model_lpips_mean");
+  // Temporal stability: model/baseline pair-wise warp consistency.
+  // Plotted on the same right-axis as LPIPS since both are "lower-is-better"
+  // and live in similar small-number space (LPIPS ~ 0.1-0.3, tstab ~ 0.03-0.08).
+  // A divergence between LPIPS and tstab post-GAN-warmup would indicate flicker
+  // disagreement with the perceptual metric.
+  const modelTstab = xy(rows, "tstab_temporal_mean");
   if (!modelPsnr.length && !bicubicPsnr.length && !modelLpips.length) return null;
   const options = chartOptions({ yTitle: "held-out PSNR dB" });
   options.scales.y1 = {
@@ -4986,12 +4992,13 @@ function renderHeldoutChart(canvas, run) {
     max: 1,
     grid: { drawOnChartArea: false },
     ticks: { color: "#a1a1aa", maxTicksLimit: 6 },
-    title: { display: true, text: "held-out LPIPS", color: "#a1a1aa" },
+    title: { display: true, text: "held-out LPIPS / tstab", color: "#a1a1aa" },
   };
   const datasets = [
     { label: `${run.label || run.name} — PSNR ↑`, yAxisID: "y", data: modelPsnr, borderColor: colors.psnr, backgroundColor: colors.psnr, pointRadius: 3, pointHitRadius: 6, borderWidth: 2, tension: 0 },
     { label: "Bicubic baseline — PSNR", yAxisID: "y", data: bicubicPsnr, borderColor: colors.bicubic, backgroundColor: colors.bicubic, pointRadius: 3, pointHitRadius: 6, borderWidth: 1.7, borderDash: [5, 4], tension: 0 },
     { label: `${run.label || run.name} — LPIPS ↓`, yAxisID: "y1", data: modelLpips, borderColor: colors.lpips, backgroundColor: colors.lpips, pointRadius: 3, pointHitRadius: 6, borderWidth: 2, tension: 0 },
+    { label: `${run.label || run.name} — temporal stability ↓`, yAxisID: "y1", data: modelTstab, borderColor: colors.v62 || "#5eead4", backgroundColor: colors.v62 || "#5eead4", pointRadius: 2, pointHitRadius: 6, borderWidth: 1.5, borderDash: [3, 3], tension: 0 },
   ].filter((dataset) => dataset.data.length);
 
   // Industry reference lines (overlay when "Show industry refs" is checked).
@@ -5135,15 +5142,19 @@ function renderScoreTable(host, run) {
     host.innerHTML = `<p class="rounded border border-zinc-800 bg-zinc-950/40 px-4 py-5 text-sm text-zinc-400" data-muted-surface data-subtext>No held-out score_log.json rows published for this run.</p>`;
     return;
   }
+  // Prefer aggregate-mean fields over per-frame arrays, and prioritize
+  // the columns that matter most for at-a-glance reads.
   const keys = Array.from(new Set(rows.flatMap((row) => Object.keys(row))))
-    .filter((key) => /step|psnr|lpips|temporal|ratio|latency/i.test(key))
-    .slice(0, 6);
+    .filter((key) => /^(step|model_psnr_mean|model_lpips_mean|bicubic_psnr_mean|bicubic_lpips_mean|tstab_ratio|tstab_temporal_mean|temporal_ratio|latency_ms)$/.test(key))
+    .slice(0, 7);
   const KEY_LABELS = {
     step: "step",
     model_psnr_mean: `${run.label || run.name} PSNR ↑`,
     model_lpips_mean: `${run.label || run.name} LPIPS ↓`,
     bicubic_psnr_mean: "bicubic PSNR ↑",
     bicubic_lpips_mean: "bicubic LPIPS ↓",
+    tstab_temporal_mean: "tstab ↓",
+    tstab_ratio: "tstab vs v4 ↓",
     temporal_ratio: "temporal ratio ↓",
     latency_ms: "latency ms",
   };
