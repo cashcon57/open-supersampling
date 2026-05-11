@@ -1623,7 +1623,16 @@
             <thead><tr><th>Method</th><th class="num">PSNR ↑</th><th class="num">LPIPS ↓ (sort)</th></tr></thead>
             <tbody id="hero-best-compare-body"></tbody>
           </table>
-          <div class="hero-best-compare-note">Sorted by LPIPS ↓ (lower = better perceptual quality). LPIPS is more apples-to-apples across methods than PSNR here. <strong>OSS PSNR shown is on TartanAir oldtown</strong> — a hard synthetic flight-sim scene with thin geometry, fast motion, and transparent foliage. Industry rows are public-source numbers on AAA game content (Cyberpunk 2077, Death Stranding, Hitman 3, etc.), where the same architecture typically scores ~3–5 dB higher than on TartanAir. The OSS-vs-industry PSNR gap visible here significantly overstates the real perceptual gap.</div>
+          <div class="hero-best-compare-note">
+            Sorted by LPIPS ↓ (lower = better perceptual quality), measured with LPIPS-VGG.
+            <strong>What we can defensibly claim from this row:</strong>
+            OSS clearly beats bicubic and v5-pixel-temporal on the OSS-measured TartanAir oldtown held-out batch (apples-to-apples — OSS measured both); OSS is comfortably below FSR 1 / DLSS 1; OSS is in the same perceptual-quality band as FSR 2 / FSR 3 / XeSS 1 / DLSS 2 (too close to call without a controlled bake-off); OSS is below DLSS 4 (transformer).
+            <strong>Honest caveats:</strong>
+            (1) Industry rows are public-source numbers on AAA game content (Cyberpunk 2077, Death Stranding, Hitman 3, etc.), and the same OSS architecture would typically score ~3–5 dB higher on those scenes than on TartanAir — so the visible PSNR gap is dataset, not architecture.
+            (2) OSS trains LPIPS-VGG as a loss component and reports LPIPS-VGG as a metric (Goodhart-aware): the absolute number is artificially favorable vs models that didn't train on it.
+            (3) Industry LPIPS backbones aren't always disclosed; LPIPS-AlexNet runs ~30–40% lower than LPIPS-VGG on the same image pair, which could shift industry rows in either direction.
+            Settling vs DLSS 3 / FSR 3 perceptually requires a controlled bake-off on shared content with a metric nobody trained on (DISTS, FLIP, or human 2AFC).
+          </div>
         </div>
       </article>
       <article id="hero-gpu" class="rounded-md border border-zinc-800 bg-zinc-900/60 p-4" data-surface>
