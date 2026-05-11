@@ -90,6 +90,44 @@
       overflow: hidden;
     }
     .oss-logo { display: block; width: min(100%, 600px); height: auto; filter: drop-shadow(0 0 16px rgba(110, 231, 183, 0.16)); }
+    /* HTML ASCII-art logo used in place of an SVG <img>, because SVG-as-<img>
+       is sandboxed from the page's loaded webfont (JetBrains Mono) and falls
+       back to a system font where box-drawing chars (U+2500-U+257F) aren't
+       truly monospaced -- making each row of the ASCII art drift
+       horizontally on mobile. Rendering as <pre> in the page DOM uses the
+       page's already-loaded JetBrains Mono so every glyph aligns. */
+    .oss-logo-ascii-wrap {
+      display: block;
+      width: min(100%, 720px);
+      box-sizing: border-box;
+      background: #06110f;
+      border: 1px solid rgba(140, 255, 193, 0.5);
+      border-radius: 14px;
+      padding: clamp(8px, 2vw, 16px);
+      filter: drop-shadow(0 0 16px rgba(110, 231, 183, 0.16));
+      overflow-x: auto;
+      min-height: 0;
+    }
+    .oss-logo-ascii {
+      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Courier New", monospace;
+      font-feature-settings: "calt" 0, "liga" 0;
+      font-variant-ligatures: none;
+      letter-spacing: 0;
+      line-height: 1.05;
+      margin: 0;
+      white-space: pre;
+      font-weight: 800;
+      /* Scale font-size with viewport so the 64-char "SAMPLING" row always
+         fits without horizontal scrolling. Each glyph ~0.6em wide in the
+         JetBrains Mono regional set, so 64 glyphs need ~38.4em of width.
+         At 412 CSS px viewport (typical Android), 2.4vw = 9.9 px and 64 *
+         0.6 * 9.9 = 380 px which fits inside the 380px container content
+         box. Caps at 18px for desktop so the logo isn't comically large. */
+      font-size: clamp(7.5px, 2.15vw, 16px);
+    }
+    .oss-logo-ascii + .oss-logo-ascii { margin-top: 0.55em; }
+    .oss-logo-ascii.fg { color: #e9fff7; }
+    .oss-logo-ascii.accent { color: #8cffc1; }
     .oss-mark {
       width: max-content;
       border-left: 2px solid var(--oss-accent);
@@ -1505,7 +1543,22 @@
     <header class="border-b border-zinc-800 pb-5">
       <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div class="flex-1 min-w-0">
-          <img class="oss-logo" src="oss-logo.svg" alt="Open Super Sampling">
+          <div class="oss-logo-ascii-wrap" role="img" aria-label="Open Super Sampling"><pre class="oss-logo-ascii fg" aria-hidden="true"> ██████╗ ██████╗ ███████╗███╗   ██╗
+██╔═══██╗██╔══██╗██╔════╝████╗  ██║
+██║   ██║██████╔╝█████╗  ██╔██╗ ██║
+██║   ██║██╔═══╝ ██╔══╝  ██║╚██╗██║
+╚██████╔╝██║     ███████╗██║ ╚████║
+ ╚═════╝ ╚═╝     ╚══════╝╚═╝  ╚═══╝</pre><pre class="oss-logo-ascii accent" aria-hidden="true">███████╗██╗   ██╗██████╗ ███████╗██████╗
+██╔════╝██║   ██║██╔══██╗██╔════╝██╔══██╗
+███████╗██║   ██║██████╔╝█████╗  ██████╔╝
+╚════██║██║   ██║██╔═══╝ ██╔══╝  ██╔══██╗
+███████║╚██████╔╝██║     ███████╗██║  ██║
+╚══════╝ ╚═════╝ ╚═╝     ╚══════╝╚═╝  ╚═╝</pre><pre class="oss-logo-ascii fg" aria-hidden="true">███████╗ █████╗ ███╗   ███╗██████╗ ██╗     ██╗███╗   ██╗ ██████╗
+██╔════╝██╔══██╗████╗ ████║██╔══██╗██║     ██║████╗  ██║██╔════╝
+███████╗███████║██╔████╔██║██████╔╝██║     ██║██╔██╗ ██║██║  ███╗
+╚════██║██╔══██║██║╚██╔╝██║██╔═══╝ ██║     ██║██║╚██╗██║██║   ██║
+███████║██║  ██║██║ ╚═╝ ██║██║     ███████╗██║██║ ╚████║╚██████╔╝
+╚══════╝╚═╝  ╚═╝╚═╝     ╚═╝╚═╝     ╚══════╝╚═╝╚═╝  ╚═══╝ ╚═════╝</pre></div>
           <p class="mt-4 text-xs font-semibold uppercase tracking-wide text-cyan-300">OpenSuperSampling</p>
           <h1 id="page-headline" class="mt-2 text-3xl font-semibold tracking-normal text-zinc-50 sm:text-4xl" data-text>OpenSuperSampling — vendor-neutral SR + frame extrapolation</h1>
           <p class="mt-3 max-w-6xl text-sm leading-6 text-zinc-300" data-subtext>OpenSuperSampling is training a unified game reconstruction pipeline for super-resolution and frame extrapolation from one temporal model.</p>
