@@ -5,6 +5,15 @@ Versioning: SemVer pre-1.0 (PATCH = bug fixes / docs; MINOR = new features; MAJO
 
 ## [Unreleased] — `v0.2-dev` branch
 
+### Docs — Teacher / student split clarified across dashboard + README + RESEARCH.md (2026-05-11)
+
+Made it unambiguous, in every public-facing surface, that every model on the live dashboard (v5, v6.1, v6.2-pico-002, …) is a **research / teacher** model and NOT the end-user inference model. The HAT-Tiny backbone used in those runs is too expensive for real-time game upscaling: measured FP16 eager forward on RTX 3080 Ti (idle) is **54.5 ms at 270×480 LR** and **1,890 ms at 1920×1080 LR**, versus a <2 ms DLSS-/FSR-class budget. The end-user shipping model is a **≤1M-param student** distilled from these teachers (per the unanimous Phase 4 council 2026-05-08 decision and H006), exported to TensorRT FP8 with custom cross-vendor kernels. That student is not yet trained.
+
+- `dashboard-public/index.html`: amber banner under the headline; HAT-Tiny glossary tooltip updated with measured ms and teacher-only note.
+- `README.md`: TL;DR teacher/student note; v6.1 / v6.2-pico-002 status rows reframed as research/teacher; new "Distilled student (end-user inference model)" status row; Hardware-tiers table split into teacher / student columns.
+- `RESEARCH.md`: teacher/student disclaimer added to the status block under the title.
+- New memo: `docs/research/hypotheses/H007-hat-tiny-1080p-lr-actual-ms.md` — clean idle bench at the actual real-world LR shape.
+
 ### Rename — Ray-Retracing component branding (2026-05-07)
 
 > **Ray-Retracing** — OSS's temporal denoising + spatial reconstruction component. We don't cast new rays; we reuse existing samples by reprojecting them via motion vectors — tracing the original camera ray's screen-space path backward through time. Same surface area as DLSS Ray Reconstruction; different algorithm (we use the persistent Gaussian canvas as the temporal accumulator rather than a learned denoiser network).

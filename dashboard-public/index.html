@@ -1493,7 +1493,11 @@
           <p class="mt-4 text-xs font-semibold uppercase tracking-wide text-cyan-300">OpenSuperSampling</p>
           <h1 id="page-headline" class="mt-2 text-3xl font-semibold tracking-normal text-zinc-50 sm:text-4xl" data-text>OpenSuperSampling — vendor-neutral SR + frame extrapolation</h1>
           <p class="mt-3 max-w-3xl text-sm leading-6 text-zinc-300" data-subtext>OpenSuperSampling is training a unified game reconstruction pipeline for super-resolution and frame extrapolation from one temporal model.</p>
-          <p class="mt-2 max-w-3xl text-xs leading-5 text-zinc-500" data-dim>v6 notes: HAT-Tiny is the small HAT backbone; GS-STVSR and EWA describe the temporal canvas math; Net2Net is the expansion path; Charbonnier trains regression; Bicubic, DLSS, FSR, and XeSS are comparison anchors; PSNR and LPIPS stay as quality gauges; SDR ships first, HDR follows.</p>
+          <div class="mt-3 max-w-3xl rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs leading-5 text-amber-100" role="note">
+            <span class="font-semibold uppercase tracking-wide text-amber-300">Research model — not the end-user inference model.</span>
+            Every run shown on this dashboard (v5, v6.1, v6.2-pico-002, …) is a <strong>research / teacher</strong> model. The backbone (HAT-Tiny) is too expensive for real-time game upscaling: measured FP16 eager forward is ~54 ms at 270×480 LR and ~1,890 ms at 1920×1080 LR on RTX 3080 Ti (idle), versus a &lt;2 ms DLSS/FSR-class budget. The end-user shipping model will be a ≤1M-param student distilled from these teachers, in TensorRT FP8 + custom cross-vendor kernels — that student is not yet trained and is not on this dashboard. See <a class="underline hover:text-amber-200" href="https://github.com/cashcon57/open-supersampling/blob/main/docs/research/hypotheses/H006-hat-tiny-actual-ms.md">H006</a> and the v6.2 architecture spec.
+          </div>
+          <p class="mt-2 max-w-3xl text-xs leading-5 text-zinc-500" data-dim>v6 notes: HAT-Tiny is the small HAT backbone used as the <strong>research teacher</strong> (not the shipping inference model); GS-STVSR and EWA describe the temporal canvas math; Net2Net is the expansion path; Charbonnier trains regression; Bicubic, DLSS, FSR, and XeSS are comparison anchors; PSNR and LPIPS stay as quality gauges; SDR ships first, HDR follows.</p>
           <div class="mt-4 flex flex-wrap items-center gap-3 text-sm text-zinc-400" data-subtext>
             <a class="font-medium text-cyan-300 hover:text-cyan-200" href="https://github.com/cashcon57/open-supersampling">GitHub repo</a>
             <span class="hidden text-zinc-700 sm:inline">/</span>
@@ -1952,7 +1956,7 @@ const STOPPED_EARLY_REASONS = {
 
 const GLOSSARY = {
   hat: "Hybrid Attention Transformer. A super-resolution backbone that combines channel attention with windowed self-attention.",
-  "hat-tiny": "Our smaller HAT variant (~3M parameters) used as the v6 backbone. Same architecture, fewer channels.",
+  "hat-tiny": "Our smaller HAT variant (~3M parameters) used as the v6 backbone for TEACHER / research training only. Too expensive for real-time inference: ~54 ms at 270×480 LR and ~1,890 ms at 1920×1080 LR FP16 eager on RTX 3080 Ti, versus a <2 ms DLSS/FSR budget. The shipping model is a ≤1M-param student distilled from this teacher; that student is not yet trained.",
   "gs-stvsr": "Gaussian-Splat Spatial-Temporal Video Super-Resolution. Our temporal-warp method that splats prior frames into the current view.",
   ewa: "Elliptical Weighted Average. The Gaussian footprint formula used to composite splats onto the output pixel grid.",
   net2net: "A knowledge-transfer trick that grows a small pretrained network into a larger one without restarting training.",
