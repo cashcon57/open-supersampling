@@ -1533,8 +1533,6 @@
           <div id="connection-line" class="mt-2 hidden text-sm text-amber-200">Connection lost — retrying</div>
         </div>
         <div class="flex flex-wrap items-center gap-2">
-          <button id="crt-toggle" class="inline-flex h-9 w-fit items-center justify-center rounded-md border border-zinc-700 px-3 text-xs font-mono text-zinc-300 hover:border-emerald-500 hover:text-white" type="button" aria-pressed="false" title="CRT shader overlay">CRT [OFF]</button>
-          <button id="crt-hdr-toggle" class="inline-flex h-9 w-fit items-center justify-center rounded-md border border-zinc-700 px-3 text-xs font-mono text-zinc-300 hover:border-emerald-500 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed" type="button" aria-pressed="false" title="HDR canvas (WebGPU only)">HDR [—]</button>
           <button id="theme-toggle" class="inline-flex h-9 w-fit items-center justify-center rounded-md border border-zinc-700 px-3 text-sm text-zinc-200 hover:border-cyan-500 hover:text-white" type="button">Light mode</button>
         </div>
       </div>
@@ -7705,41 +7703,17 @@ if (document.fonts && document.fonts.ready) {
 }
 </script>
 <script type="module">
-  // CRT shader overlay — WebGPU primary, WebGL2 fallback. HDR-ready.
+  // CRT shader overlay — WebGPU primary, WebGL2 fallback. Always on; the
+  // user-facing CRT/HDR toggle buttons were removed (the default look is
+  // what we want). Clear any prior toggle-off preference so returning
+  // visitors who disabled it before the toggles were removed still see
+  // the shader.
   import { mountCRT } from './crt-shader.js';
-
-  const crt = await mountCRT(document.body, { defaultEnabled: false, defaultHDR: true });
-  const btn  = document.getElementById('crt-toggle');
-  const hdr  = document.getElementById('crt-hdr-toggle');
-
-  function refreshLabels() {
-    const on  = crt.isEnabled();
-    btn.textContent  = `CRT [${on ? 'ON ' : 'OFF'}]`;
-    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
-    btn.classList.toggle('text-emerald-300', on);
-    btn.classList.toggle('border-emerald-700', on);
-
-    if (!crt.isHDRSupported()) {
-      hdr.textContent = 'HDR [—]';
-      hdr.disabled = true;
-      hdr.title = 'HDR requires WebGPU. Falling back to SDR.';
-      return;
-    }
-    const hdrOn = crt.isHDR();
-    hdr.disabled = !on;
-    hdr.textContent = `HDR [${hdrOn ? 'ON ' : 'OFF'}]`;
-    hdr.setAttribute('aria-pressed', hdrOn ? 'true' : 'false');
-    hdr.classList.toggle('text-emerald-300', hdrOn);
-    hdr.classList.toggle('border-emerald-700', hdrOn);
-  }
-
-  btn.addEventListener('click', () => { crt.setEnabled(!crt.isEnabled()); refreshLabels(); });
-  hdr.addEventListener('click', async () => {
-    if (hdr.disabled) return;
-    await crt.setHDR(!crt.isHDR());
-    refreshLabels();
-  });
-  refreshLabels();
+  try {
+    localStorage.removeItem('crt_shader_enabled');
+    localStorage.removeItem('crt_shader_hdr');
+  } catch {}
+  mountCRT(document.body, { defaultEnabled: true, defaultHDR: true });
 </script>
 </body>
 </html>
