@@ -307,6 +307,12 @@
       .status-dot .status-name { display: none; }
       .status-dot .status-tip { left: auto; right: 0; }
     }
+    /* Hard-clip horizontal overflow at the root so a rogue descendant can
+       never create blank scrollable space on the right (Galaxy Z Fold 6
+       inner display in particular). Inner overflow-x:auto containers
+       (viz strips, score tables, sponsorship tier table) still scroll
+       their own contents within their bounds. */
+    html, body { overflow-x: clip; max-width: 100vw; }
     .accordion-body { max-height: 0; overflow: hidden; opacity: 0.65; transition: max-height 320ms ease, opacity 220ms ease; }
     details[open] .accordion-body { max-height: 5000px; opacity: 1; }
     .viz-button { position: relative; cursor: zoom-in; transition: transform 180ms ease, filter 180ms ease; }
