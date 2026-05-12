@@ -50,6 +50,8 @@ content_type_for() {
     *.png)  echo "image/png" ;;
     *.jpg|*.jpeg) echo "image/jpeg" ;;
     *.webp) echo "image/webp" ;;
+    *.mp4)  echo "video/mp4" ;;
+    *.webm) echo "video/webm" ;;
     *.txt|*.log) echo "text/plain; charset=utf-8" ;;
     *.md)   echo "text/markdown; charset=utf-8" ;;
     *)      echo "application/octet-stream" ;;

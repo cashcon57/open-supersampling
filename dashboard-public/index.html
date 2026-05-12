@@ -1673,6 +1673,79 @@
       <div id="global-viz-strip" class="viz-strip mt-4 flex gap-3 overflow-x-auto pb-2"></div>
     </section>
 
+    <div class="terminal-divider" aria-hidden="true"><span class="td-corner">├─ oss-fx (frame extrapolation) ─</span><span class="td-rule"></span><span class="td-corner">─┤</span></div>
+    <section id="oss-fx-section" class="rounded-md border border-zinc-800 bg-zinc-900/60 p-5" data-surface aria-labelledby="oss-fx-title">
+      <header class="flex flex-col gap-3">
+        <div>
+          <h2 id="oss-fx-title" class="text-xl font-semibold text-zinc-50" data-text>OSS-FX — continuous frame extrapolation</h2>
+          <p class="mt-2 max-w-4xl text-sm leading-6 text-zinc-400" data-subtext>
+            Real-time games can't wait for frame <em>N+1</em> to render the moment <em>between</em> <em>N</em> and <em>N+1</em>.
+            <strong>Interpolation</strong> (DLSS-FG style) needs both endpoints already rendered, so the in-between frame
+            arrives one frame late — adding a full frame of input latency.
+            <strong>Extrapolation</strong> predicts the intermediate moment from frame <em>N</em> alone — zero added latency,
+            and the predicted frame can be displayed while frame <em>N+1</em> is still being rendered.
+          </p>
+          <p class="mt-2 max-w-4xl text-sm leading-6 text-zinc-400" data-subtext>
+            OSS-FX is structurally the cheapest frame-gen path in current public knowledge: the persistent Gaussian canvas
+            is already warped frame-to-frame for SR; rendering it at <code class="text-zinc-200">α ∈ (0, 1)</code> instead
+            of <code class="text-zinc-200">α = 1</code> just advances each Gaussian's position by <code class="text-zinc-200">α · motion</code>
+            before the rasterizer call. <strong>No second network. No new training pipeline at inference.</strong>
+          </p>
+          <p class="mt-2 max-w-4xl text-xs leading-5 text-amber-200/80" data-dim>
+            <strong>What you're seeing.</strong> Continuous 3-second clip from TartanAir <code>oldtown / Easy / P000</code> through the v6.2-pico-002 model at step 70,000.
+            "SR only" is the model rendering each LR frame normally. "SR + FG" doubles the framerate by inserting an OSS-FX extrapolated frame between every two SR frames.
+            At this checkpoint the canvas isn't yet load-bearing (see <a class="underline hover:text-amber-100" href="https://github.com/cashcon57/open-supersampling/blob/main/docs/research/hypotheses/H009-canvas-not-utilized.md">H009</a>),
+            so the extrapolated frames currently look nearly identical to their SR neighbors. The structural plumbing works;
+            the <a class="underline hover:text-amber-100" href="https://github.com/cashcon57/open-supersampling/blob/main/docs/architecture/2026-05-11-v63-pico-003-canvas-utilization-spec.md">v6.3 spec</a>
+            fixes the canvas-utilization bug, after which extrapolated frames should carry distinct intermediate motion.
+          </p>
+        </div>
+        <div class="flex flex-wrap items-center gap-3 text-sm">
+          <span class="text-zinc-400" data-dim>Mode:</span>
+          <button id="oss-fx-mode-sr" class="rounded-md border border-emerald-500/60 bg-emerald-900/30 px-3 py-1 text-xs font-mono text-emerald-200" type="button" aria-pressed="true">SR only · 30 fps</button>
+          <button id="oss-fx-mode-fg" class="rounded-md border border-zinc-700 bg-zinc-950/40 px-3 py-1 text-xs font-mono text-zinc-300 hover:border-emerald-500" type="button" aria-pressed="false">SR + FG · 60 fps</button>
+          <button id="oss-fx-mode-gt" class="rounded-md border border-zinc-700 bg-zinc-950/40 px-3 py-1 text-xs font-mono text-zinc-300 hover:border-emerald-500" type="button" aria-pressed="false">Ground truth · 30 fps</button>
+        </div>
+      </header>
+      <div class="mt-4 overflow-x-auto rounded border border-zinc-800 bg-black">
+        <video id="oss-fx-video" class="block w-full max-w-full" controls loop muted playsinline preload="metadata" data-src-sr="runs/srcnn-v6.2-pico-002/oss-fx/model_sr_only.mp4" data-src-fg="runs/srcnn-v6.2-pico-002/oss-fx/model_sr_fg.mp4" data-src-gt="runs/srcnn-v6.2-pico-002/oss-fx/gt.mp4">
+          <source id="oss-fx-video-source" src="runs/srcnn-v6.2-pico-002/oss-fx/model_sr_only.mp4" type="video/mp4">
+          Your browser does not support inline video.
+        </video>
+      </div>
+      <script>
+        (() => {
+          const video = document.getElementById("oss-fx-video");
+          const source = document.getElementById("oss-fx-video-source");
+          if (!video || !source) return;
+          const buttons = {
+            sr: { el: document.getElementById("oss-fx-mode-sr"), src: video.dataset.srcSr },
+            fg: { el: document.getElementById("oss-fx-mode-fg"), src: video.dataset.srcFg },
+            gt: { el: document.getElementById("oss-fx-mode-gt"), src: video.dataset.srcGt },
+          };
+          for (const [key, b] of Object.entries(buttons)) {
+            if (!b.el) continue;
+            b.el.addEventListener("click", () => {
+              source.src = b.src;
+              video.load();
+              video.play().catch(() => {});
+              for (const [k, other] of Object.entries(buttons)) {
+                if (!other.el) continue;
+                const active = (k === key);
+                other.el.setAttribute("aria-pressed", String(active));
+                other.el.classList.toggle("border-emerald-500/60", active);
+                other.el.classList.toggle("bg-emerald-900/30", active);
+                other.el.classList.toggle("text-emerald-200", active);
+                other.el.classList.toggle("border-zinc-700", !active);
+                other.el.classList.toggle("bg-zinc-950/40", !active);
+                other.el.classList.toggle("text-zinc-300", !active);
+              }
+            });
+          }
+        })();
+      </script>
+    </section>
+
     <div class="terminal-divider" aria-hidden="true"><span class="td-corner">├─ lineage ─</span><span class="td-rule"></span><span class="td-corner">─┤</span></div>
     <section class="deferred-section flex flex-col gap-3" aria-labelledby="run-history-title">
       <div class="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
