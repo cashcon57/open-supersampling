@@ -113,6 +113,16 @@ def main() -> int:
         default="normal,zero,canvas-only,stale-canvas",
         help="Comma-separated probe modes.",
     )
+    parser.add_argument(
+        "--alpha",
+        type=float,
+        default=1.0,
+        help="OSS-FX extrapolation factor in [0, 1]. 1.0 = normal next-frame "
+             "prediction. 0.5 = render canvas warped halfway along the motion "
+             "field (intermediate-frame extrapolation eyeball test). 0.0 = no "
+             "warp (canvas stays at frame t). Scales motion_lr before passing "
+             "to the model; canvas warp + rasterizer run at HR unchanged.",
+    )
     args = parser.parse_args()
 
     device = _device(args.device)
@@ -216,10 +226,18 @@ def main() -> int:
                     depth_hr_prev=depth_hr_t,
                     frame_index=0,
                 )
-                # Frame 1 (t+1) -- this is what we score.
+                # Frame 1 -- scaled by alpha for OSS-FX extrapolation probe.
+                # alpha=1.0 -> normal next-frame prediction (canvas warped to t+1).
+                # alpha=0.5 -> canvas warped to halfway point (t + 0.5 dt).
+                # alpha=0.0 -> canvas stays at t (no warp).
+                # Note: backbone still sees x_tp1 LR / G-buffers, so the
+                # backbone path is anchored at t+1 regardless of alpha.
+                # canvas-only mode (refined_hr=0 at composite_head) is what
+                # actually isolates the canvas's alpha behavior.
+                scaled_motion = t_motion * float(args.alpha)
                 out = model(
                     lr_inputs=_v6_input(x_tp1),
-                    motion_lr=t_motion,
+                    motion_lr=scaled_motion,
                     depth_hr_curr=depth_hr_tp1,
                     depth_hr_prev=depth_hr_t,
                     frame_index=1,
@@ -238,7 +256,13 @@ def main() -> int:
                     ):
                         _save_png(out[b], args.write_frames_to / f"{mode}.png")
                         if mode == "normal":
-                            _save_png(p_gt[b], args.write_frames_to / "gt.png")
+                            _save_png(p_gt[b], args.write_frames_to / "gt-tp1.png")
+                            # Also dump GT at t (start of pair) for the OSS-FX
+                            # eyeball: with alpha=0.5 the model output should
+                            # look halfway between gt-t and gt-tp1.
+                            t_gt_hr_key = "t_gt_hr" if "t_gt_hr" in batch else None
+                            if t_gt_hr_key is not None:
+                                _save_png(batch[t_gt_hr_key][b].to(device), args.write_frames_to / "gt-t.png")
 
         canvas_stats = None
         if mode == "normal" and state.get("canvas_hr_ch_std"):
