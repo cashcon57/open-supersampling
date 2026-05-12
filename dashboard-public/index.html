@@ -1692,12 +1692,10 @@
             before the rasterizer call. <strong>No second network. No new training pipeline at inference.</strong>
           </p>
           <p class="mt-2 max-w-4xl text-xs leading-5 text-amber-200/80" data-dim>
-            <strong>What you're seeing.</strong> Continuous 3-second clip from TartanAir <code>oldtown / Easy / P000</code> through the v6.2-pico-002 model at step 70,000.
-            "SR only" is the model rendering each LR frame normally. "SR + FG" doubles the framerate by inserting an OSS-FX extrapolated frame between every two SR frames.
-            At this checkpoint the canvas isn't yet load-bearing (see <a class="underline hover:text-amber-100" href="https://github.com/cashcon57/open-supersampling/blob/main/docs/research/hypotheses/H009-canvas-not-utilized.md">H009</a>),
-            so the extrapolated frames currently look nearly identical to their SR neighbors. The structural plumbing works;
-            the <a class="underline hover:text-amber-100" href="https://github.com/cashcon57/open-supersampling/blob/main/docs/architecture/2026-05-11-v63-pico-003-canvas-utilization-spec.md">v6.3 spec</a>
-            fixes the canvas-utilization bug, after which extrapolated frames should carry distinct intermediate motion.
+            <strong>What you're seeing.</strong> Continuous 3-second clip from TartanAir <code>oldtown / Easy / P000</code> through the v6.2-pico-002 model at step 70,000. <strong>Native render resolution: 640×480.</strong> The model does 2× SR from 320×240 LR to 640×480 HR — that's the dataset's native ground-truth resolution. Higher output would require either a higher-resolution GT dataset (Hypersim) or a higher SR ratio (would need a different training run).
+          </p>
+          <p class="mt-2 max-w-4xl text-xs leading-5 text-amber-200/80" data-dim>
+            <strong>Honest disclosure on the FG frames.</strong> Per <a class="underline hover:text-amber-100" href="https://github.com/cashcon57/open-supersampling/blob/main/docs/research/hypotheses/H009-canvas-not-utilized.md">H009</a>, the composite_head learned to weight the Gaussian canvas near zero, so scaling motion by α=0.5 in a vanilla forward pass produces frames pixel-near-identical to the SR frames (0.000225 mean abs diff vs 0.128 inter-frame motion → ratio 0.0017, no visible motion). To get something visible at this checkpoint, the FG frames in the <em>SR + FG</em> stream are rendered with an <strong>inference-time canvas magnification of ×50</strong> applied at the composite_head input — equivalent to the v6.3 fusion-magnitude intervention without retraining. That bumps the extrap-vs-SR pixel diff to 0.008 (37× the unscaled baseline; ~6% of inter-frame motion). It's a hack: the model was never trained with canvas magnitudes that large, so artifacts are expected. v6.3 properly retrains with the magnitude balanced.
           </p>
         </div>
         <div class="flex flex-wrap items-center gap-3 text-sm">
