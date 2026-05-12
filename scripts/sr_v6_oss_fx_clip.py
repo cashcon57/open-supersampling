@@ -104,11 +104,36 @@ def run_pass(
     device: str,
     alpha: float,
     output_dir: Path,
+    canvas_scale: float = 1.0,
 ) -> None:
+    """Run the v6 model on a contiguous frame sequence.
+
+    canvas_scale > 1 multiplies canvas_hr at the composite_head input,
+    overriding the model's learned-zero weighting on the canvas channels.
+    This is an inference-time hack equivalent to the v6.3 fusion-magnitude
+    intervention (without retraining); see H009 for why it's needed.
+    """
     output_dir.mkdir(parents=True, exist_ok=True)
     if hasattr(model, "reset_state"):
         model.reset_state(device=torch.device(device))
     prev_depth_hr = None
+
+    hook_handle = None
+    if abs(canvas_scale - 1.0) > 1e-9:
+        head = model.composite_head
+        feat_dim = int(model.feat_dim)
+        canvas_dim = int(model.rasterizer.feature_dim)
+
+        def _scale_canvas_hook(_module, inputs):
+            x = inputs[0]
+            if x.shape[1] != feat_dim + canvas_dim:
+                return None
+            refined_hr = x[:, :feat_dim]
+            canvas_hr = x[:, feat_dim:] * float(canvas_scale)
+            return (torch.cat([refined_hr, canvas_hr], dim=1),)
+
+        hook_handle = head.register_forward_pre_hook(_scale_canvas_hook)
+
     with torch.inference_mode():
         for frame_idx, sample in enumerate(frames):
             lr = sample["lr"].to(device).unsqueeze(0) if sample["lr"].dim() == 3 else sample["lr"].to(device)
@@ -130,6 +155,9 @@ def run_pass(
             ).clamp(0.0, 1.0)
             prev_depth_hr = depth_hr
             _save_png(out.squeeze(0), output_dir / f"{frame_idx:04d}.png")
+
+    if hook_handle is not None:
+        hook_handle.remove()
 
 
 def save_gt(frames: list[dict], output_dir: Path) -> None:
@@ -175,6 +203,16 @@ def main() -> int:
     parser.add_argument("--n-frames", default=90, type=int)
     parser.add_argument("--fps", default=30, type=int)
     parser.add_argument("--alpha", default=0.5, type=float)
+    parser.add_argument(
+        "--canvas-scale",
+        type=float,
+        default=1.0,
+        help="Multiply canvas_hr by this value at the composite_head input. "
+             "Inference-time equivalent of the v6.3 fusion-magnitude "
+             "intervention (no retrain). Use ~50 to force the canvas to "
+             "contribute to output even though the model was trained to "
+             "weight it near zero (see H009).",
+    )
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--device", default="cuda")
     args = parser.parse_args()
@@ -216,10 +254,12 @@ def main() -> int:
     save_gt(frames, gt_dir)
 
     print("[clip] running model at alpha=1.0 (normal)")
-    run_pass(model, frames, device, alpha=1.0, output_dir=normal_dir)
+    run_pass(model, frames, device, alpha=1.0, output_dir=normal_dir,
+             canvas_scale=args.canvas_scale)
 
-    print(f"[clip] running model at alpha={args.alpha} (extrapolation)")
-    run_pass(model, frames, device, alpha=args.alpha, output_dir=extrap_dir)
+    print(f"[clip] running model at alpha={args.alpha} (extrapolation), canvas_scale={args.canvas_scale}")
+    run_pass(model, frames, device, alpha=args.alpha, output_dir=extrap_dir,
+             canvas_scale=args.canvas_scale)
 
     # Build the interleaved "SR + FG" sequence: alternate normal[i] and
     # extrap[i]. The extrap frame represents the moment between normal[i]
