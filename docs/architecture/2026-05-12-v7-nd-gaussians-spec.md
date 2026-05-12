@@ -2,7 +2,7 @@
 
 **Filed:** 2026-05-12
 **Status:** spec, queued behind v6.3 (which itself is queued behind v6.2-pico-002 finishing at step 100K)
-**Driver:** the paper "N-Dimensional Gaussians for Fitting of High Dimensional Functions" (Diolatzis, Zirr, Kuznetsov, Kopanas, Kaplanyan, 2024 — https://arxiv.org/abs/2405.20067) and the architectural observation that OSS-FX is **structurally the same operation as slicing an N-D Gaussian mixture at a chosen time coordinate.**
+**Driver:** the paper ["N-Dimensional Gaussians for Fitting of High Dimensional Functions"](https://arxiv.org/abs/2405.20067) (Diolatzis, Zirr, Kuznetsov, Kopanas, Kaplanyan, 2024) and the architectural observation that OSS-FX is **structurally the same operation as slicing an N-D Gaussian mixture at a chosen time coordinate.**
 
 ## One-line claim
 
@@ -38,7 +38,7 @@ Memory per Gaussian: 3 (μ) + 6 (L) + 16 (f) = **25 floats** at fp32 → 100 byt
 
 To render at t = t*:
 
-```
+```text
 For each Gaussian g_i with mean μ_i = (x_i, y_i, t_i) and covariance V_i:
     Compute the marginal 2D Gaussian on the (x, y) plane conditional on t = t*:
         μ_2D = (x_i, y_i) + V_xt^T · V_tt^{-1} · (t* - t_i)
@@ -110,7 +110,17 @@ v6.3 is no longer the destination; it's the runway. We debug each component at 2
 
 Total time-to-first-OSS-FX-result: **~4 weeks of engineering + 11 days of training**, starting from v6.2 completion.
 
-Compute estimate: v7-pico-005 single run + ablations + Vimeo finetune ≈ **3–6K H100-hours** on cloud, **$5K–$18K spot** (per the cost-estimate memo's framing). Falls within the single-Heavy-cycle budget.
+Compute estimate (v7-pico-005, pico-tier — the actual Phase 3 deliverable, not Heavy):
+
+| Component | H100-hours | Spot ($1.50/hr) | On-demand ($3/hr) |
+| --- | --- | --- | --- |
+| v7-pico-005 single training run (100K steps, ~12 s/step on H100; pico-002 baseline 4.5 s/step × ~1.5–2× for N-D overhead) | ~70–110 | $100–$170 | $200–$330 |
+| 3–5 ablations (canvas-on/off, spawner-on/off, α-curriculum) | 200–400 | $300–$600 | $600–$1.2K |
+| Vimeo-90K fine-tune (50K steps) | 30–50 | $50–$80 | $100–$160 |
+| Eval + held-out + slack 20% | ~80 | $120 | $240 |
+| **Pico-tier v7 first cycle total** | **~400–650** | **$600–$1K spot** | **$1.1K–$1.9K on-demand** |
+
+Heavy-tier v7 (the shipping target via distillation from pico-005) would scale to the cost-estimate memo's Heavy cycle range ($17K–$33K spot for 11K–22K H100-hours), but that's not the Phase 3 cost — that's later.
 
 ## Risks + open questions
 
