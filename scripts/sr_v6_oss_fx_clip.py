@@ -83,7 +83,19 @@ def _build_continuous_trajectory_direct(
     if not keep_indices:
         return []
     ds = adapt_tartanair(ds_raw)
-    return [ds[i] for i in keep_indices]
+    # ds[i] returns GaussianTrainingExample (dataclass). Convert to the dict
+    # shape the rest of this script expects: lr, hr, depth, motion, normals.
+    out: list[dict] = []
+    for i in keep_indices:
+        ex = ds[i]
+        out.append({
+            "lr": ex.lr_frame,
+            "hr": ex.gt_hr_frame,
+            "depth": ex.depth,
+            "motion": ex.motion,
+            "normals": ex.normals,
+        })
+    return out
 
 
 def run_pass(
