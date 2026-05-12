@@ -5417,7 +5417,12 @@ function renderVizStrip(host, run, limit) {
     button.dataset.file = file;
     button.setAttribute("aria-label", `Open ${run.label || run.name} ${file}`);
     const img = document.createElement("img");
-    img.className = "aspect-video w-72 rounded border border-zinc-800 bg-black object-contain";
+    // Viz strip PNGs are 4480x2880 (aspect 14:9 = 1.556). Using aspect-video
+    // (16:9 = 1.778) here would force ~18px of black letterboxing on each
+    // side of every frame -- looks like the strip is stretched horizontally
+    // when it's actually the container being wider than the image content.
+    // Match the actual viz output aspect so the image fills the frame.
+    img.className = "aspect-[14/9] w-72 rounded border border-zinc-800 bg-black object-contain";
     img.loading = "lazy";
     img.decoding = "async";
     img.fetchPriority = "low";
