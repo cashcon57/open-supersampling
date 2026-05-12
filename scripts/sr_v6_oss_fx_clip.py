@@ -56,6 +56,36 @@ def _save_png(t: torch.Tensor, path: Path) -> None:
     Image.fromarray(arr).save(path)
 
 
+def _build_continuous_trajectory_direct(
+    root: Path, env: str, difficulty: str, path_id: str, n_frames: int,
+) -> list[dict]:
+    """Load n_frames from a single TartanAir sub-trajectory by filtering the
+    dataset's internal _items list to paths matching env/difficulty/path_id.
+    Avoids the O(full-dataset) scan in
+    sr_temporal_flicker_eval._build_continuous_trajectory."""
+    from oss.gaussian.data import TartanAirGaussianDataset
+    from oss.sr.temporal import adapt_tartanair
+
+    ds_raw = TartanAirGaussianDataset(root=root, scale=2.0)
+    sep = ("\\", "/")
+    target_segments = (
+        f"{env}{sep[0]}{difficulty}{sep[0]}{path_id}",
+        f"{env}{sep[1]}{difficulty}{sep[1]}{path_id}",
+    )
+    keep_indices: list[int] = []
+    for i in range(len(ds_raw)):
+        frame_path, _, _ = ds_raw._items[i]
+        s = str(frame_path)
+        if any(seg in s for seg in target_segments):
+            keep_indices.append(i)
+            if len(keep_indices) >= n_frames:
+                break
+    if not keep_indices:
+        return []
+    ds = adapt_tartanair(ds_raw)
+    return [ds[i] for i in keep_indices]
+
+
 def run_pass(
     model,
     frames: list[dict],
@@ -141,7 +171,6 @@ def main() -> int:
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     from scripts.sr_temporal_held_out import _load_temporal
-    from scripts.sr_temporal_flicker_eval import _build_continuous_trajectory
 
     print(f"[clip] loading ckpt {args.ckpt_temporal.name}")
     model = _load_temporal(args.ckpt_temporal, device)
@@ -151,7 +180,11 @@ def main() -> int:
         f"[clip] loading {args.n_frames} frames from "
         f"{args.tartanair_env}/{args.tartanair_difficulty}/{args.tartanair_path}"
     )
-    frames = _build_continuous_trajectory(
+    # Direct filesystem load -- iterating the full TartanAir dataset to
+    # filter by env/path is O(30k samples) and impossibly slow. Build a
+    # minimal per-frame dict from the trajectory's image_left + depth_left
+    # + flow + normals files directly.
+    frames = _build_continuous_trajectory_direct(
         args.tartanair_root,
         args.tartanair_env,
         args.tartanair_difficulty,
