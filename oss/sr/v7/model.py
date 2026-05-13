@@ -27,6 +27,7 @@ import torch.nn.functional as F
 
 from oss.sr.v7.nd_canvas_state import NDCanvasState
 from oss.sr.v7.nd_rasterizer import render_nd_time_slice
+from oss.sr.v7.backbone_spawner import BackboneSpawner
 
 
 @dataclass
@@ -38,6 +39,10 @@ class V7Config:
     latent_rank: int = 16       # canvas feature dim R
     canvas_capacity: int = 4096
     backbone_blocks: int = 4
+    # Spawner controls
+    enable_spawner: bool = True
+    spawner_k_per_tile: int = 4
+    spawner_tile_size: int = 16
 
 
 class _ResBlock(nn.Module):
@@ -107,6 +112,16 @@ class V7Model(nn.Module):
         # know the device.
         self._canvas: Optional[NDCanvasState] = None
 
+        # Spawner: decodes refined_hr into K Gaussians/frame for the canvas.
+        self.spawner: Optional[BackboneSpawner] = None
+        if self.cfg.enable_spawner:
+            self.spawner = BackboneSpawner(
+                feat_dim=self.cfg.feat_dim,
+                latent_rank=self.cfg.latent_rank,
+                k_per_tile=self.cfg.spawner_k_per_tile,
+                tile_size=self.cfg.spawner_tile_size,
+            )
+
     @property
     def canvas(self) -> NDCanvasState:
         if self._canvas is None:
@@ -151,11 +166,40 @@ class V7Model(nn.Module):
         # Add batch dim
         return rendered.unsqueeze(0)
 
+    def spawn_into_canvas(self, refined_hr: torch.Tensor, t: float) -> int:
+        """If a spawner is configured, decode refined_hr -> K Gaussians and
+        add them to the canvas at t. Returns the number added.
+
+        Caller is responsible for not exceeding canvas capacity; this
+        method will raise if it would. v7 trainer policy is to prune
+        old / low-opacity Gaussians periodically to maintain headroom.
+        """
+        if self.spawner is None or self._canvas is None:
+            return 0
+        spawned = self.spawner(refined_hr, t=t)
+        n_to_add = spawned["positions"].shape[0]
+        # Avoid overflow: if not enough room, raise so the trainer
+        # surface the issue rather than silently dropping spawns.
+        if self._canvas.n_live + n_to_add > self._canvas.capacity:
+            raise RuntimeError(
+                f"NDCanvasState capacity ({self._canvas.capacity}) exceeded "
+                f"by spawn (have {self._canvas.n_live} live, spawning "
+                f"{n_to_add}). Trainer should prune before spawning more."
+            )
+        self._canvas.add(
+            positions=spawned["positions"],
+            cov_raw=spawned["cov_raw"],
+            features=spawned["features"],
+            opacity=spawned["opacity"],
+        )
+        return n_to_add
+
     def forward(
         self,
         lr_inputs: torch.Tensor,           # (B, in_ch, H_lr, W_lr)
         t_query: float = 0.0,              # absolute time coordinate to render
         output_hw: Optional[tuple[int, int]] = None,
+        spawn_at_t: Optional[float] = None, # if given, run spawner at this t
     ) -> torch.Tensor:
         """End-to-end forward. Returns (B, 3, H, W) HR image at t = t_query.
 
@@ -179,6 +223,14 @@ class V7Model(nn.Module):
         if refined_hr.shape[-2:] != (h_hr, w_hr):
             refined_hr = F.interpolate(refined_hr, size=(h_hr, w_hr),
                                        mode="bilinear", align_corners=False)
+
+        # Optional spawner: decode refined_hr into K canvas Gaussians at the
+        # requested time and append them. Trainer typically passes
+        # spawn_at_t=t_query for normal SR step or spawn_at_t=N for
+        # frame-N's add-to-canvas, and leaves the FG forward (rendering
+        # an intermediate t_query) without spawning.
+        if spawn_at_t is not None and self.spawner is not None:
+            self.spawn_into_canvas(refined_hr[:1], t=float(spawn_at_t))
 
         # Canvas -> canvas_hr
         canvas_hr = self.render_canvas(t_query=t_query, output_hw=(h_hr, w_hr))

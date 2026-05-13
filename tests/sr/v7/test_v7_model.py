@@ -103,6 +103,71 @@ def test_v7_model_render_canvas_alone_returns_correct_shape():
     assert out.abs().sum().item() == 0.0
 
 
+def test_v7_model_with_spawner_populates_canvas_during_forward():
+    """When spawn_at_t is passed, V7Model.forward should add Gaussians
+    to the canvas via the BackboneSpawner. Canvas count grows by the
+    spawner's K per call."""
+    cfg = V7Config(
+        in_channels=9, scale=2, feat_dim=8, latent_rank=4,
+        canvas_capacity=2048, backbone_blocks=1,
+        enable_spawner=True, spawner_k_per_tile=2, spawner_tile_size=8,
+    )
+    model = V7Model(cfg).train(False)
+    model.allocate_canvas("cpu")
+    assert model.canvas.count == 0
+
+    lr = torch.randn((1, 9, 16, 24))   # HR will be 32x48 -> 4x6 tiles -> 24 tiles -> 48 Gaussians
+    with torch.no_grad():
+        _ = model(lr, t_query=0.0, spawn_at_t=0.0)
+    expected_k = 2 * 4 * 6   # k_per_tile * H_tiles * W_tiles
+    assert model.canvas.count == expected_k, (
+        f"expected {expected_k} Gaussians after spawn_at_t=0; got {model.canvas.count}"
+    )
+
+
+def test_v7_model_with_spawner_produces_non_empty_canvas_render():
+    """After spawning, rendering at the spawned t should produce
+    non-zero canvas_hr (the canvas has content now)."""
+    cfg = V7Config(
+        in_channels=9, scale=2, feat_dim=8, latent_rank=4,
+        canvas_capacity=2048, backbone_blocks=1,
+        enable_spawner=True, spawner_k_per_tile=2, spawner_tile_size=8,
+    )
+    model = V7Model(cfg).train(False)
+    model.allocate_canvas("cpu")
+    # Manually bump spawner opacity bias so spawned Gaussians actually
+    # render visibly in this test (the default opacity_init_bias=-3
+    # gives ~0.05 opacity which is hard to see in pixel tests).
+    with torch.no_grad():
+        model.spawner.out.bias[8 + 4] = 0.0   # opacity logit -> sigmoid(0) = 0.5
+
+    lr = torch.randn((1, 9, 16, 24))
+    with torch.no_grad():
+        _ = model(lr, t_query=0.0, spawn_at_t=0.0)
+        # Now render canvas explicitly
+        canvas_hr = model.render_canvas(t_query=0.0, output_hw=(32, 48))
+    assert canvas_hr.abs().sum().item() > 0.0, "canvas render should be non-zero after spawning"
+
+
+def test_v7_model_gradient_flow_through_spawner():
+    """Backprop through canvas_hr touches spawner params."""
+    cfg = V7Config(
+        in_channels=9, scale=2, feat_dim=8, latent_rank=4,
+        canvas_capacity=256, backbone_blocks=1,
+        enable_spawner=True, spawner_k_per_tile=2, spawner_tile_size=8,
+    )
+    model = V7Model(cfg).train(True)
+    model.allocate_canvas("cpu")
+    lr = torch.randn((1, 9, 16, 24))
+    target = torch.rand((1, 3, 32, 48))
+    out = model(lr, t_query=0.0, spawn_at_t=0.0)
+    loss = (out - target).pow(2).mean()
+    loss.backward()
+    # Spawner's output conv should have gradient.
+    assert model.spawner.out.weight.grad is not None
+    assert model.spawner.out.weight.grad.abs().sum().item() > 0.0
+
+
 def test_v7_model_gradient_flow_through_backbone():
     """Smoke test: gradients should flow through the backbone for any
     non-trivial input."""
