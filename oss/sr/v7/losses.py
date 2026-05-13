@@ -32,6 +32,41 @@ def charbonnier(pred: torch.Tensor, target: torch.Tensor, eps: float = 1e-6) -> 
     return torch.sqrt((pred - target) ** 2 + eps * eps).mean()
 
 
+def _sobel_kernels(device: torch.device, dtype: torch.dtype) -> tuple[torch.Tensor, torch.Tensor]:
+    """3x3 Sobel kernels for x and y gradients, shaped for grouped conv on
+    a 3-channel image (one kernel per channel)."""
+    kx = torch.tensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], device=device, dtype=dtype)
+    ky = torch.tensor([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], device=device, dtype=dtype)
+    # (out_ch=3, in_ch_per_group=1, 3, 3) for groups=3 grouped conv
+    kx = kx.view(1, 1, 3, 3).expand(3, 1, 3, 3).contiguous()
+    ky = ky.view(1, 1, 3, 3).expand(3, 1, 3, 3).contiguous()
+    return kx, ky
+
+
+def sobel_grad_l1(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    """High-frequency edge loss: L1 on Sobel gradient magnitudes.
+
+    Penalises differences in *edge structure* between pred and target,
+    not just per-pixel brightness. Helps preserve thin geometry + crisp
+    boundaries at the cost of being more sensitive to noise. Use a
+    small weight (e.g. 0.1) so it doesn't dominate the Charbonnier
+    pixel loss.
+
+    Both pred and target are (B, 3, H, W) in [0, 1].
+    """
+    if pred.shape != target.shape:
+        raise ValueError(f"shape mismatch: pred {pred.shape} vs target {target.shape}")
+    kx, ky = _sobel_kernels(pred.device, pred.dtype)
+    # Grouped conv: per-channel x and y gradients
+    gx_p = F.conv2d(pred, kx, padding=1, groups=3)
+    gy_p = F.conv2d(pred, ky, padding=1, groups=3)
+    gx_t = F.conv2d(target, kx, padding=1, groups=3)
+    gy_t = F.conv2d(target, ky, padding=1, groups=3)
+    mag_p = torch.sqrt(gx_p * gx_p + gy_p * gy_p + 1e-8)
+    mag_t = torch.sqrt(gx_t * gx_t + gy_t * gy_t + 1e-8)
+    return (mag_p - mag_t).abs().mean()
+
+
 def _to_pm1(x: torch.Tensor) -> torch.Tensor:
     return x.clamp(0, 1) * 2.0 - 1.0
 
@@ -120,6 +155,7 @@ def oss_fx_loss(
     lambda_fg: float = 1.0,
     lambda_fg_lpips: float = 0.5,
     lambda_temp_consistency: float = 0.1,
+    lambda_sobel: float = 0.0,
     scale_for_warp: int = 2,
 ) -> tuple[torch.Tensor, dict[str, float]]:
     """Compute the v7 OSS-FX loss + a component breakdown for logging.
@@ -138,6 +174,14 @@ def oss_fx_loss(
         l_lpips_sr = lpips_vgg(out_main, gt_main)
         parts["sr_lpips"] = float(l_lpips_sr.item())
         loss_total = loss_total + lambda_lpips * l_lpips_sr
+
+    # High-frequency edge term: penalises Sobel-gradient differences.
+    # Off by default (lambda_sobel=0). Recommended ~0.1 for the Heavy /
+    # Standard teacher runs where preserving thin geometry matters.
+    if lambda_sobel > 0.0:
+        l_sobel = sobel_grad_l1(out_main, gt_main)
+        parts["sr_sobel"] = float(l_sobel.item())
+        loss_total = loss_total + lambda_sobel * l_sobel
 
     # FG loss at t = N + alpha for each intermediate
     if out_inter_list and gt_inter_list and lambda_fg > 0.0:

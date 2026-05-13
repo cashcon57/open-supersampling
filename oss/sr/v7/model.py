@@ -37,15 +37,25 @@ class V7Config:
     scale: int = 2
     feat_dim: int = 32          # backbone feature width
     latent_rank: int = 16       # canvas feature dim R
-    canvas_capacity: int = 4096
+    # Canvas + spawner defaults chosen so a 2-spawn cycle (frame N at t=0
+    # + frame N+1 at t=2) fits with ~3x headroom at TartanAir's 480x640
+    # HR (training data), and so deployment HR shapes up to ~1080p fit
+    # without further config changes. See docs/architecture/
+    # 2026-05-13-v7-spawner-config-rationale.md for the bench data.
+    canvas_capacity: int = 16384
     backbone_blocks: int = 4
     # Backbone selection: "placeholder" = small ConvNet (tests, fast),
     # "hat_tiny" = v6.x HAT-Tiny transformer (pico-tier teacher),
     # "hat_small" / "hat_l" = larger teachers for Standard / Heavy tiers.
     backbone_kind: str = "placeholder"
-    # Spawner controls
+    # Spawner controls. k_per_tile=2 (down from prior 4) keeps the per-
+    # spawn count fitting in canvas_capacity at 480x640 HR (4800 total
+    # after 2 spawns) while still giving the parent-child mechanism
+    # room to grow density adaptively. tile_size=16 is chosen so the
+    # spawner's avg-pool kernel matches v6.x HAT-Tiny's window_size and
+    # so 1080p HR pads to one extra tile, not many.
     enable_spawner: bool = True
-    spawner_k_per_tile: int = 4
+    spawner_k_per_tile: int = 2
     spawner_tile_size: int = 16
 
 

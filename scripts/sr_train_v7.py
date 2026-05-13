@@ -168,7 +168,11 @@ def main() -> int:
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--feat-dim", type=int, default=32)
     parser.add_argument("--latent-rank", type=int, default=16)
-    parser.add_argument("--canvas-capacity", type=int, default=4096)
+    parser.add_argument("--canvas-capacity", type=int, default=16384,
+                        help="Canvas slot count. Default fits TartanAir HR "
+                             "480x640 with default tile=16/k=2 (4800 actives "
+                             "after 2 spawns); bump to 65536 for 1080p HR "
+                             "deployment, 131072 for 4K. See v7-spawner-config-rationale memo.")
     parser.add_argument("--backbone-blocks", type=int, default=4)
     parser.add_argument(
         "--backbone-kind",
@@ -185,6 +189,11 @@ def main() -> int:
     parser.add_argument("--lambda-fg", type=float, default=1.0)
     parser.add_argument("--lambda-fg-lpips", type=float, default=0.5)
     parser.add_argument("--lambda-temp-consistency", type=float, default=0.1)
+    parser.add_argument("--lambda-sobel", type=float, default=0.0,
+                        help="Sobel high-frequency edge loss weight on the SR "
+                             "branch. Off by default. Recommended ~0.1 for "
+                             "Standard/Heavy teacher runs where preserving "
+                             "thin geometry matters.")
     parser.add_argument("--max-triplets", type=int, default=None,
                         help="Cap dataset size (useful for smoke testing).")
     parser.add_argument("--curriculum", action="store_true",
@@ -305,6 +314,7 @@ def main() -> int:
                     lambda_fg=fg_w,
                     lambda_fg_lpips=fg_lpips_w,
                     lambda_temp_consistency=temp_w,
+                    lambda_sobel=args.lambda_sobel,
                 )
                 if batch_total_loss is None:
                     batch_total_loss = loss_b

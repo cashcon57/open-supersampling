@@ -95,12 +95,19 @@ class BackboneSpawner(nn.Module):
             )
 
         b, f, h, w = refined_hr.shape
-        if h % self.tile_size != 0 or w % self.tile_size != 0:
-            raise ValueError(
-                f"refined_hr shape ({h}, {w}) must be divisible by tile_size {self.tile_size}"
-            )
-        n_tiles_h = h // self.tile_size
-        n_tiles_w = w // self.tile_size
+        # Deployment HR shapes (720p / 1080p / 1440p / 4K) are not always
+        # divisible by tile_size. Reflect-pad the bottom + right edges to
+        # the nearest tile boundary; Gaussians spawned in padded tiles
+        # will be slightly outside the original HR rect, which is fine —
+        # the rasterizer culls them at composite time via the bicubic
+        # anchor's HR bounds.
+        pad_h = (-h) % self.tile_size
+        pad_w = (-w) % self.tile_size
+        if pad_h or pad_w:
+            refined_hr = F.pad(refined_hr, (0, pad_w, 0, pad_h), mode="reflect")
+        padded_h, padded_w = h + pad_h, w + pad_w
+        n_tiles_h = padded_h // self.tile_size
+        n_tiles_w = padded_w // self.tile_size
 
         x = self.pool(refined_hr)         # (1, F, n_h, n_w)
         x = F.gelu(self.mix(x))            # (1, hidden, n_h, n_w)
