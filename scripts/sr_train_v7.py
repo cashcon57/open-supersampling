@@ -92,6 +92,35 @@ def build_9ch_input(lr: torch.Tensor, depth: torch.Tensor, motion: torch.Tensor,
     return torch.cat([lr, depth, motion, normals], dim=1)
 
 
+def curriculum_lambdas(
+    step: int,
+    stage1_end: int,
+    stage2_end: int,
+    fg_ramp_steps: int,
+    target_fg: float,
+    target_fg_lpips: float,
+    target_temp: float,
+) -> tuple[float, float, float]:
+    """Step-conditional FG / FG-LPIPS / temp-consistency weights for the
+    v7-pico-005 α-curriculum.
+
+      stage 1 (0 .. stage1_end):                FG = 0, FG-LPIPS = 0, temp = 0
+      stage 2 (stage1_end+1 .. stage2_end):     FG linear ramp 0 -> target_fg
+                                                over fg_ramp_steps starting at
+                                                stage1_end+1; FG-LPIPS = 0;
+                                                temp = 0
+      stage 3 (> stage2_end):                   FG = target_fg, FG-LPIPS =
+                                                target_fg_lpips, temp =
+                                                target_temp
+    """
+    if step <= stage1_end:
+        return 0.0, 0.0, 0.0
+    if step <= stage2_end:
+        ramp = min(1.0, (step - stage1_end) / max(1, fg_ramp_steps))
+        return target_fg * ramp, 0.0, 0.0
+    return target_fg, target_fg_lpips, target_temp
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tartanair-root", required=True, type=Path)
@@ -121,6 +150,15 @@ def main() -> int:
     parser.add_argument("--lambda-temp-consistency", type=float, default=0.1)
     parser.add_argument("--max-triplets", type=int, default=None,
                         help="Cap dataset size (useful for smoke testing).")
+    parser.add_argument("--curriculum", action="store_true",
+                        help="Enable v7-pico-005 alpha-curriculum: pure SR "
+                             "until --curriculum-stage1-end, then ramp FG to "
+                             "lambda-fg over --curriculum-fg-ramp-steps, then "
+                             "enable FG-LPIPS + temp-consistency after "
+                             "--curriculum-stage2-end.")
+    parser.add_argument("--curriculum-stage1-end", type=int, default=20000)
+    parser.add_argument("--curriculum-stage2-end", type=int, default=60000)
+    parser.add_argument("--curriculum-fg-ramp-steps", type=int, default=5000)
     args = parser.parse_args()
 
     device = _device(args.device)
@@ -172,6 +210,21 @@ def main() -> int:
             batch_parts: dict[str, float] = {}
             n_samples = batch["n_lr"].shape[0]
 
+            if args.curriculum:
+                fg_w, fg_lpips_w, temp_w = curriculum_lambdas(
+                    step=step,
+                    stage1_end=args.curriculum_stage1_end,
+                    stage2_end=args.curriculum_stage2_end,
+                    fg_ramp_steps=args.curriculum_fg_ramp_steps,
+                    target_fg=args.lambda_fg,
+                    target_fg_lpips=args.lambda_fg_lpips,
+                    target_temp=args.lambda_temp_consistency,
+                )
+            else:
+                fg_w = args.lambda_fg
+                fg_lpips_w = args.lambda_fg_lpips
+                temp_w = args.lambda_temp_consistency
+
             for b in range(n_samples):
                 # Per-sample reset of canvas (each trajectory pair is
                 # an independent canvas trajectory for now).
@@ -212,9 +265,9 @@ def main() -> int:
                     gt_inter_list=[n_half_gt_b],
                     lambda_charbonnier=args.lambda_charbonnier,
                     lambda_lpips=args.lambda_lpips,
-                    lambda_fg=args.lambda_fg,
-                    lambda_fg_lpips=args.lambda_fg_lpips,
-                    lambda_temp_consistency=0.0,
+                    lambda_fg=fg_w,
+                    lambda_fg_lpips=fg_lpips_w,
+                    lambda_temp_consistency=temp_w,
                 )
                 if batch_total_loss is None:
                     batch_total_loss = loss_b
