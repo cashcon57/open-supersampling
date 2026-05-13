@@ -156,51 +156,72 @@ def main() -> int:
                 break
             optim.zero_grad()
 
-            # Reset canvas at trajectory boundary (each pair treated as
-            # standalone for now -- Phase 2A doesn't keep state across
-            # batches).
-            model.reset_state(device)
+            # Phase 2B: BackboneSpawner is B=1 only (per-rank canvas
+            # state). We accumulate loss across the batch by looping
+            # over samples and dividing.
+            batch_total_loss = None
+            batch_parts: dict[str, float] = {}
+            n_samples = batch["n_lr"].shape[0]
 
-            # Move to device
-            n_lr_in = build_9ch_input(
-                batch["n_lr"].to(device),
-                batch["n_depth"].to(device),
-                batch["n_motion"].to(device),
-                batch["n_normals"].to(device),
-            )
-            np1_lr_in = build_9ch_input(
-                batch["np1_lr"].to(device),
-                batch["np1_depth"].to(device),
-                batch["np1_motion"].to(device),
-                batch["np1_normals"].to(device),
-            )
-            n_gt = batch["n_gt"].to(device).clamp(0, 1)
-            n_half_gt = batch["n_half_gt"].to(device).clamp(0, 1)
-            np1_gt = batch["np1_gt"].to(device).clamp(0, 1)
-            motion_n_to_np1 = batch["motion_n_to_np1"].to(device)
+            for b in range(n_samples):
+                # Per-sample reset of canvas (each trajectory pair is
+                # an independent canvas trajectory for now).
+                model.reset_state(device)
 
-            # Forward at t=0 (frame N)
-            out_main = model(n_lr_in, t_query=0.0)
-            # Forward at t=0.5 (intermediate, alpha=0.5) using SAME LR
-            # (frame N) -- in Phase 2B with a spawner the model would
-            # also have frame-N+1 canvas content, but for now we just
-            # render the (empty) canvas at the intermediate time.
-            out_inter = model(n_lr_in, t_query=0.5)
+                n_lr_in_b = build_9ch_input(
+                    batch["n_lr"][b:b+1].to(device),
+                    batch["n_depth"][b:b+1].to(device),
+                    batch["n_motion"][b:b+1].to(device),
+                    batch["n_normals"][b:b+1].to(device),
+                )
+                np1_lr_in_b = build_9ch_input(
+                    batch["np1_lr"][b:b+1].to(device),
+                    batch["np1_depth"][b:b+1].to(device),
+                    batch["np1_motion"][b:b+1].to(device),
+                    batch["np1_normals"][b:b+1].to(device),
+                )
+                n_gt_b = batch["n_gt"][b:b+1].to(device).clamp(0, 1)
+                n_half_gt_b = batch["n_half_gt"][b:b+1].to(device).clamp(0, 1)
+                np1_gt_b = batch["np1_gt"][b:b+1].to(device).clamp(0, 1)
 
-            loss, parts = oss_fx_loss(
-                out_main=out_main,
-                gt_main=n_gt,
-                out_inter_list=[out_inter],
-                gt_inter_list=[n_half_gt],
-                lambda_charbonnier=args.lambda_charbonnier,
-                lambda_lpips=args.lambda_lpips,
-                lambda_fg=args.lambda_fg,
-                lambda_fg_lpips=args.lambda_fg_lpips,
-                lambda_temp_consistency=0.0,   # disabled in Phase 2A
-            )
-            loss.backward()
+                # Forward at frame N: SPAWN Gaussians into canvas at t=0
+                out_main_n = model(n_lr_in_b, t_query=0.0, spawn_at_t=0.0)
+                # Forward at frame N+1: spawn at t=2 so the (i, i+2)
+                # spacing matches the dataset's triplet convention
+                # (alpha=0.5 lives at t=1, between the two spawned
+                # times).
+                out_main_np1 = model(np1_lr_in_b, t_query=2.0, spawn_at_t=2.0)
+                # Render at intermediate t=1 (alpha=0.5 between t=0 and t=2);
+                # no new spawn, uses canvas content from previous two
+                # forward passes.
+                out_inter = model(np1_lr_in_b, t_query=1.0)
+
+                loss_b, parts_b = oss_fx_loss(
+                    out_main=out_main_np1,
+                    gt_main=np1_gt_b,
+                    out_inter_list=[out_inter],
+                    gt_inter_list=[n_half_gt_b],
+                    lambda_charbonnier=args.lambda_charbonnier,
+                    lambda_lpips=args.lambda_lpips,
+                    lambda_fg=args.lambda_fg,
+                    lambda_fg_lpips=args.lambda_fg_lpips,
+                    lambda_temp_consistency=0.0,
+                )
+                if batch_total_loss is None:
+                    batch_total_loss = loss_b
+                else:
+                    batch_total_loss = batch_total_loss + loss_b
+                for k, v in parts_b.items():
+                    batch_parts[k] = batch_parts.get(k, 0.0) + float(v)
+
+            batch_total_loss = batch_total_loss / float(n_samples)
+            for k in batch_parts:
+                batch_parts[k] /= float(n_samples)
+            batch_total_loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
             optim.step()
+            loss = batch_total_loss
+            parts = batch_parts
 
             if step % args.log_every == 0 or step == 1:
                 elapsed = time.perf_counter() - t0
