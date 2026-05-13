@@ -76,6 +76,13 @@ typedef struct OssGaussianFrame {
     uint32_t subrect_render_height;
     uint32_t output_width;
     uint32_t output_height;
+
+    uint32_t resource_states_valid; // Bitmask: 1=color, 2=output, 4=depth, 8=motion, 16=exposure.
+    uint32_t color_state;           // D3D12_RESOURCE_STATES when known.
+    uint32_t output_state;
+    uint32_t depth_state;
+    uint32_t motion_vectors_state;
+    uint32_t exposure_texture_state;
 } OssGaussianFrame;
 
 // -----------------------------------------------------------------------------
@@ -113,6 +120,10 @@ oss_gaussian_set_render_mode(OssGaussianRenderMode mode);
 /// Read current render mode.
 OSS_GAUSSIAN_API OssGaussianRenderMode
 oss_gaussian_get_render_mode(void);
+
+/// Non-zero after the async process-attach initializer has completed.
+OSS_GAUSSIAN_API uint32_t
+oss_gaussian_is_initialized(void);
 
 /// Build version string (e.g. "0.1.0+sprint2"). Pointer is to static storage.
 OSS_GAUSSIAN_API const char*

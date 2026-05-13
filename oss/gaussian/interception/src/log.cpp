@@ -17,6 +17,7 @@
 #include <cstdio>
 #include <ctime>
 #include <mutex>
+#include <share.h>
 
 #pragma comment(lib, "Shlwapi.lib")
 #pragma comment(lib, "Shell32.lib")
@@ -39,25 +40,45 @@ const char* LevelTag(LogLevel l) {
     return "?";
 }
 
-/// Resolve %LOCALAPPDATA%\oss-gaussian and ensure the directory exists.
-/// Writes the full path into `out_path` (PATHCCH_MAX_CCH-sized buffer).
-bool ResolveLogPath(wchar_t* out_path, size_t out_cch) {
-    PWSTR local_appdata = nullptr;
-    if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &local_appdata))) {
-        return false;
-    }
+bool TryBuildLogPathFromBase(const wchar_t* base_dir, wchar_t* out_path, size_t out_cch) {
+    if (!base_dir || !base_dir[0]) return false;
 
     wchar_t dir[MAX_PATH] = {};
-    swprintf_s(dir, L"%s\\oss-gaussian", local_appdata);
-    CoTaskMemFree(local_appdata);
-
-    // Create dir, ignoring "already exists".
+    if (swprintf_s(dir, L"%s\\oss-gaussian", base_dir) < 0) return false;
     if (!CreateDirectoryW(dir, nullptr) && GetLastError() != ERROR_ALREADY_EXISTS) {
         return false;
     }
+    return swprintf_s(out_path, out_cch, L"%s\\interception.log", dir) >= 0;
+}
 
-    swprintf_s(out_path, out_cch, L"%s\\interception.log", dir);
-    return true;
+/// Resolve a per-user log path and ensure the directory exists.
+bool ResolveLogPath(wchar_t* out_path, size_t out_cch) {
+    wchar_t explicit_dir[MAX_PATH] = {};
+    if (GetEnvironmentVariableW(L"OSS_GAUSSIAN_LOG_DIR", explicit_dir, MAX_PATH) > 0 &&
+        TryBuildLogPathFromBase(explicit_dir, out_path, out_cch)) {
+        return true;
+    }
+
+    wchar_t local_appdata[MAX_PATH] = {};
+    if (GetEnvironmentVariableW(L"LOCALAPPDATA", local_appdata, MAX_PATH) > 0 &&
+        TryBuildLogPathFromBase(local_appdata, out_path, out_cch)) {
+        return true;
+    }
+
+    PWSTR known_local_appdata = nullptr;
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &known_local_appdata))) {
+        bool ok = TryBuildLogPathFromBase(known_local_appdata, out_path, out_cch);
+        CoTaskMemFree(known_local_appdata);
+        if (ok) return true;
+    }
+
+    wchar_t temp_dir[MAX_PATH] = {};
+    if (GetTempPathW(MAX_PATH, temp_dir) > 0 &&
+        TryBuildLogPathFromBase(temp_dir, out_path, out_cch)) {
+        return true;
+    }
+
+    return false;
 }
 
 } // namespace
@@ -72,7 +93,8 @@ bool LogInit() {
         return false;
     }
 
-    if (_wfopen_s(&g_log_fp, path, L"a") != 0 || !g_log_fp) {
+    g_log_fp = _wfsopen(path, L"a", _SH_DENYNO);
+    if (!g_log_fp) {
         OutputDebugStringA("[oss-gaussian] LogInit: fopen failed\n");
         g_log_fp = nullptr;
         return false;

@@ -1,0 +1,28 @@
+; =============================================================================
+;  ffx_backend_dx12_proxy.def
+;
+;  AMD FidelityFX DX12 backend export surface.
+; =============================================================================
+LIBRARY ffx_backend_dx12_x64
+EXPORTS
+  ?ffxFrameInterpolationUiComposition@@YAHPEBUFfxPresentCallbackDescription@@@Z = OssgBackendFrameInterpolationUiComposition
+  GetFfxResourceDescriptionDX12                 = OssgBackendGetFfxResourceDescriptionDX12
+  ffxAssertReport                               = OssgBackendAssertReport
+  ffxAssertSetPrintingCallback                  = OssgBackendAssertSetPrintingCallback
+  ffxCreateFrameinterpolationSwapchainDX12      = OssgBackendCreateFrameinterpolationSwapchainDX12
+  ffxCreateFrameinterpolationSwapchainForHwndDX12 = OssgBackendCreateFrameinterpolationSwapchainForHwndDX12
+  ffxGetCommandListDX12                         = OssgBackendGetCommandListDX12
+  ffxGetCommandQueueDX12                        = OssgBackendGetCommandQueueDX12
+  ffxGetDX12SwapchainPtr                        = OssgBackendGetDX12SwapchainPtr
+  ffxGetDeviceDX12                              = OssgBackendGetDeviceDX12
+  ffxGetFrameinterpolationCommandlistDX12       = OssgBackendGetFrameinterpolationCommandlistDX12
+  ffxGetFrameinterpolationTextureDX12           = OssgBackendGetFrameinterpolationTextureDX12
+  ffxGetInterfaceDX12                           = OssgBackendGetInterfaceDX12
+  ffxGetResourceDX12                            = OssgBackendGetResourceDX12
+  ffxGetScratchMemorySizeDX12                   = OssgBackendGetScratchMemorySizeDX12
+  ffxGetSurfaceFormatDX12                       = OssgBackendGetSurfaceFormatDX12
+  ffxGetSwapchainDX12                           = OssgBackendGetSwapchainDX12
+  ffxRegisterFrameinterpolationUiResourceDX12   = OssgBackendRegisterFrameinterpolationUiResourceDX12
+  ffxReplaceSwapchainForFrameinterpolationDX12  = OssgBackendReplaceSwapchainForFrameinterpolationDX12
+  ffxSetFrameGenerationConfigToSwapchainDX12    = OssgBackendSetFrameGenerationConfigToSwapchainDX12
+  ffxWaitForPresents                            = OssgBackendWaitForPresents

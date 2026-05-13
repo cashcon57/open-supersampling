@@ -1,0 +1,23 @@
+; =============================================================================
+;  ffx_fsr3upscaler_proxy.def
+;
+;  AMD FSR3 upscaler export surface for games that import
+;  ffx_fsr3upscaler_x64.dll directly.
+; =============================================================================
+LIBRARY ffx_fsr3upscaler_x64
+EXPORTS
+  ffxAssertReport                              = OssgFfxAssertReport
+  ffxAssertSetPrintingCallback                 = OssgFfxAssertSetPrintingCallback
+  ffxFsr3UpscalerContextCreate                 = OssgFfxFsr3UpscalerContextCreate
+  ffxFsr3UpscalerContextDestroy                = OssgFfxFsr3UpscalerContextDestroy
+  ffxFsr3UpscalerContextDispatch               = OssgFfxFsr3UpscalerContextDispatch
+  ffxFsr3UpscalerContextGenerateReactiveMask   = OssgFfxFsr3UpscalerContextGenerateReactiveMask
+  ffxFsr3UpscalerGetJitterOffset               = OssgFfxFsr3UpscalerGetJitterOffset
+  ffxFsr3UpscalerGetJitterPhaseCount           = OssgFfxFsr3UpscalerGetJitterPhaseCount
+  ffxFsr3UpscalerGetRenderResolutionFromQualityMode = OssgFfxFsr3UpscalerGetRenderResolutionFromQualityMode
+  ffxFsr3UpscalerGetSharedResourceDescriptions = OssgFfxFsr3UpscalerGetSharedResourceDescriptions
+  ffxFsr3UpscalerGetUpscaleRatioFromQualityMode = OssgFfxFsr3UpscalerGetUpscaleRatioFromQualityMode
+  ffxFsr3UpscalerResourceIsNull                = OssgFfxFsr3UpscalerResourceIsNull
+  ffxSafeReleaseCopyResource                   = OssgFfxSafeReleaseCopyResource
+  ffxSafeReleasePipeline                       = OssgFfxSafeReleasePipeline
+  ffxSafeReleaseResource                       = OssgFfxSafeReleaseResource

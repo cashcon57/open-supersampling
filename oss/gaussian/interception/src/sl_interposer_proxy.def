@@ -1,0 +1,42 @@
+; =============================================================================
+;  sl_interposer_proxy.def
+;
+;  Cyberpunk 2077 imports this Streamline subset by name. Uninstrumented
+;  exports are forwarded to the original NVIDIA Streamline DLL, renamed by the
+;  installer/smoke harness to oss_sl_real.dll.
+; =============================================================================
+LIBRARY sl.interposer
+EXPORTS
+  CreateDXGIFactory                 = OssgSlCreateDXGIFactory
+  CreateDXGIFactory1                = OssgSlCreateDXGIFactory1
+  CreateDXGIFactory2                = OssgSlCreateDXGIFactory2
+  D3D11CreateDevice                 = OssgSlD3D11CreateDevice
+  D3D11CreateDeviceAndSwapChain     = OssgSlD3D11CreateDeviceAndSwapChain
+  D3D12CreateDevice                 = OssgSlD3D12CreateDevice
+  D3D12CreateRootSignatureDeserializer = OssgSlD3D12CreateRootSignatureDeserializer
+  D3D12CreateVersionedRootSignatureDeserializer = OssgSlD3D12CreateVersionedRootSignatureDeserializer
+  D3D12EnableExperimentalFeatures   = OssgSlD3D12EnableExperimentalFeatures
+  D3D12GetDebugInterface            = OssgSlD3D12GetDebugInterface
+  D3D12GetInterface                 = OssgSlD3D12GetInterface
+  D3D12SerializeRootSignature       = OssgSlD3D12SerializeRootSignature
+  D3D12SerializeVersionedRootSignature = OssgSlD3D12SerializeVersionedRootSignature
+  DXGIGetDebugInterface1            = OssgSlDXGIGetDebugInterface1
+  slAllocateResources               = OssgSlAllocateResources
+  slEvaluateFeature                 = OssgSlEvaluateFeature
+  slFreeResources                   = OssgSlFreeResources
+  slGetFeatureFunction              = OssgSlGetFeatureFunction
+  slGetFeatureRequirements          = OssgSlGetFeatureRequirements
+  slGetFeatureVersion               = OssgSlGetFeatureVersion
+  slGetNativeInterface              = OssgSlGetNativeInterface
+  slGetNewFrameToken                = OssgSlGetNewFrameToken
+  slInit                            = OssgSlInit
+  slIsFeatureLoaded                 = OssgSlIsFeatureLoaded
+  slIsFeatureSupported              = OssgSlIsFeatureSupported
+  slSetConstants                    = OssgSlSetConstants
+  slSetD3DDevice                    = OssgSlSetD3DDevice
+  slSetFeatureLoaded                = OssgSlSetFeatureLoaded
+  slSetTag                          = OssgSlSetTag
+  slSetTagForFrame                  = OssgSlSetTagForFrame
+  slSetVulkanInfo                   = OssgSlSetVulkanInfo
+  slShutdown                        = OssgSlShutdown
+  slUpgradeInterface                = OssgSlUpgradeInterface
