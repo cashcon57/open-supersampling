@@ -121,6 +121,40 @@ def curriculum_lambdas(
     return target_fg, target_fg_lpips, target_temp
 
 
+def canvas_health_metrics(model) -> dict[str, float]:
+    """Snapshot of canvas-state health for dashboard / debugging.
+
+    Reports: live Gaussian count, mean opacity over actives, and the
+    mean of the Cholesky diagonal magnitudes (proxy for sigma-blowup;
+    a large value here means the spawner is producing huge gaussians
+    that may dominate the renderer).
+
+    Cheap; safe to call every log step.
+    """
+    cs = model.canvas
+    n_active = int(cs.count)
+    if n_active == 0:
+        return {
+            "canvas_count": 0,
+            "canvas_mean_opacity": 0.0,
+            "canvas_mean_L_diag": 0.0,
+        }
+    live_mask = cs.mask[: cs.n_live]
+    idx = live_mask.nonzero(as_tuple=True)[0]
+    opacity = cs.opacity[: cs.n_live][idx]
+    # L_diag entries live at positions 0, 2, 5 of cov_raw (l00, l11, l22)
+    # in pre-exp form; take exp to get the actual diagonals.
+    cov_raw = cs.cov_raw[: cs.n_live][idx]
+    L_diag = torch.stack(
+        [cov_raw[:, 0].exp(), cov_raw[:, 2].exp(), cov_raw[:, 5].exp()], dim=-1
+    )
+    return {
+        "canvas_count": n_active,
+        "canvas_mean_opacity": float(opacity.mean().item()),
+        "canvas_mean_L_diag": float(L_diag.mean().item()),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tartanair-root", required=True, type=Path)
@@ -289,10 +323,15 @@ def main() -> int:
                 elapsed = time.perf_counter() - t0
                 parts["step"] = step
                 parts["elapsed_s"] = elapsed
+                parts["lambda_fg"] = fg_w
+                parts["lambda_fg_lpips"] = fg_lpips_w
+                parts["lambda_temp"] = temp_w
+                parts.update(canvas_health_metrics(model))
                 print(
                     f"[step {step:5d}] loss={parts['total']:.4f} "
                     f"sr_char={parts.get('sr_charbonnier', 0.0):.4f} "
                     f"fg_char={parts.get('fg_charbonnier', 0.0):.4f} "
+                    f"canvas={parts['canvas_count']} "
                     f"elapsed={elapsed:.0f}s"
                 )
                 with open(history_path, "a") as f:
