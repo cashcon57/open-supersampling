@@ -50,12 +50,23 @@ This is **enough to retrain v6.x** (which is RGB+depth+motion = 6 channels, no n
 |---|---|---|
 | **Albedo / base color (3-ch)** | Disentangles material from lighting; better disocclusion fill | Same G-buffer hook as normals |
 | **Roughness / metallic / AO (3-ch)** | Reflectance-aware loss; helps with specular highlights | Same G-buffer hook |
-| **Object ID buffer (1-ch uint)** | Per-instance segmentation → smarter foreground losses + reflection masks | Cyberpunk does have a stencil/ID buffer in REDengine; needs targeted reverse-engineering |
+| **Object ID / stencil buffer (1-ch uint)** | Per-instance segmentation → smarter foreground losses + reflection masks. STSS treats stencil as a primary input channel for disocclusion handling; we should too. | REDengine writes stencil to a dedicated G-buffer slot during deferred shading. Same hook as normals, with a target format check for the integer stencil resource. |
+| **NoV (dot(normal, view), 1-ch float)** | STSS uses NoV as an input channel — it's a strong proxy for "is this surface facing the camera or grazing?" which correlates with shading frequency + reflection ghosting. Cheap to derive from normals + camera matrix at training time; cheap to compute at inference from the same normals buffer we already have. **OSS should add NoV as a derived 10th input channel.** | Derivable post-capture from existing channels (normals + camera matrix); no new capture-side hook required if camera matrix is captured. Required even for current 9-channel data once the trainer extends to 10. |
 | **TAA jitter sequence** | Sub-pixel reconstruction lower-bound; lets us train with engine's *actual* sampling pattern | Already in `OssGaussianFrame.jitter_offset_*` — just need to log the running sequence not just the per-frame value |
-| **Camera pose matrix (4×4)** | 3D-aware losses, parent-child Gaussian spawner conditioning | NGX doesn't expose this directly; grab from the constant buffer the game binds to its main vertex shader |
+| **Camera pose matrix (4×4)** | 3D-aware losses, parent-child Gaussian spawner conditioning, AND **prerequisite for NoV derivation**. | NGX doesn't expose this directly; grab from the constant buffer the game binds to its main vertex shader |
 | **Per-frame timestamps (HW + present)** | OSS-FX α coordinate inference, frame-pacing diagnostics | `D3D12 GetCompletedFrameCount` + `IDXGISwapChain::GetLastPresentCount` |
 | **Reflection mask (1-ch bool)** | Reflections and specular violate the "motion vector tracks pixel" assumption; masking them out of the temporal loss helps | If RT reflections enabled, mark RT-reflection pixels via an extra stencil tag. Otherwise: derive heuristically from roughness + view angle at training time. |
 | **Sky/skybox mask (1-ch bool)** | Sky doesn't move with camera the same way ground does | Depth == max(far_plane) within tolerance |
+
+### Note on input channel count (9 vs 11)
+
+v7's current trainer is **9 channels**: RGB(3) + depth(1) + motion(2) + normals(3). STSS uses **+ NoV(1) + stencil(1) = 11 channels**.
+
+For the **current pico-005 training run on TartanAir**: stay at 9 channels. TartanAir doesn't expose stencil and NoV can be derived but the model is already wired for 9.
+
+For the **next training cycle on Cyberpunk captures** (i.e. when this spec produces data): expand to **11 channels**. Captured stencil should land as-is; NoV should be derived in the dataset adapter (`dot(normals_world, view_dir_world)` where `view_dir_world` comes from the camera matrix). v7 backbone needs a one-line widen from `in_channels=9` to `in_channels=11`; spawner + everything else unchanged.
+
+The trainer's `--in-channels` CLI flag should default to 9 and accept 11 once the captured data adapter ships.
 
 ## Capture conditions (must-disable / must-enable)
 

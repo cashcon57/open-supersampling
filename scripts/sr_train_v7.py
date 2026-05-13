@@ -150,6 +150,67 @@ def extract_sample_with_crop(
     return out
 
 
+def random_reshading_mask(
+    h_lr: int,
+    w_lr: int,
+    scale: int,
+    n_patches: int = 4,
+    patch_size_min: int = 8,
+    patch_size_max: int = 32,
+    loss_weight: float = 2.0,
+    generator: torch.Generator | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Random Reshading Masking — synthetic disocclusion-region simulator.
+
+    STSS uses RRM to simulate the rendering pipeline's "reshading regions"
+    (areas where the temporal history is invalid due to disocclusion / camera
+    cuts / fast motion). We generate `n_patches` random rectangles in the LR
+    grid; downstream apply_rrm_to_sample zeros motion vectors there (so the
+    canvas's history-propagation path is unreliable in those patches), and
+    the matching HR loss weight is set to `loss_weight` (typically 2.0).
+
+    The model is forced to be robust to "you have no history here, reconstruct
+    from current-frame info alone" — which is what real disocclusion looks
+    like at inference time.
+
+    Returns:
+        lr_mask:   (1, 1, h_lr, w_lr) bool — True inside patches
+        hr_weight: (1, 1, h_lr*scale, w_lr*scale) float —
+                   `loss_weight` inside patches, 1.0 elsewhere
+    """
+    lr_mask = torch.zeros((1, 1, h_lr, w_lr), dtype=torch.bool)
+    h_hr, w_hr = h_lr * scale, w_lr * scale
+    hr_weight = torch.ones((1, 1, h_hr, w_hr))
+
+    for _ in range(n_patches):
+        ps = int(torch.randint(
+            patch_size_min, patch_size_max + 1, (1,), generator=generator
+        ).item())
+        ps = min(ps, h_lr, w_lr)
+        top = int(torch.randint(0, max(1, h_lr - ps + 1), (1,), generator=generator).item())
+        left = int(torch.randint(0, max(1, w_lr - ps + 1), (1,), generator=generator).item())
+        lr_mask[..., top:top + ps, left:left + ps] = True
+        hr_weight[
+            ...,
+            top * scale: (top + ps) * scale,
+            left * scale: (left + ps) * scale,
+        ] = loss_weight
+    return lr_mask, hr_weight
+
+
+def apply_rrm_to_sample(sample: dict, lr_mask: torch.Tensor) -> dict:
+    """Zero motion vectors in the RRM-masked LR regions. The model still
+    sees RGB / depth / normals in those patches (we're not blackboxing the
+    pixel input), only the motion-vector buffer that would let it cheat by
+    propagating canvas history."""
+    out = dict(sample)
+    keep_lr = (~lr_mask).to(sample["n_motion"].dtype)
+    out["n_motion"] = sample["n_motion"] * keep_lr
+    out["np1_motion"] = sample["np1_motion"] * keep_lr
+    out["motion_n_to_np1"] = sample["motion_n_to_np1"] * keep_lr
+    return out
+
+
 def curriculum_lambdas(
     step: int,
     stage1_end: int,
@@ -254,6 +315,18 @@ def main() -> int:
                              "thin geometry matters.")
     parser.add_argument("--max-triplets", type=int, default=None,
                         help="Cap dataset size (useful for smoke testing).")
+    parser.add_argument("--enable-rrm", action="store_true",
+                        help="Enable Random Reshading Masking (STSS-style "
+                             "disocclusion augmentation). Generates random "
+                             "patches in the LR motion-vector buffer + applies "
+                             "2x loss weight to the matching HR region. "
+                             "Trains the model to be robust to history-"
+                             "unavailable regions (real disocclusions at "
+                             "inference time).")
+    parser.add_argument("--rrm-n-patches", type=int, default=4)
+    parser.add_argument("--rrm-patch-size-min", type=int, default=8)
+    parser.add_argument("--rrm-patch-size-max", type=int, default=32)
+    parser.add_argument("--rrm-loss-weight", type=float, default=2.0)
     parser.add_argument("--enable-parent-child", action="store_true",
                         help="Enable parent-child loss-adaptive density "
                              "(Diolatzis et al. 2024). After backward(), "
@@ -368,6 +441,24 @@ def main() -> int:
                     scale=int(cfg.scale),
                 )
 
+                # Optional RRM disocclusion-robustness augmentation: zero
+                # motion vectors in random LR patches + apply 2x loss
+                # weight on the matching HR region.
+                rrm_weight_hr = None
+                if args.enable_rrm:
+                    h_lr = sample["n_lr"].shape[-2]
+                    w_lr = sample["n_lr"].shape[-1]
+                    lr_mask, hr_weight = random_reshading_mask(
+                        h_lr=h_lr, w_lr=w_lr, scale=int(cfg.scale),
+                        n_patches=args.rrm_n_patches,
+                        patch_size_min=args.rrm_patch_size_min,
+                        patch_size_max=args.rrm_patch_size_max,
+                        loss_weight=args.rrm_loss_weight,
+                    )
+                    lr_mask = lr_mask.to(device)
+                    rrm_weight_hr = hr_weight.to(device)
+                    sample = apply_rrm_to_sample(sample, lr_mask)
+
                 n_lr_in_b = build_9ch_input(
                     sample["n_lr"].to(device),
                     sample["n_depth"].to(device),
@@ -414,6 +505,8 @@ def main() -> int:
                     lambda_fg_lpips=fg_lpips_w,
                     lambda_temp_consistency=temp_w,
                     lambda_sobel=args.lambda_sobel,
+                    rrm_weight_main=rrm_weight_hr,
+                    rrm_weight_inter=rrm_weight_hr,
                 )
                 if batch_total_loss is None:
                     batch_total_loss = loss_b

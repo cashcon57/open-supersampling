@@ -28,8 +28,22 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-def charbonnier(pred: torch.Tensor, target: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
-    return torch.sqrt((pred - target) ** 2 + eps * eps).mean()
+def charbonnier(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    eps: float = 1e-6,
+    weight: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """Charbonnier loss, optionally weighted per-pixel.
+
+    weight: (B, 1, H, W) or broadcastable — multiplied into the per-pixel
+        residual before averaging. Used by RRM (Random Reshading Masking)
+        to put 2x emphasis on synthetic disocclusion regions.
+    """
+    residual = torch.sqrt((pred - target) ** 2 + eps * eps)
+    if weight is not None:
+        residual = residual * weight
+    return residual.mean()
 
 
 def _sobel_kernels(device: torch.device, dtype: torch.dtype) -> tuple[torch.Tensor, torch.Tensor]:
@@ -156,6 +170,8 @@ def oss_fx_loss(
     lambda_fg_lpips: float = 0.5,
     lambda_temp_consistency: float = 0.1,
     lambda_sobel: float = 0.0,
+    rrm_weight_main: Optional[torch.Tensor] = None,
+    rrm_weight_inter: Optional[torch.Tensor] = None,
     scale_for_warp: int = 2,
 ) -> tuple[torch.Tensor, dict[str, float]]:
     """Compute the v7 OSS-FX loss + a component breakdown for logging.
@@ -166,7 +182,7 @@ def oss_fx_loss(
     loss_total = out_main.new_zeros(())
 
     # SR loss at t = N
-    l_char_sr = charbonnier(out_main, gt_main)
+    l_char_sr = charbonnier(out_main, gt_main, weight=rrm_weight_main)
     parts["sr_charbonnier"] = float(l_char_sr.item())
     loss_total = loss_total + lambda_charbonnier * l_char_sr
 
@@ -193,7 +209,9 @@ def oss_fx_loss(
         fg_char_sum = out_main.new_zeros(())
         fg_lpips_sum = out_main.new_zeros(())
         for out_inter, gt_inter in zip(out_inter_list, gt_inter_list):
-            fg_char_sum = fg_char_sum + charbonnier(out_inter, gt_inter)
+            fg_char_sum = fg_char_sum + charbonnier(
+                out_inter, gt_inter, weight=rrm_weight_inter,
+            )
             if lambda_fg_lpips > 0.0:
                 fg_lpips_sum = fg_lpips_sum + lpips_vgg(out_inter, gt_inter)
         n = float(len(out_inter_list))
