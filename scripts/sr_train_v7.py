@@ -92,6 +92,64 @@ def build_9ch_input(lr: torch.Tensor, depth: torch.Tensor, motion: torch.Tensor,
     return torch.cat([lr, depth, motion, normals], dim=1)
 
 
+# Tensors in the collated batch are tagged by their resolution scale relative
+# to the LR. LR tensors (n_lr, depth, motion, normals, motion_n_to_np1) stay
+# at LR shape; HR tensors (gt, n_half_gt) are at HR shape (== LR * scale).
+_LR_KEYS = ("n_lr", "n_depth", "n_motion", "n_normals",
+            "np1_lr", "np1_depth", "np1_motion", "np1_normals",
+            "motion_n_to_np1")
+_HR_KEYS = ("n_gt", "n_half_gt", "np1_gt")
+
+
+def extract_sample_with_crop(
+    batch: dict,
+    b: int,
+    hr_crop: int | None,
+    scale: int,
+    generator: torch.Generator | None = None,
+) -> dict:
+    """Pull a single-sample (B=1) view out of the batch, with an optional
+    random HR-aligned crop.
+
+    Used at training-time to make full-frame captured HR (Cyberpunk, etc.)
+    fit on consumer GPUs by training on patches. The crop alignment is
+    enforced: HR top-left = LR top-left * scale, so LR/HR stay registered.
+
+    If hr_crop is None or >= the source HR, the full sample is returned.
+    """
+    hr_h, hr_w = batch["n_gt"].shape[-2:]
+    if hr_crop is None or hr_crop >= min(hr_h, hr_w):
+        return {k: v[b:b+1] for k, v in batch.items()}
+
+    crop_hr = int(hr_crop)
+    crop_lr = crop_hr // int(scale)
+    if crop_hr % int(scale) != 0:
+        raise ValueError(
+            f"hr_crop ({hr_crop}) must be divisible by scale ({scale}) so "
+            f"the LR/HR crop windows stay aligned"
+        )
+    # Random alignment per sample. Pin top-left of HR to a multiple of
+    # `scale` so LR top-left lines up.
+    max_top_hr = hr_h - crop_hr
+    max_left_hr = hr_w - crop_hr
+    top_hr = int(torch.randint(0, max_top_hr // int(scale) + 1, (1,),
+                                generator=generator).item()) * int(scale)
+    left_hr = int(torch.randint(0, max_left_hr // int(scale) + 1, (1,),
+                                 generator=generator).item()) * int(scale)
+    top_lr = top_hr // int(scale)
+    left_lr = left_hr // int(scale)
+
+    out: dict = {}
+    for k, v in batch.items():
+        if k in _LR_KEYS:
+            out[k] = v[b:b+1, :, top_lr:top_lr+crop_lr, left_lr:left_lr+crop_lr]
+        elif k in _HR_KEYS:
+            out[k] = v[b:b+1, :, top_hr:top_hr+crop_hr, left_hr:left_hr+crop_hr]
+        else:
+            out[k] = v[b:b+1]
+    return out
+
+
 def curriculum_lambdas(
     step: int,
     stage1_end: int,
@@ -196,6 +254,29 @@ def main() -> int:
                              "thin geometry matters.")
     parser.add_argument("--max-triplets", type=int, default=None,
                         help="Cap dataset size (useful for smoke testing).")
+    parser.add_argument("--enable-parent-child", action="store_true",
+                        help="Enable parent-child loss-adaptive density "
+                             "(Diolatzis et al. 2024). After backward(), "
+                             "per-parent gradient norms drift child.opacity; "
+                             "children crossing 0.1 get materialized as new "
+                             "canvas Gaussians. Use for high-detail content "
+                             "(Cyberpunk captures, thin geometry). Adds some "
+                             "memory + a small wall-time cost per step.")
+    parser.add_argument("--parent-child-drift-rate", type=float, default=0.05,
+                        help="Drift rate for child opacity per step "
+                             "(only used when --enable-parent-child).")
+    parser.add_argument("--parent-child-decay", type=float, default=0.98,
+                        help="Per-step decay applied to child opacity before "
+                             "drift (keeps children that stop accumulating "
+                             "gradient from staying stuck above threshold).")
+    parser.add_argument("--max-hr-crop", type=int, default=None,
+                        help="Random HR-aligned crop per sample (square). Lets "
+                             "the trainer fit higher-source-HR data (1080p, 4K "
+                             "Cyberpunk captures) into a fixed VRAM budget. "
+                             "Must be divisible by the scale factor. None = "
+                             "use full-frame HR. Recommended: 256 or 384 for "
+                             "consumer-GPU training; full-frame for TartanAir "
+                             "480x640 since it already fits.")
     parser.add_argument("--curriculum", action="store_true",
                         help="Enable v7-pico-005 alpha-curriculum: pure SR "
                              "until --curriculum-stage1-end, then ramp FG to "
@@ -220,6 +301,9 @@ def main() -> int:
         canvas_capacity=args.canvas_capacity,
         backbone_blocks=args.backbone_blocks,
         backbone_kind=args.backbone_kind,
+        enable_parent_child=args.enable_parent_child,
+        parent_child_drift_rate=args.parent_child_drift_rate,
+        parent_child_decay=args.parent_child_decay,
     )
     model = V7Model(cfg).to(device)
     model.allocate_canvas(device)
@@ -276,29 +360,44 @@ def main() -> int:
                 # an independent canvas trajectory for now).
                 model.reset_state(device)
 
+                # Optionally crop the sample to a smaller HR-aligned
+                # window. This keeps full-resolution captured data
+                # (1080p / 4K Cyberpunk) trainable on consumer GPUs.
+                sample = extract_sample_with_crop(
+                    batch, b=b, hr_crop=args.max_hr_crop,
+                    scale=int(cfg.scale),
+                )
+
                 n_lr_in_b = build_9ch_input(
-                    batch["n_lr"][b:b+1].to(device),
-                    batch["n_depth"][b:b+1].to(device),
-                    batch["n_motion"][b:b+1].to(device),
-                    batch["n_normals"][b:b+1].to(device),
+                    sample["n_lr"].to(device),
+                    sample["n_depth"].to(device),
+                    sample["n_motion"].to(device),
+                    sample["n_normals"].to(device),
                 )
                 np1_lr_in_b = build_9ch_input(
-                    batch["np1_lr"][b:b+1].to(device),
-                    batch["np1_depth"][b:b+1].to(device),
-                    batch["np1_motion"][b:b+1].to(device),
-                    batch["np1_normals"][b:b+1].to(device),
+                    sample["np1_lr"].to(device),
+                    sample["np1_depth"].to(device),
+                    sample["np1_motion"].to(device),
+                    sample["np1_normals"].to(device),
                 )
-                n_gt_b = batch["n_gt"][b:b+1].to(device).clamp(0, 1)
-                n_half_gt_b = batch["n_half_gt"][b:b+1].to(device).clamp(0, 1)
-                np1_gt_b = batch["np1_gt"][b:b+1].to(device).clamp(0, 1)
+                n_gt_b = sample["n_gt"].to(device).clamp(0, 1)
+                n_half_gt_b = sample["n_half_gt"].to(device).clamp(0, 1)
+                np1_gt_b = sample["np1_gt"].to(device).clamp(0, 1)
 
                 # Forward at frame N: SPAWN Gaussians into canvas at t=0
                 out_main_n = model(n_lr_in_b, t_query=0.0, spawn_at_t=0.0)
+                # If parent-child is on, attach a child to each newly-
+                # spawned parent so it can accumulate gradient signal
+                # over the rest of this sample's forwards.
+                if args.enable_parent_child:
+                    model.initialize_new_children(init_dpos_std=0.1)
                 # Forward at frame N+1: spawn at t=2 so the (i, i+2)
                 # spacing matches the dataset's triplet convention
                 # (alpha=0.5 lives at t=1, between the two spawned
                 # times).
                 out_main_np1 = model(np1_lr_in_b, t_query=2.0, spawn_at_t=2.0)
+                if args.enable_parent_child:
+                    model.initialize_new_children(init_dpos_std=0.1)
                 # Render at intermediate t=1 (alpha=0.5 between t=0 and t=2);
                 # no new spawn, uses canvas content from previous two
                 # forward passes.
@@ -328,6 +427,19 @@ def main() -> int:
                 batch_parts[k] /= float(n_samples)
             batch_total_loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+
+            # Parent-child: drift child opacity per-parent gradient,
+            # then materialize crossings. Happens BEFORE optim.step
+            # but AFTER backward (we want the gradient signal). The
+            # next sample's reset_state will clear children, so
+            # materialized Gaussians are scoped to this batch -- the
+            # benefit shows up in tile-level density patterns the
+            # spawner learns over many steps.
+            if args.enable_parent_child:
+                _ = model.drift_children_from_grad()
+                n_mat = model.materialize_pending_children()
+                batch_parts["materialized"] = float(n_mat)
+
             optim.step()
             loss = batch_total_loss
             parts = batch_parts

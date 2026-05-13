@@ -28,6 +28,9 @@ import torch.nn.functional as F
 from oss.sr.v7.nd_canvas_state import NDCanvasState
 from oss.sr.v7.nd_rasterizer import render_nd_time_slice
 from oss.sr.v7.backbone_spawner import BackboneSpawner
+from oss.sr.v7.parent_child_spawner import (
+    ChildState, initialize_children_for_new_parents, materialize_to_canvas,
+)
 
 
 @dataclass
@@ -57,6 +60,18 @@ class V7Config:
     enable_spawner: bool = True
     spawner_k_per_tile: int = 2
     spawner_tile_size: int = 16
+
+    # Parent-child loss-adaptive density. Off by default for backwards
+    # compatibility; flip on via V7Config(enable_parent_child=True) once
+    # the trainer is in trajectory-persistent mode (see
+    # docs/architecture/2026-05-13-v7-parent-child-integration-debt.md).
+    enable_parent_child: bool = False
+    # Per-step drift rate: child.opacity[i] += drift_rate * |grad_at_parent_i|
+    parent_child_drift_rate: float = 0.05
+    # Per-step decay (applied before drift) so children that stopped
+    # accumulating gradient fade back below threshold instead of
+    # being stuck.
+    parent_child_decay: float = 0.98
 
 
 class _ResBlock(nn.Module):
@@ -175,8 +190,18 @@ class V7Model(nn.Module):
         nn.init.zeros_(self.composite_head[-1].bias)
 
         # Canvas state holder; lazily allocated on first forward so we
-        # know the device.
+        # know the device. ChildState (parent-child spawner) mirrors the
+        # canvas shape and is allocated together.
         self._canvas: Optional[NDCanvasState] = None
+        self._child: Optional[ChildState] = None
+        # When parent-child is enabled, this holds the latest active-view
+        # positions tensor with .retain_grad() set, so the trainer can
+        # read per-parent gradient signal after backward.
+        self._last_positions_for_grad: Optional[torch.Tensor] = None
+        # Tracks how many parents have been initialized as children. New
+        # parents (live-but-uninitialized) get children re-initialized
+        # at the start of each forward.
+        self._n_children_initialized: int = 0
 
         # Spawner: decodes refined_hr into K Gaussians/frame for the canvas.
         self.spawner: Optional[BackboneSpawner] = None
@@ -205,14 +230,37 @@ class V7Model(nn.Module):
             device=device,
             dtype=torch.float32,
         )
+        # Parent-child state mirrors the canvas; only allocated when
+        # the mechanism is enabled, otherwise we don't pay the memory.
+        if self.cfg.enable_parent_child:
+            self._child = ChildState.empty(
+                capacity=self.cfg.canvas_capacity,
+                feature_dim=self.cfg.latent_rank,
+                device=device,
+                dtype=torch.float32,
+            )
+            self._n_children_initialized = 0
         return self._canvas
 
+    @property
+    def child(self) -> ChildState:
+        if self._child is None:
+            raise RuntimeError(
+                "V7Model.child accessed but parent-child is disabled. "
+                "Set V7Config.enable_parent_child=True and re-allocate."
+            )
+        return self._child
+
     def reset_state(self, device: torch.device | str = "cpu") -> None:
-        """Clear canvas. Trajectory boundary hook."""
+        """Clear canvas + child state. Trajectory boundary hook."""
         if self._canvas is None:
             self.allocate_canvas(device)
         else:
             self._canvas.reset()
+        if self._child is not None:
+            self._child.reset()
+            self._n_children_initialized = 0
+        self._last_positions_for_grad = None
 
     def render_canvas(self, t_query: float, output_hw: tuple[int, int]) -> torch.Tensor:
         """Render the canvas at t_query to (1, R, H, W). Empty canvas
@@ -225,12 +273,120 @@ class V7Model(nn.Module):
                 dtype=torch.float32,
             )
         pos, cov, feat, opacity = canvas.active_view()
+        # When parent-child is enabled, mark the active positions for
+        # retained gradients so the trainer can read per-parent
+        # attribution after backward(). Stashed on the model so the
+        # trainer can fetch the most-recent one without re-rendering.
+        if self.cfg.enable_parent_child and pos.requires_grad:
+            pos.retain_grad()
+            self._last_positions_for_grad = pos
         rendered = render_nd_time_slice(
             means=pos, covs=cov, features=feat, opacities=opacity,
             t_query=t_query, image_hw=output_hw,
         )
         # Add batch dim
         return rendered.unsqueeze(0)
+
+    @torch.no_grad()
+    def drift_children_from_grad(self) -> torch.Tensor:
+        """Drive child opacity/brightness up where the parent's position
+        gradient is large (= the loss cares about that parent).
+
+        Call AFTER backward() and BEFORE optim.step(). Reads
+        `self._last_positions_for_grad.grad` (set during the last
+        render_canvas), normalizes per-parent, decays + drifts each
+        child slot.
+
+        Returns the per-parent gradient norm tensor (n_live,) for
+        diagnostics; trainer can log this to history.jsonl.
+        """
+        if not self.cfg.enable_parent_child:
+            raise RuntimeError("Parent-child must be enabled to drift children.")
+        if self._last_positions_for_grad is None:
+            # Empty canvas during the last render — nothing to drift.
+            return torch.zeros((0,), device=self.canvas.device)
+        pos = self._last_positions_for_grad
+        if pos.grad is None:
+            # No gradient computed (eval mode, or detached path)
+            return torch.zeros((pos.shape[0],), device=pos.device)
+        # Per-parent gradient magnitude (sum over the 3 position dims).
+        per_parent_grad = pos.grad.detach().abs().sum(dim=-1)  # (n_live_in_view,)
+        # Normalize by the max so the drift rate is shape-invariant
+        # across different canvas sizes / loss scales.
+        max_g = per_parent_grad.max().clamp(min=1e-12)
+        normalized = per_parent_grad / max_g
+
+        # active_view returns positions in active-mask order (compacted).
+        # We need to scatter the per-parent signal back into the full
+        # canvas-indexed child arrays. canvas.mask[:n_live] tells us
+        # which slots are live.
+        canvas = self.canvas
+        child = self._child
+        assert child is not None
+        live_mask = canvas.mask[: canvas.n_live]
+        live_idx = live_mask.nonzero(as_tuple=True)[0]
+        # Decay first, then add drift on the live indices.
+        child.opacity[: canvas.n_live] *= self.cfg.parent_child_decay
+        child.brightness[: canvas.n_live] *= self.cfg.parent_child_decay
+        # Sanity: live_idx length must match per_parent_grad length
+        if live_idx.shape[0] == per_parent_grad.shape[0]:
+            child.opacity[live_idx] = (
+                child.opacity[live_idx]
+                + self.cfg.parent_child_drift_rate * normalized
+            )
+            # Brightness drifts proportionally with opacity for now -- a
+            # separate brightness signal (the parent's rendered feature
+            # magnitude) is a future refinement.
+            child.brightness[live_idx] = (
+                child.brightness[live_idx]
+                + 0.1 * self.cfg.parent_child_drift_rate * normalized
+            )
+        return per_parent_grad
+
+    @torch.no_grad()
+    def materialize_pending_children(self) -> int:
+        """Promote any children that have crossed the opacity / brightness
+        threshold into full-fledged canvas Gaussians.
+
+        Call AFTER drift_children_from_grad() and BEFORE the next
+        forward(). Returns the number materialized this round.
+        """
+        if not self.cfg.enable_parent_child:
+            return 0
+        if self._child is None or self._canvas is None:
+            return 0
+        # materialize_to_canvas does in-place writes to child.*; the
+        # @torch.no_grad() decorator on this method keeps autograd out
+        # of it. Resets the materialized slots back to dormant.
+        n_materialized = materialize_to_canvas(self._canvas, self._child)
+        # Newly added canvas Gaussians have no associated children yet;
+        # they get initialized on the next initialize_new_children() call.
+        return n_materialized
+
+    @torch.no_grad()
+    def initialize_new_children(self, init_dpos_std: float = 0.1) -> int:
+        """Initialize child slots for any canvas parents that don't have
+        a child yet (i.e. were spawned since the last init call).
+
+        Returns the number of new children initialized.
+        """
+        if not self.cfg.enable_parent_child:
+            return 0
+        if self._child is None or self._canvas is None:
+            return 0
+        new_parent_count = self._canvas.n_live - self._n_children_initialized
+        if new_parent_count <= 0:
+            return 0
+        new_indices = torch.arange(
+            self._n_children_initialized, self._canvas.n_live,
+            device=self._canvas.device,
+        )
+        initialize_children_for_new_parents(
+            self._child, parent_indices=new_indices,
+            init_dpos_std=init_dpos_std,
+        )
+        self._n_children_initialized = self._canvas.n_live
+        return int(new_parent_count)
 
     def spawn_into_canvas(self, refined_hr: torch.Tensor, t: float) -> int:
         """If a spawner is configured, decode refined_hr -> K Gaussians and

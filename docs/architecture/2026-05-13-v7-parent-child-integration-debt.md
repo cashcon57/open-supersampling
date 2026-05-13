@@ -1,14 +1,19 @@
 # v7 parent-child spawner — integration debt + design call
 
 **Date:** 2026-05-13
-**Status:** **Implemented but unwired.** The mechanism is unit-tested in `tests/sr/v7/test_nd_canvas_state.py` (20 tests) but `scripts/sr_train_v7.py` never calls `initialize_children_for_new_parents` or `materialize_to_canvas`. As far as Phase 3 (pico-005) is concerned, parent-child is dead code.
-**Why it matters:** see `docs/capture/v7-training-data-spec.md` discussion of fine-Gaussian density. The current trainer's uniform per-tile spawn rate cannot represent sub-pixel features (thin wires, distant fences, hair). Parent-child is the existing-but-unused lever that would let density grow adaptively where SR loss is high.
+**Status:** **LANDED** (commits 2026-05-13). Originally tagged as deferred; the user directed it be addressed since it's a definite future requirement, not a maybe. Mechanism is now wired through `V7Model` + `scripts/sr_train_v7.py` behind the `--enable-parent-child` flag (off by default).
 
-## What's there
+This memo retains the original design discussion as historical context. See § "What landed" at the end for the current state.
+
+## Why it matters
+
+Per `docs/capture/v7-training-data-spec.md` discussion of fine-Gaussian density. The base uniform per-tile spawner places ~1 Gaussian per 64 HR pixels, which cannot represent sub-pixel features (thin wires, distant fences, hair). Parent-child is the existing-but-unused lever that lets density grow adaptively where SR loss is high.
+
+## Original implementation (predates wiring)
 
 `oss/sr/v7/parent_child_spawner.py` implements the Diolatzis-2024 deferred-materialization pattern:
 
-```
+```python
 ChildState(dpos, dcov_raw, dfeat, opacity, brightness)  # capacity, capacity, ...
 materialize_mask(child, n_live) -> bool[n_live]
 materialize_to_canvas(canvas, child) -> int                # appends to canvas
@@ -17,50 +22,66 @@ initialize_children_for_new_parents(child, parent_indices)
 
 Materialization triggers when `child.opacity > 0.1` OR `child.brightness > 0.01`. Once triggered, a new top-level Gaussian gets appended to the canvas at (parent_pos + child.dpos) with parent_cov + child.dcov_raw and the child slot is reset to dormant.
 
-## The integration question that has to be answered first
+## Design call — answered
 
-The Diolatzis paper drives child.opacity drift via **per-parent loss residual**, accumulated over many steps. It is **not** a gradient-through-Parameters mechanism. The current `ChildState` is a plain dataclass with regular tensors, which means:
+The Diolatzis paper drives child.opacity drift via **per-parent loss residual**, accumulated over many steps. It is **not** a gradient-through-Parameters mechanism. Three candidate signals were on the table:
 
-1. If we make `child.opacity` a `nn.Parameter` and let AdamW push it via gradient, `materialize_to_canvas` and `initialize_children_for_new_parents` BOTH fail with `RuntimeError: a leaf Variable that requires grad is being used in an in-place operation` because they do `child.dpos[parent_idx] = 0.0` etc. Confirmed empirically (`/tmp/bench_parent_child.py`).
+- Per-parent loss splat via the rasterizer's alpha-blend weights (cleanest but custom backward hook)
+- Per-parent position-grad-norm via lifting `canvas.positions` to a Parameter (interacts with autograd-isolation fix)
+- **Per-parent rendered-position gradient via `retain_grad` on `active_view().positions`** ← picked
 
-2. The clean fix is to drive the drift via **manual residual accumulation under torch.no_grad():**
+The third option is the least invasive: the spawner already produces `positions` with `requires_grad=True` (it's a function of backbone features), and `active_view()` slices those positions into a tensor that the rasterizer consumes. By calling `retain_grad()` on that slice during `render_canvas`, we make autograd populate `.grad` after the user calls `loss.backward()`. The grad norm per parent = "how much would moving this parent reduce loss." High norm = parent is in a high-loss region = its child should drift up.
 
-   ```python
-   with torch.no_grad():
-       # After backward, before optim.step:
-       parent_grads = ...   # source still unresolved (see below)
-       child.opacity[:n_live] += drift_rate * parent_grads
-       child.opacity[:n_live] *= decay
-   ```
+## What landed
 
-   But this needs a per-parent gradient signal that the current model doesn't expose. Three candidate signals, none of which is implemented:
+### `oss/sr/v7/model.py`
 
-   - **Per-parent contribution to SR loss**, via splatting the SR loss back through the rasterizer's alpha-blend weights. Cleanest but requires a custom backward hook on the rasterizer.
-   - **Per-parent position-gradient norm**, computed by wrapping `canvas.positions` in a Parameter with `requires_grad=True` so gradient accumulates on each parent. Currently positions is a buffer (no requires_grad). Would require lifting requires_grad on a tensor mutated by `canvas.add()` — interacts non-trivially with the autograd-isolation fix in commit `e302cc2`.
-   - **Per-parent rendered-feature gradient**, captured by hooking the active-view slice. Indirect but doesn't touch the canvas storage.
+- `V7Config.enable_parent_child` (default `False`), `parent_child_drift_rate` (default 0.05), `parent_child_decay` (default 0.98).
+- `V7Model._child: ChildState` allocated alongside the canvas when `enable_parent_child=True`. Persists across `reset_state` semantics:
+  - `reset_state()` clears child too (trajectory boundary).
+  - Inter-spawn (within a single sample): child accumulates.
+- `V7Model.initialize_new_children(init_dpos_std)`: idempotent. Called after each spawn to attach children to any newly-live parents. Tracks `_n_children_initialized` so it doesn't re-init existing children.
+- `V7Model.drift_children_from_grad()`: read `.grad` off the retained-grad active_view positions tensor; normalize per-parent; decay then drift child opacity/brightness on live indices. Returns per-parent grad norms for diagnostics.
+- `V7Model.materialize_pending_children()`: thin wrapper around `materialize_to_canvas()` under `@torch.no_grad()`.
 
-3. The Diolatzis paper alternative — **per-pixel residual splatted back to parents via the rasterizer's footprint** — is the most architecturally honest version but is a bigger code change (~200 LOC including a new backward hook).
+### `scripts/sr_train_v7.py`
 
-## What needs to be true before this lands
+- `--enable-parent-child` flag (off by default).
+- `--parent-child-drift-rate` (default 0.05) and `--parent-child-decay` (default 0.98) CLI knobs.
+- Inner loop calls `initialize_new_children` after each spawn, then `drift_children_from_grad` + `materialize_pending_children` between `backward()` and `optim.step()`.
+- The per-batch `materialized` count gets recorded in `history.jsonl` for dashboard interpretation.
 
-- A clear answer on which of the three signals to use (proposed: per-parent rendered-feature gradient — least invasive).
-- A unit test that demonstrates `child.opacity` rising under realistic SR-loss gradient pressure within a step budget (< 50 steps for a synthesized high-frequency target).
-- A correctness check that materialization doesn't break the autograd-isolation fix (the new Gaussians on the canvas should still get reset/detached between steps).
-- Capacity-overflow handling once materialization is fanned in — under a sustained high-loss regime the canvas could fill up faster than `prune_to_count` reclaims. Needs a per-step cap on `materialize_to_canvas` calls.
+### `tests/sr/v7/test_parent_child_integration.py`
 
-## What's currently *unblocked* even without parent-child
+9 tests covering:
 
-- The base spawner produces `O(tile_size⁻²)` Gaussians per frame at uniform density. With `tile_size=16, k_per_tile=2` (the new defaults), TartanAir 480×640 HR gets 4800 actives after 2 spawns. That's enough density for v7-pico-005 to validate the OSS-FX math + show non-trivial alpha=0.5 PSNR over the bicubic-midpoint baseline.
-- Sub-pixel features will be under-resolved. The Phase 3 pico-005 metric will measure how much that costs. If the alpha=1 SR PSNR is within +/- 0.5 dB of v6.2-pico-002, parent-child integration moves up the priority list for Phase 3.b.
-- The Sobel high-frequency loss term added in this same commit gives the model *some* incentive to learn edge structure, which mitigates the sub-pixel-coverage gap until parent-child lands.
+- ChildState allocation gated on the flag (both on and off paths)
+- `reset_state` clears children
+- `initialize_new_children` is idempotent and tracks the new-parent count
+- Single drift step pushes the highest-gradient child past the materialization threshold
+- Drift signal is rank-preserving wrt per-parent gradient norm (largest grad → largest opacity)
+- Materialization fires when threshold is crossed and produces real canvas Gaussians
+- Full backward → drift → materialize → optim.step loop survives the autograd-isolation fix
+- Disabled path is zero-overhead (no allocations, no method invocations succeed)
 
-## Estimated work to land parent-child
+111/111 v7 tests pass.
 
-- Design call + design doc: ~3 days
-- Implementation (residual mechanism + trainer wiring + tests): ~1 week
-- Regression validation on TartanAir smoke + 1080p HR resolutions: ~3 days
-- **Total: ~2 weeks** if the signal choice goes smoothly; ~4 if we discover the per-parent attribution needs the custom rasterizer backward hook.
+## Known limitations of the current wiring
 
-## Decision deferred to
+These are not "the design is wrong" — they're the natural scope edges of a one-session implementation.
 
-After v7-pico-005 produces its first 20K-step checkpoint. The alpha=1 PSNR + alpha=0.5 PSNR there will tell us whether sub-pixel coverage is the actual bottleneck or whether other model issues dominate.
+1. **Materialized Gaussians don't persist across samples within a step.**  The trainer calls `model.reset_state(device)` at the start of each sample (each triplet is treated as its own trajectory). Materialized Gaussians from sample N die before sample N+1 starts. The benefit shows up in the spawner's learned weights (the spawner sees over time which tile-locations have parents whose children materialized → adjusts its own spawn-bias) rather than in within-step accumulation.
+
+2. **No cross-step canvas persistence.** Full Diolatzis-faithful behavior would have the canvas survive across many training steps within one trajectory, with materialized children stacking up over many frames. Doing that requires:
+   - Dataset emitting consecutive (i, i+1, i+2), (i+2, i+3, i+4), … triplets in batch order
+   - Trainer not calling `reset_state` between samples within a "trajectory"
+   - A trajectory length CLI flag with the dataloader respecting it
+   This is a meaningful refactor (~1 week) that should follow once pico-005 produces a first metric — if uniform-density-plus-Sobel-plus-within-step-materialization isn't enough, this is the next investment.
+
+3. **Brightness drift is opacity-proportional.** Currently `child.brightness` drifts at `0.1 × child.opacity_drift_rate × normalized_grad`. A separate brightness signal (the parent's *rendered feature magnitude*, not its position gradient) would be more faithful to the paper, but requires a second hook. Deferred.
+
+4. **No materialization quota.** Under a sustained high-loss regime, every parent might materialize a child each step → canvas fills up rapidly → `add()` raises overflow. Workaround: the canvas-pruning policy (`prune_to_count`) already exists; trainer could call it when overflow is imminent. Not wired yet. For pico-005 at TartanAir HR with cap=16384 and 4800 baseline actives this won't trip; flag for higher-res training.
+
+## Phase 3 recommendation
+
+Run pico-005 first with `--enable-parent-child` ON, drift_rate=0.05, decay=0.98. The default config (16384 cap, 4800 base actives, ~50% headroom) gives parent-child ~11000 slots for materializations before overflow. If materializations spike toward overflow in the first 5K steps, drop to drift_rate=0.02. Track `materialized` in history.jsonl to see whether the mechanism is firing meaningfully (>5 per step on average = working; 0 = dead).
