@@ -39,6 +39,10 @@ class V7Config:
     latent_rank: int = 16       # canvas feature dim R
     canvas_capacity: int = 4096
     backbone_blocks: int = 4
+    # Backbone selection: "placeholder" = small ConvNet (tests, fast),
+    # "hat_tiny" = v6.x HAT-Tiny transformer (pico-tier teacher),
+    # "hat_small" / "hat_l" = larger teachers for Standard / Heavy tiers.
+    backbone_kind: str = "placeholder"
     # Spawner controls
     enable_spawner: bool = True
     spawner_k_per_tile: int = 4
@@ -60,8 +64,8 @@ class _ResBlock(nn.Module):
 class _PlaceholderBackbone(nn.Module):
     """Tiny ConvNet that maps LR (B, in_ch, H_lr, W_lr) to HR feature
     map (B, feat_dim, H, W). Bilinear upsample + a few residual blocks.
-    Stands in for HAT-Tiny / HAT-L in v7 testing; full backbone swap
-    happens later."""
+    Stands in for HAT family in unit tests where transformer compute
+    isn't worth the overhead."""
 
     def __init__(self, in_channels: int, feat_dim: int, scale: int, blocks: int):
         super().__init__()
@@ -78,18 +82,70 @@ class _PlaceholderBackbone(nn.Module):
         return x
 
 
+class _HATBackbone(nn.Module):
+    """Wraps a v6.x HAT model (Tiny / Small / L) as a v7 backbone.
+
+    The HAT module produces (B, embed_dim, H_lr, W_lr) features at LR
+    resolution; this wrapper projects to feat_dim, upsamples to HR,
+    and exposes a uniform forward signature matching
+    _PlaceholderBackbone.
+    """
+
+    def __init__(self, in_channels: int, feat_dim: int, scale: int, kind: str):
+        super().__init__()
+        from oss.sr.v6 import hat as hat_mod
+        builders = {
+            "hat_tiny": hat_mod.hat_tiny,
+            "hat_small": hat_mod.hat_small,
+            "hat_l": hat_mod.hat_l,
+        }
+        if kind not in builders:
+            raise ValueError(
+                f"unknown HAT variant {kind!r}; expected one of {sorted(builders)}"
+            )
+        self.hat = builders[kind](in_channels=in_channels)
+        embed_dim = int(self.hat.embed_dim)
+        # 1x1 projection to v7 feat_dim, then bilinear to HR.
+        # Pixel-shuffle would be sharper but introduces extra params
+        # we don't need at the skeleton level; can swap in Phase 2D.
+        self.proj = nn.Conv2d(embed_dim, feat_dim, kernel_size=1)
+        self.scale = scale
+
+    def forward(self, lr_inputs: torch.Tensor) -> torch.Tensor:
+        feats_lr = self.hat(lr_inputs)
+        feats_lr = self.proj(feats_lr)
+        return F.interpolate(
+            feats_lr, scale_factor=self.scale,
+            mode="bilinear", align_corners=False,
+        )
+
+
 class V7Model(nn.Module):
     """End-to-end v7 model: backbone + N-D canvas time-slice + fusion."""
 
     def __init__(self, cfg: Optional[V7Config] = None):
         super().__init__()
         self.cfg = cfg or V7Config()
-        self.backbone = _PlaceholderBackbone(
-            in_channels=self.cfg.in_channels,
-            feat_dim=self.cfg.feat_dim,
-            scale=self.cfg.scale,
-            blocks=self.cfg.backbone_blocks,
-        )
+        kind = self.cfg.backbone_kind
+        if kind == "placeholder":
+            self.backbone = _PlaceholderBackbone(
+                in_channels=self.cfg.in_channels,
+                feat_dim=self.cfg.feat_dim,
+                scale=self.cfg.scale,
+                blocks=self.cfg.backbone_blocks,
+            )
+        elif kind in ("hat_tiny", "hat_small", "hat_l"):
+            self.backbone = _HATBackbone(
+                in_channels=self.cfg.in_channels,
+                feat_dim=self.cfg.feat_dim,
+                scale=self.cfg.scale,
+                kind=kind,
+            )
+        else:
+            raise ValueError(
+                f"V7Config.backbone_kind={kind!r} not recognized; "
+                f"expected 'placeholder' | 'hat_tiny' | 'hat_small' | 'hat_l'"
+            )
         self.composite_head = nn.Sequential(
             nn.Conv2d(self.cfg.feat_dim + self.cfg.latent_rank, self.cfg.feat_dim, 3, padding=1),
             nn.GELU(),

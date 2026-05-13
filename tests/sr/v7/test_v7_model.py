@@ -103,6 +103,41 @@ def test_v7_model_render_canvas_alone_returns_correct_shape():
     assert out.abs().sum().item() == 0.0
 
 
+def test_v7_model_with_hat_tiny_backbone_builds_and_forwards():
+    """V7Config(backbone_kind='hat_tiny') should swap the placeholder
+    for the real HAT-Tiny + projection + upsample, and forward should
+    produce the expected HR shape."""
+    cfg = V7Config(
+        in_channels=9, scale=2, feat_dim=32, latent_rank=8,
+        canvas_capacity=128, backbone_kind="hat_tiny",
+        enable_spawner=False,   # spawner test is separate
+    )
+    model = V7Model(cfg).train(False)
+    model.allocate_canvas("cpu")
+    # HAT requires H, W divisible by window_size=16 at LR; pick H_lr=16 so HR=32
+    lr = torch.randn((1, 9, 16, 32))
+    with torch.no_grad():
+        out = model(lr, t_query=0.0)
+    assert out.shape == (1, 3, 32, 64)
+
+
+def test_v7_model_hat_tiny_parameter_count_in_expected_range():
+    """HAT-Tiny is sized ~1M-3M params per the v6.x docs; verify
+    the wrapper hasn't bloated past that band."""
+    cfg = V7Config(
+        in_channels=9, scale=2, feat_dim=32, latent_rank=8,
+        canvas_capacity=128, backbone_kind="hat_tiny",
+        enable_spawner=False,
+    )
+    model = V7Model(cfg)
+    backbone_params = sum(p.numel() for p in model.backbone.parameters())
+    # Pico-tier teacher HAT-Tiny should sit in the 0.5M - 4M band.
+    assert 500_000 < backbone_params < 4_000_000, (
+        f"HAT-Tiny backbone has {backbone_params:,} params; outside "
+        f"expected pico-tier band (0.5M - 4M)"
+    )
+
+
 def test_v7_model_with_spawner_populates_canvas_during_forward():
     """When spawn_at_t is passed, V7Model.forward should add Gaussians
     to the canvas via the BackboneSpawner. Canvas count grows by the
