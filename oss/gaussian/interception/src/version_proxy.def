@@ -1,0 +1,26 @@
+; =============================================================================
+;  version_proxy.def
+;
+;  Module-definition file for the optional VERSION.dll loader profile.
+;  Ordinals intentionally match C:\Windows\System32\version.dll on Win10/11.
+; =============================================================================
+
+LIBRARY version
+EXPORTS
+  GetFileVersionInfoA        = OssgGetFileVersionInfoA        @1
+  GetFileVersionInfoByHandle = OssgGetFileVersionInfoByHandle @2
+  GetFileVersionInfoExA      = OssgGetFileVersionInfoExA      @3
+  GetFileVersionInfoExW      = OssgGetFileVersionInfoExW      @4
+  GetFileVersionInfoSizeA    = OssgGetFileVersionInfoSizeA    @5
+  GetFileVersionInfoSizeExA  = OssgGetFileVersionInfoSizeExA  @6
+  GetFileVersionInfoSizeExW  = OssgGetFileVersionInfoSizeExW  @7
+  GetFileVersionInfoSizeW    = OssgGetFileVersionInfoSizeW    @8
+  GetFileVersionInfoW        = OssgGetFileVersionInfoW        @9
+  VerFindFileA               = OssgVerFindFileA               @10
+  VerFindFileW               = OssgVerFindFileW               @11
+  VerInstallFileA            = OssgVerInstallFileA            @12
+  VerInstallFileW            = OssgVerInstallFileW            @13
+  VerLanguageNameA           = OssgVerLanguageNameA           @14
+  VerLanguageNameW           = OssgVerLanguageNameW           @15
+  VerQueryValueA             = OssgVerQueryValueA             @16
+  VerQueryValueW             = OssgVerQueryValueW             @17

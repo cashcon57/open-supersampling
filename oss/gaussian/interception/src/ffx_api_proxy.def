@@ -1,0 +1,7 @@
+LIBRARY "amd_fidelityfx_dx12"
+EXPORTS
+  ffxConfigure      = OssgFfxApiConfigure
+  ffxCreateContext  = OssgFfxApiCreateContext
+  ffxDestroyContext = OssgFfxApiDestroyContext
+  ffxDispatch       = OssgFfxApiDispatch
+  ffxQuery          = OssgFfxApiQuery

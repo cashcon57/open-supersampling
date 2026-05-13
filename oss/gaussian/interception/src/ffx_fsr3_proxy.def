@@ -1,0 +1,24 @@
+; =============================================================================
+;  ffx_fsr3_proxy.def
+;
+;  AMD FSR3 export surface for games that import ffx_fsr3_x64.dll directly.
+; =============================================================================
+LIBRARY ffx_fsr3_x64
+EXPORTS
+  ffxAssertReport                         = OssgFfxAssertReport
+  ffxAssertSetPrintingCallback            = OssgFfxAssertSetPrintingCallback
+  ffxFsr3ConfigureFrameGeneration         = OssgFfxFsr3ConfigureFrameGeneration
+  ffxFsr3ContextCreate                    = OssgFfxFsr3ContextCreate
+  ffxFsr3ContextDestroy                   = OssgFfxFsr3ContextDestroy
+  ffxFsr3ContextDispatchUpscale           = OssgFfxFsr3ContextDispatchUpscale
+  ffxFsr3ContextGenerateReactiveMask      = OssgFfxFsr3ContextGenerateReactiveMask
+  ffxFsr3DispatchFrameGeneration          = OssgFfxFsr3DispatchFrameGeneration
+  ffxFsr3GetJitterOffset                  = OssgFfxFsr3GetJitterOffset
+  ffxFsr3GetJitterPhaseCount              = OssgFfxFsr3GetJitterPhaseCount
+  ffxFsr3GetRenderResolutionFromQualityMode = OssgFfxFsr3GetRenderResolutionFromQualityMode
+  ffxFsr3GetUpscaleRatioFromQualityMode   = OssgFfxFsr3GetUpscaleRatioFromQualityMode
+  ffxFsr3ResourceIsNull                   = OssgFfxFsr3ResourceIsNull
+  ffxFsr3SkipPresent                      = OssgFfxFsr3SkipPresent
+  ffxSafeReleaseCopyResource              = OssgFfxSafeReleaseCopyResource
+  ffxSafeReleasePipeline                  = OssgFfxSafeReleasePipeline
+  ffxSafeReleaseResource                  = OssgFfxSafeReleaseResource
