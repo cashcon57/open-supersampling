@@ -205,8 +205,33 @@ class NDCanvasState:
         cov = cholesky_pack_to_cov(cov_raw)   # (K, 3, 3)
         return positions, cov, features, opacity
 
+    def detach_state(self) -> "NDCanvasState":
+        """Detach the canvas tensors from any autograd graph by re-pointing
+        them at fresh storage carrying the same values.
+
+        This is required between training-step / per-sample boundaries
+        because `add()` does in-place index assignment (`positions[a:b] = ...`),
+        which increments the underlying storage's version counter. Without
+        a fresh-storage reset, sample B's `add()` corrupts the version of
+        the storage referenced by sample A's autograd CopySlices node, and
+        backward fails with either "modified by inplace operation" or
+        "backward through the graph a second time".
+
+        `.detach().clone()` returns a new tensor with the same values but
+        a fresh storage + no grad_fn, so the prior graph's tensor reference
+        keeps its version stable and the new canvas can be mutated freely.
+        """
+        self.positions = self.positions.detach().clone()
+        self.cov_raw = self.cov_raw.detach().clone()
+        self.features = self.features.detach().clone()
+        self.opacity = self.opacity.detach().clone()
+        return self
+
     def reset(self) -> "NDCanvasState":
-        """Clear all Gaussians; capacity preserved."""
+        """Clear all Gaussians; capacity preserved. Also detaches storage so
+        the next `add()` cannot collide with the prior graph's version
+        bookkeeping (see `detach_state`)."""
+        self.detach_state()
         self.mask.zero_()
         self.n_live = 0
         return self
