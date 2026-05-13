@@ -5,6 +5,16 @@ Versioning: SemVer pre-1.0 (PATCH = bug fixes / docs; MINOR = new features; MAJO
 
 ## [Unreleased] — `v0.2-dev` branch
 
+### v7 Phase 2 closed — N-D Gaussian model wiring + training scaffold (2026-05-12)
+
+The OSS-FX pivot from inference-time canvas-scaling (H010, falsified) to a native N-D Gaussian canvas with time-slice rasterization is implemented end-to-end. Phase 0 ref rasterizer → Phase 2A canvas + spawner + model + loss + dataset → Phase 2B BackboneSpawner wiring → Phase 2C HAT-Tiny backbone swap-in + canvas pruning policy → Phase 2C closeout end-to-end training-step integration test. 61/61 v7 tests pass.
+
+- `oss/sr/v7/`: 8 modules (nd_rasterizer, nd_canvas_state, parent_child_spawner, backbone_spawner, model, losses, intermediate_dataset; model variants for placeholder + hat_tiny + hat_small + hat_l).
+- `scripts/sr_train_v7.py`: training scaffold with `--backbone-kind` CLI arg, per-rank canvas (B=1 inner loop), two-frame spawn flow (spawn at t=0 + t=2, render OSS-FX at t=1).
+- `tests/sr/v7/`: 61 tests covering math primitives, state mgmt, spawner mechanics, model composition, loss components, dataset adapter, full training step.
+- Closeout memo: `docs/architecture/2026-05-12-v7-phase-2-closeout.md`.
+- Next: Phase 3 = v7-pico-005 training run on 3080 Ti (100K steps, ~6 d). TartanAir smoke test on remote precedes the full run.
+
 ### Docs — Teacher / student split clarified across dashboard + README + RESEARCH.md (2026-05-11)
 
 Made it unambiguous, in every public-facing surface, that every model on the live dashboard (v5, v6.1, v6.2-pico-002, …) is a **research / teacher** model and NOT the end-user inference model. The HAT-Tiny backbone used in those runs is too expensive for real-time game upscaling: measured FP16 eager forward on RTX 3080 Ti (idle) is **54.5 ms at 270×480 LR** and **1,890 ms at 1920×1080 LR**, versus a <2 ms DLSS-/FSR-class budget. The end-user shipping model is a **≤1M-param student** distilled from these teachers (per the unanimous Phase 4 council 2026-05-08 decision and H006), exported to TensorRT FP8 with custom cross-vendor kernels. That student is not yet trained.
