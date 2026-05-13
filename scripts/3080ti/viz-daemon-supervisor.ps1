@@ -6,6 +6,9 @@
 $pyEnv = 'C:\Users\cashc\Miniconda3\envs\image-gs'
 $repo = 'E:\oss-gaussian-server'
 
+# Hide spawned daemon's console window: SW_HIDE = 0
+$startupHidden = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0 }
+
 while ($true) {
   # Re-resolve active run on every cycle so rotating it via RUN_CONFIG
   # auto-propagates within ~60s without restarting the supervisor.
@@ -28,7 +31,7 @@ while ($true) {
     $daemonCmd = "cmd /c `"cd /d $repo && $pyEnv\python.exe scripts\sr_temporal_inflight_viz.py --output-dir E:\checkpoints\$activeRun --ckpt-v5 E:\checkpoints\srcnn-v5-pixel-temporal-validated\step-00080000.pt --manifest E:\checkpoints\v5_held_out_manifest.json --primary-version v6 --backbone hat-tiny --tartanair-root E:\datasets\tartanair_extracted --device cpu --interval 60 --n-pairs 2 >> E:\logs\viz-daemon-$activeRun.log 2>&1`""
     $stamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
     Add-Content -Path 'E:\logs\viz-supervisor.log' -Value "[$stamp] daemon missing for $activeRun - respawning"
-    Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $daemonCmd } | Out-Null
+    Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $daemonCmd; ProcessStartupInformation = $startupHidden } | Out-Null
   }
   Start-Sleep -Seconds 60
 }

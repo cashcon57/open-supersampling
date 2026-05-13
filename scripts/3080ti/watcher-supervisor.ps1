@@ -48,9 +48,12 @@ Log "WARN: watch_and_publish not running; restarting"
 
 $bashCmd = 'cd /e/oss-gaussian-server && git pull --ff-only origin main; bash scripts/watch_and_publish.sh >> /tmp/watch_and_publish.log 2>&1'
 $cmd     = '"C:\Program Files\Git\bin\bash.exe" -lc "' + $bashCmd + '"'
+# Hide the spawned bash console: Win32_ProcessStartup ShowWindow=0 (SW_HIDE)
+$startupHidden = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0 }
 $result  = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
     CommandLine      = $cmd
     CurrentDirectory = 'E:\oss-gaussian-server'
+    ProcessStartupInformation = $startupHidden
 }
 
 if ($result.ReturnValue -eq 0) {

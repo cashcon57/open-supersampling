@@ -172,7 +172,9 @@ while ($true) {
             "--device", "cuda"
         ) -join ' '
         $cmdLine = "cmd /c `"cd /d $repo && $pyEnv\python.exe $args >> E:\logs\heldout-eval-$activeRun.log 2>&1`""
-        $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmdLine }
+        # Hide the spawned eval console: SW_HIDE = 0
+        $startupHidden = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0 }
+        $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmdLine; ProcessStartupInformation = $startupHidden }
         if ($r.ReturnValue -ne 0) {
             Log "spawn FAILED step=$step rc=$($r.ReturnValue)"
             Start-Sleep -Seconds 30
