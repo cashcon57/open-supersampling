@@ -16,8 +16,10 @@
 
 $bashCmd = 'cd /e/oss-gaussian-server && bash scripts/ci_auto_heal.sh --watch >> /tmp/ci_auto_heal_watch.log 2>&1'
 $cmd = '"C:\Program Files\Git\bin\bash.exe" -lc "' + $bashCmd + '"'
+$startupHidden = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0 }
 $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
   CommandLine = $cmd
   CurrentDirectory = 'E:\oss-gaussian-server'
+  ProcessStartupInformation = $startupHidden
 }
 Write-Output "ProcessId=$($r.ProcessId) ReturnValue=$($r.ReturnValue)"

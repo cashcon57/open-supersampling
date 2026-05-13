@@ -21,8 +21,11 @@
 
 $bashCmd = 'cd /e/oss-gaussian-server && git pull --ff-only origin main; bash scripts/watch_and_publish.sh >> /tmp/watch_and_publish.log 2>&1'
 $cmd = '"C:\Program Files\Git\bin\bash.exe" -lc "' + $bashCmd + '"'
+# Hide spawned bash console (SW_HIDE = 0); matches the supervisor pattern.
+$startupHidden = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0 }
 $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
   CommandLine = $cmd
   CurrentDirectory = 'E:\oss-gaussian-server'
+  ProcessStartupInformation = $startupHidden
 }
 Write-Output "ProcessId=$($r.ProcessId) ReturnValue=$($r.ReturnValue)"

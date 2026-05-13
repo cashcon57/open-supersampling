@@ -157,7 +157,8 @@ foreach ($ck in $ckpts) {
         "--device", "cuda"
     ) -join ' '
     $cmdLine = "cmd /c `"cd /d $repo && $pyEnv\python.exe $args >> E:\logs\heldout-frames-backfill-eval.log 2>&1`""
-    $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmdLine }
+    $startupHidden = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0 }
+    $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmdLine; ProcessStartupInformation = $startupHidden }
     if ($r.ReturnValue -ne 0) {
         Log "spawn FAILED step=$step rc=$($r.ReturnValue)"
         ReleaseGpuLock

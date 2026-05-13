@@ -139,15 +139,18 @@ def canvas_health_metrics(model) -> dict[str, float]:
             "canvas_mean_opacity": 0.0,
             "canvas_mean_L_diag": 0.0,
         }
-    live_mask = cs.mask[: cs.n_live]
-    idx = live_mask.nonzero(as_tuple=True)[0]
-    opacity = cs.opacity[: cs.n_live][idx]
-    # L_diag entries live at positions 0, 2, 5 of cov_raw (l00, l11, l22)
-    # in pre-exp form; take exp to get the actual diagonals.
-    cov_raw = cs.cov_raw[: cs.n_live][idx]
-    L_diag = torch.stack(
-        [cov_raw[:, 0].exp(), cov_raw[:, 2].exp(), cov_raw[:, 5].exp()], dim=-1
-    )
+    # no_grad here: we only emit Python floats to history.jsonl, so any
+    # autograd bookkeeping (exp + index_select + mean) is pure waste.
+    with torch.no_grad():
+        live_mask = cs.mask[: cs.n_live]
+        idx = live_mask.nonzero(as_tuple=True)[0]
+        opacity = cs.opacity[: cs.n_live][idx]
+        # L_diag entries live at positions 0, 2, 5 of cov_raw (l00, l11, l22)
+        # in pre-exp form; take exp to get the actual diagonals.
+        cov_raw = cs.cov_raw[: cs.n_live][idx]
+        L_diag = torch.stack(
+            [cov_raw[:, 0].exp(), cov_raw[:, 2].exp(), cov_raw[:, 5].exp()], dim=-1
+        )
     return {
         "canvas_count": n_active,
         "canvas_mean_opacity": float(opacity.mean().item()),

@@ -168,34 +168,52 @@ def test_eval_v7_end_to_end_emits_expected_json(tmp_path):
 def test_bicubic_midpoint_baseline_psnr_against_known_input():
     """Direct test of the bicubic-midpoint helper + PSNR formula.
 
-    Construct an LR tensor whose bicubic upsample exactly matches a
-    constructed GT. PSNR should be high (>= ~60 dB given bicubic is
-    not an identity but for a uniform image it nearly is).
+    The baseline averages bicubic-upsampled frame N and frame N+1, so we
+    pass both endpoint LRs. With identical flat-grey endpoints, the
+    output should also be flat-grey and score PSNR == cap (99.0).
     """
     torch.manual_seed(0)
-    # A flat-grey LR (3 channels, all 0.5) bicubic-upsampled is also
-    # flat-grey 0.5. Score against a flat-grey GT of 0.5 -> MSE = 0
-    # -> PSNR clipped to 99.0 by our helper.
-    lr = torch.full((1, 9, _LR_H, _LR_W), 0.5)
+    n_lr = torch.full((1, 9, _LR_H, _LR_W), 0.5)
+    np1_lr = torch.full((1, 9, _LR_H, _LR_W), 0.5)
     gt = torch.full((1, 3, _HR_H, _HR_W), 0.5)
-    bi = sr_eval_v7._bicubic_midpoint(lr, (_HR_H, _HR_W))
+    bi = sr_eval_v7._bicubic_midpoint(n_lr, np1_lr, (_HR_H, _HR_W))
     assert bi.shape == (1, 3, _HR_H, _HR_W)
-    # bicubic of constant input is the same constant (within fp tol).
     assert torch.allclose(bi, gt, atol=1e-5)
 
     psnr = sr_eval_v7._psnr(bi, gt)
-    assert psnr >= 60.0  # all-zero MSE -> capped at 99.0; any tiny noise still > 60
+    assert psnr >= 60.0
 
-    # Now a noisy case: random GT, bicubic of (different) random LR.
-    # We just sanity-check that PSNR is finite and follows the formula.
-    lr2 = torch.rand((1, 9, _LR_H, _LR_W))
+    # Noisy endpoints: bicubic-average should still equal the manually
+    # computed 0.5*(up(n_lr) + up(np1_lr)).
+    n_lr2 = torch.rand((1, 9, _LR_H, _LR_W))
+    np1_lr2 = torch.rand((1, 9, _LR_H, _LR_W))
     gt2 = torch.rand((1, 3, _HR_H, _HR_W))
-    bi2 = sr_eval_v7._bicubic_midpoint(lr2, (_HR_H, _HR_W))
+    bi2 = sr_eval_v7._bicubic_midpoint(n_lr2, np1_lr2, (_HR_H, _HR_W))
+    # Manually compute the expected average-of-bicubic to confirm the
+    # baseline is symmetric in n / np1 (not right-endpoint only).
+    import torch.nn.functional as F
+    up_n = F.interpolate(n_lr2[:, :3], size=(_HR_H, _HR_W), mode="bicubic", antialias=True, align_corners=False)
+    up_np1 = F.interpolate(np1_lr2[:, :3], size=(_HR_H, _HR_W), mode="bicubic", antialias=True, align_corners=False)
+    expected = (0.5 * (up_n + up_np1)).clamp(0.0, 1.0)
+    assert torch.allclose(bi2, expected, atol=1e-6)
+
     mse = float(((bi2.clamp(0, 1) - gt2.clamp(0, 1)) ** 2).mean().item())
     expected_psnr = 20.0 * math.log10(1.0 / math.sqrt(max(mse, 1e-12)))
     assert math.isclose(
         sr_eval_v7._psnr(bi2, gt2), expected_psnr, rel_tol=1e-6, abs_tol=1e-6
     )
+
+
+def test_bicubic_midpoint_is_symmetric_in_endpoints():
+    """Swapping (n_lr, np1_lr) should produce the same baseline -- the
+    midpoint is order-independent. The pre-fix version returned only the
+    right-endpoint bicubic and would FAIL this test."""
+    torch.manual_seed(1)
+    a = torch.rand((1, 9, _LR_H, _LR_W))
+    b = torch.rand((1, 9, _LR_H, _LR_W))
+    bi_ab = sr_eval_v7._bicubic_midpoint(a, b, (_HR_H, _HR_W))
+    bi_ba = sr_eval_v7._bicubic_midpoint(b, a, (_HR_H, _HR_W))
+    assert torch.allclose(bi_ab, bi_ba, atol=1e-7)
 
 
 def test_eval_v7_psnr_matches_phase3_plan_formula():

@@ -54,7 +54,8 @@ $stamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
 Add-Content -Path $browserLog -Value "[$stamp] launching $chromePath on $debugAddress`:$debugPort"
 
 $cmd = 'cmd /c "' + (Quote-CmdArg $chromePath) + ' ' + ($chromeArgs -join ' ') + ' >> ' + (Quote-CmdArg $browserLog) + ' 2>&1"'
-$result = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmd }
+$startupHidden = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0 }
+$result = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmd; ProcessStartupInformation = $startupHidden }
 
 if ($result.ReturnValue -ne 0) {
   throw "Win32_Process.Create failed with ReturnValue=$($result.ReturnValue)"
@@ -108,7 +109,7 @@ $proxyAlive = Get-CimInstance Win32_Process -Filter "name = 'node.exe'" -ErrorAc
 if (-not $proxyAlive) {
   $nodePath = (Get-Command node.exe -ErrorAction Stop).Source
   $proxyCmd = 'cmd /c "' + (Quote-CmdArg $nodePath) + ' ' + (Quote-CmdArg $proxyScript) + ' >> ' + (Quote-CmdArg $proxyLog) + ' 2>&1"'
-  Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $proxyCmd } | Out-Null
+  Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $proxyCmd; ProcessStartupInformation = $startupHidden } | Out-Null
 }
 
 $result | Select-Object ProcessId, ReturnValue

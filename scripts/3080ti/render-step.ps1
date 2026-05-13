@@ -1,3 +1,4 @@
 param([string]$ckpt)
 $cmd = 'cmd /c "cd /d E:\oss-gaussian & C:\Users\cashc\Miniconda3\envs\image-gs\python.exe scripts\sr_temporal_inflight_viz.py --output-dir E:\checkpoints\srcnn-v6.1-pico-001 --ckpt ' + $ckpt + ' --ckpt-v5 E:\checkpoints\srcnn-v5-pixel-temporal-validated\step-00080000.pt --manifest E:\checkpoints\v5_held_out_manifest.json --primary-version v6 --backbone hat-tiny --tartanair-root E:\datasets\tartanair_extracted --device cpu --once --n-pairs 2 >> E:\logs\viz-onshot.log 2>&1"'
-Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmd } | Select ProcessId
+$startupHidden = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0 }
+Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmd; ProcessStartupInformation = $startupHidden } | Select ProcessId

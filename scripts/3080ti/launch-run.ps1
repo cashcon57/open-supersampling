@@ -123,7 +123,9 @@ $cli = @(
 ) -join ' '
 $inner = "cd /d $Repo && $PyEnv\python.exe $cli > `"$logFile`" 2>&1"
 $wmiCmd = "cmd /c `"$inner`""
-$result = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $wmiCmd }
+# Hide spawned cmd window so long training runs don't keep a visible console open.
+$startupHidden = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0 }
+$result = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $wmiCmd; ProcessStartupInformation = $startupHidden }
 Write-Host ("  WMI ReturnValue=$($result.ReturnValue) PID=$($result.ProcessId)")
 if ($result.ReturnValue -ne 0) {
     Write-Host "  spawn FAILED. cmd was:"

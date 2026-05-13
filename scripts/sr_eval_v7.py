@@ -145,17 +145,29 @@ class _LazyLPIPS:
         return float(m(p * 2.0 - 1.0, g * 2.0 - 1.0).mean().item())
 
 
-def _bicubic_midpoint(np1_lr: torch.Tensor, output_hw: tuple[int, int]) -> torch.Tensor:
-    """Bicubic-upsample frame-(N+1) LR RGB to HR. This is the
-    Phase-3-plan baseline for the alpha=0.5 case: the dumbest possible
-    "predict the midpoint frame" -- just upsample the right neighbor.
+def _bicubic_midpoint(
+    n_lr: torch.Tensor, np1_lr: torch.Tensor, output_hw: tuple[int, int]
+) -> torch.Tensor:
+    """True midpoint baseline at alpha=0.5: pixel-averaged bicubic of BOTH
+    endpoints upsampled to HR. This is the dumbest "predict the midpoint
+    frame given frame N and frame N+1" baseline you can write -- it's the
+    floor v7's OSS-FX has to clear.
+
+    Earlier versions of this function used only `np1_lr` (right endpoint
+    only), which is an asymmetric baseline and biases the +1 dB pass
+    criterion toward whichever endpoint is closer to the held-out half
+    frame. Using the average is symmetric in time and matches the
+    "naive frame-interp from neighbors" intuition that the alpha=0.5
+    metric is supposed to beat.
 
     Returns (B, 3, H_hr, W_hr) clamped to [0, 1].
     """
-    lr_rgb = np1_lr[:, :3]
-    return F.interpolate(
-        lr_rgb, size=output_hw, mode="bicubic", antialias=True, align_corners=False
-    ).clamp(0.0, 1.0)
+    def _up(x):
+        return F.interpolate(
+            x[:, :3], size=output_hw, mode="bicubic",
+            antialias=True, align_corners=False,
+        )
+    return (0.5 * (_up(n_lr) + _up(np1_lr))).clamp(0.0, 1.0)
 
 
 # ---------------------------------------------------------------------
@@ -326,10 +338,12 @@ def evaluate(
             ssim_fx.append(_LazySSIM.score(out_inter, n_half_gt))
             lpips_fx.append(_LazyLPIPS.score(out_inter, n_half_gt))
 
-            # Bicubic-midpoint baseline at alpha = 0.5: upsample the
-            # frame-(N+1) LR to the half-frame GT shape.
+            # Bicubic-midpoint baseline at alpha = 0.5: pixel-average of
+            # bicubic-upsampled frame N and frame N+1 LR -- the symmetric
+            # naive "predict the in-between frame" baseline that v7's
+            # OSS-FX has to beat by >=1 dB to clear the Phase 3 floor.
             output_hw = (n_half_gt.shape[-2], n_half_gt.shape[-1])
-            bi = _bicubic_midpoint(np1_lr_in, output_hw)
+            bi = _bicubic_midpoint(n_lr_in, np1_lr_in, output_hw)
             psnr_bi.append(_psnr(bi, n_half_gt))
             ssim_bi.append(_LazySSIM.score(bi, n_half_gt))
             lpips_bi.append(_LazyLPIPS.score(bi, n_half_gt))

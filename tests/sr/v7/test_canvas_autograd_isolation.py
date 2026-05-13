@@ -61,25 +61,37 @@ def test_two_step_training_does_not_corrupt_canvas_storage():
         optim.step()
 
 
-def test_batched_accumulation_does_not_corrupt_canvas_storage():
-    """Trainer's per-sample reset + accumulate-loss + single-backward path.
-    Without the reset() detach, sample 1's `add()` corrupts the storage
-    sample 0's CopySlices references, so the final backward fails."""
+def test_batched_accumulation_across_two_steps_does_not_corrupt_canvas_storage():
+    """Trainer's actual production pattern: per-step batch of N samples each
+    doing per-sample reset + accumulate-loss + single-backward + optim.step,
+    repeated for multiple steps.
+
+    Single-step batch accumulation alone does NOT crash pre-fix because the
+    CopySlices chain just keeps growing through all samples and the single
+    backward walks the whole live chain. The bug only fires once a backward
+    has been finalized (its saved tensors freed) and a subsequent step's
+    `add()` chains a NEW CopySlices onto positions.grad_fn that points back
+    into the freed graph -> 'Trying to backward through the graph a second
+    time'.
+
+    So this test exercises BOTH axes: B>1 per step AND step>1, which is the
+    real production loop."""
     model = V7Model(_tiny_cfg()).train(True)
     model.allocate_canvas("cpu")
     optim = torch.optim.AdamW(model.parameters(), lr=1e-4)
 
-    optim.zero_grad()
-    total = None
-    for _ in range(3):
-        model.reset_state("cpu")
-        lr_in = _synth_input()
-        gt = torch.rand((1, 3, 16, 32))
-        out = model(lr_in, t_query=0.0, spawn_at_t=0.0)
-        loss = (out - gt).pow(2).mean()
-        total = loss if total is None else total + loss
-    total.backward()
-    optim.step()
+    for _ in range(2):                      # step axis
+        optim.zero_grad()
+        total = None
+        for _ in range(3):                  # batch axis
+            model.reset_state("cpu")
+            lr_in = _synth_input()
+            gt = torch.rand((1, 3, 16, 32))
+            out = model(lr_in, t_query=0.0, spawn_at_t=0.0)
+            loss = (out - gt).pow(2).mean()
+            total = loss if total is None else total + loss
+        total.backward()
+        optim.step()
 
 
 def test_per_step_multi_spawn_then_backward_survives():
