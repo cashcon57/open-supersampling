@@ -1651,6 +1651,55 @@
 
     <div id="signal-cost-panel" class="mt-4"></div>
 
+    <div class="terminal-divider" aria-hidden="true"><span class="td-corner">├─ teacher / student tiers ─</span><span class="td-rule"></span><span class="td-corner">─┤</span></div>
+    <section id="teacher-student-section" class="rounded-md border border-zinc-800 bg-zinc-900/60 p-5" data-surface aria-labelledby="ts-title">
+      <header>
+        <h2 id="ts-title" class="text-xl font-semibold text-zinc-50" data-text>Teacher / student split — what's on this dashboard vs what ships</h2>
+        <p class="mt-2 max-w-5xl text-sm leading-6 text-zinc-400" data-subtext>
+          Every run on the live dashboard is a <strong>research / teacher</strong> model. DLSS, FSR, and XeSS all follow the same pattern: train a large transformer "teacher" for quality, then distill it into a smaller CNN-class "student" for shipping. <strong>The student is the model that actually runs in a player's game at sub-2 ms per frame</strong> — and it has not been trained yet for OSS. The teachers below are what build the architectural understanding the student is then compressed against.
+        </p>
+      </header>
+      <div class="mt-4 overflow-x-auto rounded border border-zinc-800">
+        <table class="min-w-full text-sm text-zinc-300">
+          <thead class="bg-zinc-950/50 text-xs uppercase text-zinc-500">
+            <tr>
+              <th class="px-3 py-2 text-left font-medium">Tier</th>
+              <th class="px-3 py-2 text-left font-medium">Teacher (research, ON THIS DASHBOARD)</th>
+              <th class="px-3 py-2 text-left font-medium">Shipping student (NOT YET TRAINED)</th>
+              <th class="px-3 py-2 text-left font-medium">Target hardware</th>
+              <th class="px-3 py-2 text-right font-medium whitespace-nowrap">Ship latency target</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="border-t border-zinc-800 align-top">
+              <td class="px-3 py-2 font-semibold text-cyan-200">Pico</td>
+              <td class="px-3 py-2">HAT-Tiny (~3M params, transformer)<br><span class="text-xs text-zinc-500">Currently training: <code class="text-cyan-300">srcnn-v6.2-pico-002</code></span></td>
+              <td class="px-3 py-2">≤0.4M-param nano-CNN<br><span class="text-xs text-zinc-500">TensorRT FP8 + custom kernels</span></td>
+              <td class="px-3 py-2">Steam Deck, integrated GPUs, mobile dGPU</td>
+              <td class="px-3 py-2 text-right font-mono text-zinc-200 whitespace-nowrap">&lt;2 ms at 720p → 1080p</td>
+            </tr>
+            <tr class="border-t border-zinc-800 align-top">
+              <td class="px-3 py-2 font-semibold text-cyan-200">Standard</td>
+              <td class="px-3 py-2">HAT-Small (~5M params, transformer)<br><span class="text-xs text-zinc-500">Not yet trained</span></td>
+              <td class="px-3 py-2">≤1M CNN<br><span class="text-xs text-zinc-500">TensorRT FP8 + custom kernels</span></td>
+              <td class="px-3 py-2">RTX 30+, RX 6700+, Arc, M2+</td>
+              <td class="px-3 py-2 text-right font-mono text-zinc-200 whitespace-nowrap">&lt;3 ms at 1080p → 1440p</td>
+            </tr>
+            <tr class="border-t border-zinc-800 align-top">
+              <td class="px-3 py-2 font-semibold text-cyan-200">Heavy</td>
+              <td class="px-3 py-2">OSS HAT-L-derived Heavy (~17M params, transformer)<br><span class="text-xs text-zinc-500">Not yet trained</span></td>
+              <td class="px-3 py-2">≤2M CNN<br><span class="text-xs text-zinc-500">TensorRT FP8 + custom kernels</span></td>
+              <td class="px-3 py-2">RTX 4080+, RX 7900+, M4 Max</td>
+              <td class="px-3 py-2 text-right font-mono text-zinc-200 whitespace-nowrap">&lt;4 ms at 1440p → 4K</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="mt-3 text-xs leading-5 text-zinc-500" data-dim>
+        Architecture decision: transformer teacher + CNN student in every tier. Matches DLSS 4's transformer direction at the teacher level while preserving cross-vendor CNN shipping for broader hardware support. Full sprint plan + cost estimate: <a class="underline hover:text-cyan-200" href="https://github.com/cashcon57/open-supersampling/blob/main/docs/coordination/2026-05-11-heavy-cloud-training-cost-estimate.md">multi-cycle Heavy training cost memo</a>.
+      </p>
+    </section>
+
     <div class="terminal-divider" aria-hidden="true"><span class="td-corner">├─ viz strips ─</span><span class="td-rule"></span><span class="td-corner">─┤</span></div>
     <section id="global-viz-section" class="rounded-md border border-zinc-800 bg-zinc-900/60 p-5" data-surface aria-labelledby="global-viz-title">
       <header class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">

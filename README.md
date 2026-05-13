@@ -79,6 +79,43 @@ Maintained by Cash Conway (<cashcon57@gmail.com>), solo maintainer with AI-augme
 
 ---
 
+## Teacher / student split — what we train vs what ships
+
+OSS uses the same teacher / student distillation pattern DLSS, FSR, and XeSS all use:
+
+- **Research / teacher models** carry the architectural innovations and target highest possible quality. They are too expensive to ship to end users. Every run on the [live dashboard](https://opensupersampling.com) is a *teacher*.
+- **End-user inference models (students)** are smaller, distilled from the teachers, and TensorRT/HIP/Metal/Level Zero/Vulkan-compiled with custom cross-vendor kernels. They are what actually runs in a player's game at sub-2ms per frame.
+
+The pipeline is *teacher first, student second*. Building the teacher is what the live dashboard is showing; student distillation is the step that turns it into something shippable on a real GPU at real-time framerates.
+
+### Hardware tiers — what ships to whom
+
+Three tiers share one architecture, scaled. Each tier has its own teacher / student pair. The teacher is a transformer-class backbone (HAT) — matching DLSS 4's transformer direction. The shipping student is a small CNN, distilled from the teacher.
+
+| Tier | Teacher (research, ON THE DASHBOARD) | Shipping student (NOT YET TRAINED) | Target hardware | Ship latency budget |
+| --- | --- | --- | --- | --- |
+| **Pico** | HAT-Tiny (~3M params, transformer) | ≤0.4M-param nano-CNN, TensorRT FP8 | Steam Deck, integrated GPUs, mobile dGPU | <2 ms at 720p → 1080p |
+| **Standard** | HAT-Small (~5M params, transformer) | ≤1M CNN, TensorRT FP8 | RTX 30+, RX 6700+, Arc, M2+ | <3 ms at 1080p → 1440p |
+| **Heavy** | OSS HAT-L-derived Heavy (~17M params, transformer) | ≤2M CNN, TensorRT FP8 | RTX 4080+, RX 7900+, M4 Max | <4 ms at 1440p → 4K |
+
+What this looks like on the live dashboard right now:
+
+- `srcnn-v6.2-pico-002` (currently training): Pico-tier **teacher** (HAT-Tiny). Step ~74K of 100K, ~1.5 days remaining.
+- `srcnn-v6.1-pico-001` (stopped 2026-05-08): earlier Pico-tier teacher attempt; stopped due to architecture issue.
+- Standard / Heavy tier teachers: not yet trained.
+- Any tier's shipping student: not yet trained.
+
+The end-user inference model — the thing that lands in a player's game at sub-2ms per frame — is the **student**, and it does not currently exist. Reaching it requires:
+
+1. Finishing the v6.2 architecture cycle (canvas + spawner + cross-attention validated at pico-tier),
+2. Training the Heavy teacher at full ~17M-param scale,
+3. Distilling each tier's student from its respective teacher,
+4. TensorRT / HIP / Metal / Level Zero / Vulkan kernel work for cross-vendor inference.
+
+Full cost estimate for the multi-cycle path to frontier quality: [`docs/coordination/2026-05-11-heavy-cloud-training-cost-estimate.md`](docs/coordination/2026-05-11-heavy-cloud-training-cost-estimate.md).
+
+---
+
 ## Latest results (v5-pixel-temporal, 2026-05-06)
 
 **PSNR 25.703 dB · LPIPS 0.1666 · temporal-stability ratio 0.337×** on the TartanAir `oldtown` held-out batch (64 frames, 2× super-resolution from engine LR + G-buffers). Training set: TartanAir Easy with `oldtown` excluded — the model has not been trained or evaluated on any other dataset, and these numbers are in-distribution.

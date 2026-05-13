@@ -84,6 +84,29 @@ Three sources, all already identified in the v6.3.1 OSS-FX plan:
 2. **Vimeo-90K triplets** — 73,171 frame triplets where the middle frame is the natural α=0.5 GT. ~80 GB download.
 3. **OSS Capture Tool game footage** — captured at 120 Hz on supported titles; alternate frames hold out as α=0.25 / 0.5 / 0.75 GT. Future, depends on the capture tool shipping.
 
+### Backbone choice: transformer at teacher, CNN at student (matches DLSS 4 direction)
+
+Each v7 teacher uses a **transformer-class backbone** (HAT family). Each v7 shipping **student** is a small CNN distilled from its tier's teacher and exported to TensorRT FP8 with custom cross-vendor kernels:
+
+| Tier | v7 Teacher (research) | v7 Student (ships) |
+| --- | --- | --- |
+| Pico | HAT-Tiny (~3M, transformer) -- the v7-pico-005 backbone | ≤0.4M nano-CNN |
+| Standard | HAT-Small (~5M, transformer) | ≤1M CNN |
+| Heavy | HAT-L-derived Heavy (~17M, transformer) | ≤2M CNN |
+
+This matches DLSS 4's strategy: NVIDIA ships a transformer-class top-tier model AND a CNN-class fallback for older hardware. They did not replace CNN with transformer; they added the transformer for the high-end and kept the CNN distillation for broader hardware support.
+
+Backbone ablations as part of the v7-pico-005 cycle:
+
+| Run | Backbone | Purpose |
+| --- | --- | --- |
+| v7-pico-005 (main) | HAT-Tiny | Establish v7's quality at pico tier (apples-to-apples vs v6.2-pico-002) |
+| v7-pico-005-no-canvas | HAT-Tiny + canvas disabled | Confirm canvas is load-bearing |
+| v7-pico-005-no-spawner | HAT-Tiny + parent-child off | Measure parent-child spawner contribution |
+| v7-pico-005-cnn-ablation | 4-layer CNN ~500K params | Research: does canvas compensate for transformer quality? If yes, simpler shipping path |
+
+The CNN ablation is research-only -- the shipping path remains teacher (transformer) → student (CNN) distillation regardless of the ablation outcome.
+
 ### What v6.3 still delivers as the bridge
 
 v6.3 stays in the plan as the **proving ground** for the components before they scale to N-D:
