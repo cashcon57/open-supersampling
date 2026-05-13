@@ -139,6 +139,60 @@ class NDCanvasState:
         self.mask[: self.n_live] = keep_mask.to(device=self.device, dtype=torch.bool)
         return self
 
+    def prune_to_count(self, target_count: int, strategy: str = "lowest_opacity") -> int:
+        """Reduce active Gaussian count to <= target_count by dropping
+        the lowest-opacity (or oldest, depending on strategy) actives.
+
+        Returns the number of Gaussians dropped.
+        """
+        if target_count < 0:
+            raise ValueError("target_count must be >= 0")
+        n_active = self.count
+        if n_active <= target_count:
+            return 0
+        n_to_drop = n_active - target_count
+
+        live_mask = self.mask[: self.n_live]
+        live_indices = live_mask.nonzero(as_tuple=True)[0]
+        if strategy == "lowest_opacity":
+            opacities = self.opacity[live_indices]
+            # Take the n_to_drop smallest opacities
+            _, smallest_idx = torch.topk(opacities, k=n_to_drop, largest=False)
+            drop_idx_in_canvas = live_indices[smallest_idx]
+        elif strategy == "oldest":
+            # Oldest = earliest index (canvas is append-only). Take
+            # the first n_to_drop live indices.
+            drop_idx_in_canvas = live_indices[:n_to_drop]
+        else:
+            raise ValueError(f"unknown prune strategy {strategy!r}")
+        self.mask[drop_idx_in_canvas] = False
+        return int(n_to_drop)
+
+    def compact(self) -> int:
+        """Shift live Gaussians toward the front of the pool, dropping
+        dormant ones. Returns the new n_live. Useful periodically to
+        reclaim capacity headroom after pruning."""
+        live_mask = self.mask[: self.n_live]
+        if live_mask.all().item():
+            return self.n_live
+        live_idx = live_mask.nonzero(as_tuple=True)[0]
+        n_new = int(live_idx.shape[0])
+        # Move live entries to the front
+        self.positions[:n_new] = self.positions[: self.n_live][live_idx]
+        self.cov_raw[:n_new] = self.cov_raw[: self.n_live][live_idx]
+        self.features[:n_new] = self.features[: self.n_live][live_idx]
+        self.opacity[:n_new] = self.opacity[: self.n_live][live_idx]
+        # Reset trailing entries
+        if n_new < self.n_live:
+            self.positions[n_new : self.n_live] = 0.0
+            self.cov_raw[n_new : self.n_live] = 0.0
+            self.features[n_new : self.n_live] = 0.0
+            self.opacity[n_new : self.n_live] = 0.0
+        self.mask.zero_()
+        self.mask[:n_new] = True
+        self.n_live = n_new
+        return n_new
+
     def active_view(self):
         """Return (positions, cov, features, opacity) sliced to active
         Gaussians only -- ready to feed the rasterizer."""

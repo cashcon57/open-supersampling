@@ -96,6 +96,83 @@ def test_canvas_state_add_beyond_capacity_raises():
         )
 
 
+def test_canvas_state_prune_to_count_drops_lowest_opacity():
+    cs = NDCanvasState.empty(capacity=16, feature_dim=2)
+    cs.add(
+        positions=torch.tensor([
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [3.0, 0.0, 0.0],
+            [4.0, 0.0, 0.0],
+        ]),
+        cov_raw=torch.zeros((5, 6)),
+        features=torch.zeros((5, 2)),
+        opacity=torch.tensor([0.1, 0.5, 0.05, 0.9, 0.3]),
+    )
+    assert cs.count == 5
+    # Drop to 3 -- the 2 lowest opacities (0.05 and 0.1) should go.
+    n_dropped = cs.prune_to_count(3, strategy="lowest_opacity")
+    assert n_dropped == 2
+    assert cs.count == 3
+    # The dropped indices should be the ones with opacity 0.05 and 0.1
+    pos, _, _, op = cs.active_view()
+    surviving_op = sorted(op.tolist())
+    assert surviving_op == pytest.approx([0.3, 0.5, 0.9])
+
+
+def test_canvas_state_prune_to_count_drops_oldest():
+    cs = NDCanvasState.empty(capacity=16, feature_dim=2)
+    cs.add(
+        positions=torch.arange(15, dtype=torch.float32).view(5, 3),
+        cov_raw=torch.zeros((5, 6)),
+        features=torch.zeros((5, 2)),
+        opacity=torch.ones(5),
+    )
+    # Drop 2 oldest -- positions 0 and 1 should go, surviving 2-4.
+    n_dropped = cs.prune_to_count(3, strategy="oldest")
+    assert n_dropped == 2
+    pos, _, _, _ = cs.active_view()
+    # Surviving positions are rows 2, 3, 4 from the original tensor.
+    expected = torch.arange(6, 15, dtype=torch.float32).view(3, 3)
+    torch.testing.assert_close(pos, expected)
+
+
+def test_canvas_state_prune_to_count_noop_when_below_target():
+    cs = NDCanvasState.empty(capacity=8, feature_dim=1)
+    cs.add(
+        positions=torch.zeros((2, 3)),
+        cov_raw=torch.zeros((2, 6)),
+        features=torch.zeros((2, 1)),
+        opacity=torch.ones(2),
+    )
+    assert cs.prune_to_count(5) == 0
+    assert cs.count == 2
+
+
+def test_canvas_state_compact_reclaims_capacity():
+    cs = NDCanvasState.empty(capacity=8, feature_dim=1)
+    cs.add(
+        positions=torch.tensor([
+            [0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0],
+            [3.0, 0.0, 0.0], [4.0, 0.0, 0.0],
+        ]),
+        cov_raw=torch.zeros((5, 6)),
+        features=torch.zeros((5, 1)),
+        opacity=torch.ones(5),
+    )
+    # Drop the middle three; live: 0, 4
+    cs.prune(torch.tensor([True, False, False, False, True]))
+    assert cs.count == 2
+    assert cs.n_live == 5
+    cs.compact()
+    assert cs.n_live == 2
+    pos, _, _, _ = cs.active_view()
+    # After compaction, the two survivors live at slots 0 and 1
+    torch.testing.assert_close(pos[0], torch.tensor([0.0, 0.0, 0.0]))
+    torch.testing.assert_close(pos[1], torch.tensor([4.0, 0.0, 0.0]))
+
+
 def test_canvas_state_reset_clears_all_live_gaussians():
     cs = NDCanvasState.empty(capacity=4, feature_dim=1)
     cs.add(

@@ -104,6 +104,14 @@ def main() -> int:
     parser.add_argument("--latent-rank", type=int, default=16)
     parser.add_argument("--canvas-capacity", type=int, default=4096)
     parser.add_argument("--backbone-blocks", type=int, default=4)
+    parser.add_argument(
+        "--backbone-kind",
+        default="placeholder",
+        choices=("placeholder", "hat_tiny", "hat_small", "hat_l"),
+        help="Backbone selection. 'hat_tiny' = v7 Pico teacher; "
+             "'hat_small' = Standard; 'hat_l' = Heavy; 'placeholder' "
+             "= small ConvNet (testing only).",
+    )
     parser.add_argument("--log-every", type=int, default=20)
     parser.add_argument("--ckpt-every", type=int, default=500)
     parser.add_argument("--lambda-charbonnier", type=float, default=1.0)
@@ -127,6 +135,7 @@ def main() -> int:
         latent_rank=args.latent_rank,
         canvas_capacity=args.canvas_capacity,
         backbone_blocks=args.backbone_blocks,
+        backbone_kind=args.backbone_kind,
     )
     model = V7Model(cfg).to(device)
     model.allocate_canvas(device)
