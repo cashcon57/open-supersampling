@@ -1498,6 +1498,48 @@
         border-left: 0;
       }
     }
+    /* F3 — Mobile viz control stacking (≤ 480px).
+       Selector full-width on row 1, Compare + Play side-by-side on row 2,
+       fps slider hidden until Play has been pressed (body.global-viz-playing). */
+    @media (max-width: 480px) {
+      #global-viz-section header > div.flex {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0.5rem;
+        width: 100%;
+        align-items: center;
+      }
+      #global-viz-section header > div.flex > label[for="global-viz-run-select"] {
+        grid-column: 1 / -1;
+        font-size: 0.75rem;
+      }
+      #global-viz-section #global-viz-run-select {
+        grid-column: 1 / -1;
+        width: 100%;
+        min-width: 0;
+        box-sizing: border-box;
+      }
+      #global-viz-section #global-viz-compare-btn,
+      #global-viz-section #global-viz-play-btn {
+        width: 100%;
+        min-width: 0;
+        box-sizing: border-box;
+        text-align: center;
+      }
+      /* fps label/slider/value row — hide entirely until Play has been pressed. */
+      #global-viz-section header > div.flex > label:has(#global-viz-fps-slider) {
+        grid-column: 1 / -1;
+        display: none;
+        flex-direction: row;
+        align-items: center;
+        gap: 0.5rem;
+        width: 100%;
+      }
+      body.global-viz-playing #global-viz-section header > div.flex > label:has(#global-viz-fps-slider) {
+        display: flex;
+      }
+      #global-viz-section #global-viz-fps-slider { flex: 1 1 auto; min-width: 0; }
+    }
   </style>
 </head>
 <body class="min-h-screen bg-zinc-950 text-zinc-100 antialiased">
@@ -1519,11 +1561,21 @@
           <p class="mt-4 text-xs font-semibold uppercase tracking-wide text-cyan-300">OpenSuperSampling</p>
           <h1 id="page-headline" class="mt-2 text-3xl font-semibold tracking-normal text-zinc-50 sm:text-4xl" data-text>OpenSuperSampling — vendor-neutral SR + frame extrapolation</h1>
           <p class="mt-3 max-w-6xl text-sm leading-6 text-zinc-300" data-subtext>OpenSuperSampling is training a unified game reconstruction pipeline for super-resolution and frame extrapolation from one temporal model.</p>
-          <div class="mt-3 rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs leading-5 text-amber-100" role="note">
-            <span class="font-semibold uppercase tracking-wide text-amber-300">Research model — not the end-user inference model.</span>
-            Every run shown on this dashboard (v5, v6.1, v6.2-pico-002, …) is a <strong>research / teacher</strong> model. The backbone (HAT-Tiny) is too expensive for real-time game upscaling: measured FP16 eager forward is ~54 ms at 270×480 LR and ~1,890 ms at 1920×1080 LR on RTX 3080 Ti (idle), versus a &lt;2 ms DLSS/FSR-class budget. The end-user shipping model will be a ≤1M-param student distilled from these teachers, in TensorRT FP8 + custom cross-vendor kernels — that student is not yet trained and is not on this dashboard. See <a class="underline hover:text-amber-200" href="https://github.com/cashcon57/open-supersampling/blob/main/docs/research/hypotheses/H006-hat-tiny-actual-ms.md">H006</a> and the v6.2 architecture spec.
-          </div>
-          <p class="mt-2 max-w-6xl text-xs leading-5 text-zinc-500" data-dim>v6 notes: HAT-Tiny is the small HAT backbone used as the <strong>research teacher</strong> (not the shipping inference model); GS-STVSR and EWA describe the temporal canvas math; Net2Net is the expansion path; Charbonnier trains regression; Bicubic, DLSS, FSR, and XeSS are comparison anchors; PSNR and LPIPS stay as quality gauges; SDR ships first, HDR follows.</p>
+          <p id="hero-status-line" class="mt-3 font-mono text-sm text-cyan-200" data-text aria-live="polite">loading status…</p>
+          <details id="hero-arch-disclosure" class="mt-3 max-w-6xl rounded-md border border-zinc-800 bg-zinc-950/40 text-zinc-300">
+            <summary id="hero-arch-summary" class="cursor-pointer select-none px-3 py-2 text-sm font-medium text-cyan-200 hover:text-cyan-100">What's new in this arch?</summary>
+            <div class="border-t border-zinc-800 px-3 py-3 space-y-3">
+              <div class="rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs leading-5 text-amber-100" role="note">
+                <span class="font-semibold uppercase tracking-wide text-amber-300">Research model — not the end-user inference model.</span>
+                Every run shown on this dashboard (v5, v6.1, v6.2-pico-002, …) is a <strong>research / teacher</strong> model. The backbone (HAT-Tiny) is too expensive for real-time game upscaling: measured FP16 eager forward is ~54 ms at 270×480 LR and ~1,890 ms at 1920×1080 LR on RTX 3080 Ti (idle), versus a &lt;2 ms DLSS/FSR-class budget. The end-user shipping model will be a ≤1M-param student distilled from these teachers, in TensorRT FP8 + custom cross-vendor kernels — that student is not yet trained and is not on this dashboard. See <a class="underline hover:text-amber-200" href="https://github.com/cashcon57/open-supersampling/blob/main/docs/research/hypotheses/H006-hat-tiny-actual-ms.md">H006</a> and the v6.2 architecture spec.
+              </div>
+              <p class="text-xs leading-5 text-zinc-500" data-dim>v6 notes: HAT-Tiny is the small HAT backbone used as the <strong>research teacher</strong> (not the shipping inference model); GS-STVSR and EWA describe the temporal canvas math; Net2Net is the expansion path; Charbonnier trains regression; Bicubic, DLSS, FSR, and XeSS are comparison anchors; PSNR and LPIPS stay as quality gauges; SDR ships first, HDR follows.</p>
+            </div>
+          </details>
+          <a id="hero-latest-viz" href="#global-viz-section" class="mt-3 inline-block max-w-full overflow-hidden rounded-md border border-zinc-800 bg-zinc-950/60" data-action="open-visual-history" aria-label="Open visual history" hidden>
+            <img id="hero-latest-viz-img" alt="Latest training visual" class="block h-auto w-full object-contain" style="max-width: 256px;" loading="lazy" decoding="async">
+            <span id="hero-latest-viz-caption" class="block px-2 py-1 font-mono text-[10px] text-zinc-400" data-dim></span>
+          </a>
           <div class="mt-4 flex flex-wrap items-center gap-3 text-sm text-zinc-400" data-subtext>
             <a class="font-medium text-cyan-300 hover:text-cyan-200" href="https://github.com/cashcon57/open-supersampling">GitHub repo</a>
             <span class="hidden text-zinc-700 sm:inline">/</span>
@@ -7246,6 +7298,7 @@ function renderHero(data) {
   document.getElementById("hero-active-title").innerHTML = `${escapeHtml(active.label || active.name)} ${trainingIndicatorHtml(active)}`;
   const latest = active.latest_metrics || {};
   document.getElementById("hero-active-meta").innerHTML = `step ${Number(active.latest_step || 0).toLocaleString()} / loss ${fmtNumber(latest.loss_total ?? latest.loss ?? latest.total, 5)} ${directionHtml("loss_total")}`;
+  renderHeroCompactStatus(active);
   const progress = document.getElementById("hero-progress");
   if (progress) {
     progress.hidden = !active.active;
@@ -7271,6 +7324,77 @@ function renderHero(data) {
   renderHeroEtaBanner(active);
   renderSignalCostPanel(active);
   setupVisitBanner(active);
+}
+
+// Derive an architecture label like "v7" / "v6.1" / "v6.2" from a run.
+// Falls back to scanning the run name when arch_version is not set in data.json.
+function archLabelForRun(run) {
+  if (!run) return "model";
+  const explicit = String(run.arch_version || "").trim();
+  if (explicit) return explicit;
+  const haystack = `${run.label || ""} ${run.name || ""}`;
+  const m = haystack.match(/v\d+(?:\.\d+)?/i);
+  return m ? m[0].toLowerCase() : (run.label || run.name || "model");
+}
+
+// Single-line mobile-first hero status + "What's new in <arch>?" disclosure
+// summary + latest visual thumbnail. The verbose status under #hero-active-meta
+// is preserved so existing layouts/at-a-glance card keep working; this just
+// adds the pre-fold compact line below the headline.
+function renderHeroCompactStatus(active) {
+  const statusLine = document.getElementById("hero-status-line");
+  const summary = document.getElementById("hero-arch-summary");
+  const vizAnchor = document.getElementById("hero-latest-viz");
+  const vizImg = document.getElementById("hero-latest-viz-img");
+  const vizCaption = document.getElementById("hero-latest-viz-caption");
+  const arch = archLabelForRun(active);
+  let state;
+  if (active && active.active) {
+    state = "training";
+  } else if (active && (active.history?.status || "").toLowerCase().includes("finish")) {
+    state = "finished";
+  } else {
+    state = "paused";
+  }
+  const step = Number(active?.latest_step || 0);
+  const target = targetStepsForRun(active);
+  const latest = active?.latest_metrics || {};
+  const lossVal = latest.loss_total ?? latest.loss ?? latest.total;
+  const lossStr = fmtNumber(lossVal, 5);
+  const vizFiles = Array.isArray(active?.viz_pngs) ? active.viz_pngs : [];
+  const latestViz = vizFiles.slice().sort((a, b) => stepFromName(a) - stepFromName(b)).at(-1) || "";
+  const vizStep = latestViz ? stepFromName(latestViz) : null;
+  const vizStr = vizStep ? `step ${Number(vizStep).toLocaleString()}` : "no viz yet";
+  if (statusLine) {
+    // textContent (no innerHTML) — these are all numeric / known strings,
+    // but routing through textContent keeps the XSS surface zero.
+    statusLine.textContent = `${arch} is ${state} · step ${step.toLocaleString()} / ${target.toLocaleString()} · loss ${lossStr} · viz @ ${vizStr}`;
+  }
+  if (summary) {
+    summary.textContent = `What's new in ${arch}?`;
+  }
+  if (vizAnchor && vizImg && vizCaption) {
+    if (latestViz && active?.name) {
+      const url = `runs/${encodeURIComponent(active.name)}/${encodeURIComponent(latestViz)}`;
+      vizImg.src = url;
+      vizImg.alt = `${arch} latest visual at step ${vizStep || "?"}`;
+      vizCaption.textContent = `${arch} · ${vizStr}`;
+      vizAnchor.hidden = false;
+      vizAnchor.dataset.runName = active.name;
+      if (!vizAnchor._oss_bound) {
+        vizAnchor._oss_bound = true;
+        vizAnchor.addEventListener("click", (ev) => {
+          if (typeof window.__ossOpenVisualHistory === "function") {
+            ev.preventDefault();
+            window.__ossOpenVisualHistory(vizAnchor.dataset.runName || "");
+          }
+          // Otherwise fall through to the #global-viz-section anchor.
+        });
+      }
+    } else {
+      vizAnchor.hidden = true;
+    }
+  }
 }
 
 // Render the (previously per-run) cost panel into the bottom-of-signal host.
@@ -7903,8 +8027,14 @@ function bindGlobalVizPlaybackControls() {
   if (btn && !btn._oss_bound) {
     btn._oss_bound = true;
     btn.addEventListener("click", () => {
-      if (globalVizPlayback.intervalHandle) stopGlobalVizPlayback();
-      else startGlobalVizPlayback();
+      if (globalVizPlayback.intervalHandle) {
+        stopGlobalVizPlayback();
+      } else {
+        startGlobalVizPlayback();
+        // F3: once Play has been pressed at least once on this session,
+        // reveal the fps slider on mobile (CSS uses body.global-viz-playing).
+        document.body.classList.add("global-viz-playing");
+      }
     });
   }
   if (fpsSlider && !fpsSlider._oss_bound) {
@@ -7915,6 +8045,14 @@ function bindGlobalVizPlaybackControls() {
       // Re-arm interval if currently playing so the new fps takes effect.
       if (globalVizPlayback.intervalHandle) startGlobalVizPlayback();
     });
+  }
+  // F3: hide Play entirely when the selected run has fewer than 2 viz_pngs —
+  // playback only makes sense with multiple steps to advance through.
+  if (btn) {
+    const runs = (lastKnownData?.runs || []);
+    const sel = runs.find((r) => r.name === _globalVizSelectedRun);
+    const count = (sel?.viz_pngs || []).length;
+    btn.hidden = count < 2;
   }
 }
 
