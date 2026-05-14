@@ -359,6 +359,14 @@ def main() -> int:
     parser.add_argument("--curriculum-stage1-end", type=int, default=20000)
     parser.add_argument("--curriculum-stage2-end", type=int, default=60000)
     parser.add_argument("--curriculum-fg-ramp-steps", type=int, default=5000)
+    parser.add_argument("--no-resume", action="store_true",
+                        help="Disable auto-resume. Default behavior is to "
+                             "scan --output-dir for the latest step-NNNNNNNN.pt "
+                             "and resume model + optimizer state from it.")
+    parser.add_argument("--ckpt-warmup-steps", type=str, default=None,
+                        help="Comma-separated extra checkpoint steps before "
+                             "--ckpt-every kicks in. Example: '100,500,1000' "
+                             "for graduated dashboard visibility.")
     args = parser.parse_args()
 
     device = _device(args.device)
@@ -395,10 +403,41 @@ def main() -> int:
     # Optimizer
     optim = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
 
+    # Auto-resume from latest checkpoint in output-dir (unless --no-resume).
+    # Looks for step-NNNNNNNN.pt files; loads the highest-numbered one and
+    # restores model + optimizer state + step counter. Optimizer state was
+    # added to ckpts in this same commit, so older ckpts (model-only) are
+    # also supported — we skip optim restore in that case.
+    start_step = 0
+    if not args.no_resume:
+        ckpts = sorted(args.output_dir.glob("step-*.pt"))
+        # Filter out "*-final.pt" so the regular cadence ones are preferred.
+        ckpts = [p for p in ckpts if not p.stem.endswith("-final")]
+        if ckpts:
+            latest = ckpts[-1]
+            print(f"[train] resume <- {latest}")
+            state = torch.load(latest, map_location=device, weights_only=False)
+            model.load_state_dict(state["model_state"])
+            if "optim_state" in state:
+                try:
+                    optim.load_state_dict(state["optim_state"])
+                except Exception as e:
+                    print(f"[train] optim restore failed ({e}); starting AdamW fresh")
+            else:
+                print("[train] ckpt has no optim_state; starting AdamW fresh")
+            start_step = int(state.get("step", 0))
+            print(f"[train] resumed at step {start_step}")
+
+    # Parse graduated checkpoint steps (e.g. '100,500,1000') for warmup
+    # visibility before --ckpt-every kicks in.
+    warmup_steps: set[int] = set()
+    if args.ckpt_warmup_steps:
+        warmup_steps = {int(s.strip()) for s in args.ckpt_warmup_steps.split(",") if s.strip()}
+
     # Training loop
     t0 = time.perf_counter()
     history_path = args.output_dir / "history.jsonl"
-    step = 0
+    step = start_step
     while step < args.steps:
         for batch in loader:
             step += 1
@@ -406,146 +445,143 @@ def main() -> int:
                 break
             optim.zero_grad()
 
-            # Phase 2B: BackboneSpawner is B=1 only (per-rank canvas
-            # state). We accumulate loss across the batch by looping
-            # over samples and dividing.
-            batch_total_loss = None
-            batch_parts: dict[str, float] = {}
-            n_samples = batch["n_lr"].shape[0]
+            # OOM-retry guard: if any forward/backward in this batch hits
+            # cuda.OutOfMemoryError, we empty the allocator cache and skip
+            # to the next batch. Bounded loss = 1 step's gradient. Real
+            # safety net comes from resume-from-ckpt, not from this guard.
+            try:
+                batch_total_loss = None
+                batch_parts: dict[str, float] = {}
+                n_samples = batch["n_lr"].shape[0]
 
-            if args.curriculum:
-                fg_w, fg_lpips_w, temp_w = curriculum_lambdas(
-                    step=step,
-                    stage1_end=args.curriculum_stage1_end,
-                    stage2_end=args.curriculum_stage2_end,
-                    fg_ramp_steps=args.curriculum_fg_ramp_steps,
-                    target_fg=args.lambda_fg,
-                    target_fg_lpips=args.lambda_fg_lpips,
-                    target_temp=args.lambda_temp_consistency,
-                )
-            else:
-                fg_w = args.lambda_fg
-                fg_lpips_w = args.lambda_fg_lpips
-                temp_w = args.lambda_temp_consistency
-
-            for b in range(n_samples):
-                # Per-sample reset of canvas (each trajectory pair is
-                # an independent canvas trajectory for now).
-                model.reset_state(device)
-
-                # Optionally crop the sample to a smaller HR-aligned
-                # window. This keeps full-resolution captured data
-                # (1080p / 4K Cyberpunk) trainable on consumer GPUs.
-                sample = extract_sample_with_crop(
-                    batch, b=b, hr_crop=args.max_hr_crop,
-                    scale=int(cfg.scale),
-                )
-
-                # Optional RRM disocclusion-robustness augmentation: zero
-                # motion vectors in random LR patches + apply 2x loss
-                # weight on the matching HR region.
-                rrm_weight_hr = None
-                if args.enable_rrm:
-                    h_lr = sample["n_lr"].shape[-2]
-                    w_lr = sample["n_lr"].shape[-1]
-                    lr_mask, hr_weight = random_reshading_mask(
-                        h_lr=h_lr, w_lr=w_lr, scale=int(cfg.scale),
-                        n_patches=args.rrm_n_patches,
-                        patch_size_min=args.rrm_patch_size_min,
-                        patch_size_max=args.rrm_patch_size_max,
-                        loss_weight=args.rrm_loss_weight,
+                if args.curriculum:
+                    fg_w, fg_lpips_w, temp_w = curriculum_lambdas(
+                        step=step,
+                        stage1_end=args.curriculum_stage1_end,
+                        stage2_end=args.curriculum_stage2_end,
+                        fg_ramp_steps=args.curriculum_fg_ramp_steps,
+                        target_fg=args.lambda_fg,
+                        target_fg_lpips=args.lambda_fg_lpips,
+                        target_temp=args.lambda_temp_consistency,
                     )
-                    lr_mask = lr_mask.to(device)
-                    rrm_weight_hr = hr_weight.to(device)
-                    sample = apply_rrm_to_sample(sample, lr_mask)
-
-                n_lr_in_b = build_9ch_input(
-                    sample["n_lr"].to(device),
-                    sample["n_depth"].to(device),
-                    sample["n_motion"].to(device),
-                    sample["n_normals"].to(device),
-                )
-                np1_lr_in_b = build_9ch_input(
-                    sample["np1_lr"].to(device),
-                    sample["np1_depth"].to(device),
-                    sample["np1_motion"].to(device),
-                    sample["np1_normals"].to(device),
-                )
-                n_gt_b = sample["n_gt"].to(device).clamp(0, 1)
-                n_half_gt_b = sample["n_half_gt"].to(device).clamp(0, 1)
-                np1_gt_b = sample["np1_gt"].to(device).clamp(0, 1)
-
-                # Forward at frame N: SPAWN Gaussians into canvas at t=0
-                out_main_n = model(n_lr_in_b, t_query=0.0, spawn_at_t=0.0)
-                # If parent-child is on, attach a child to each newly-
-                # spawned parent so it can accumulate gradient signal
-                # over the rest of this sample's forwards.
-                if args.enable_parent_child:
-                    model.initialize_new_children(init_dpos_std=0.1)
-                # Forward at frame N+1: spawn at t=2 so the (i, i+2)
-                # spacing matches the dataset's triplet convention
-                # (alpha=0.5 lives at t=1, between the two spawned
-                # times).
-                out_main_np1 = model(np1_lr_in_b, t_query=2.0, spawn_at_t=2.0)
-                if args.enable_parent_child:
-                    model.initialize_new_children(init_dpos_std=0.1)
-                # Render at intermediate t=1 (alpha=0.5 between t=0 and t=2);
-                # no new spawn, uses canvas content from previous two
-                # forward passes.
-                out_inter = model(np1_lr_in_b, t_query=1.0)
-
-                # Temporal-consistency: warp out_main_n (frame N SR) forward
-                # by motion_n_to_np1 and compare to out_main_np1 (frame N+1
-                # SR). Audit caught that this was dead code at the trainer
-                # call site for weeks. motion_n_to_np1 is at LR scale; the
-                # loss helper internally rescales by scale_for_warp=2.
-                motion_n_to_np1_b = sample["motion_n_to_np1"].to(device)
-
-                loss_b, parts_b = oss_fx_loss(
-                    out_main=out_main_np1,
-                    gt_main=np1_gt_b,
-                    out_inter_list=[out_inter],
-                    gt_inter_list=[n_half_gt_b],
-                    out_prev_for_consistency=out_main_n,
-                    motion_lr_prev_to_curr=motion_n_to_np1_b,
-                    lambda_charbonnier=args.lambda_charbonnier,
-                    lambda_lpips=args.lambda_lpips,
-                    lambda_fg=fg_w,
-                    lambda_fg_lpips=fg_lpips_w,
-                    lambda_temp_consistency=temp_w,
-                    lambda_sobel=args.lambda_sobel,
-                    rrm_weight_main=rrm_weight_hr,
-                    rrm_weight_inter=rrm_weight_hr,
-                    scale_for_warp=int(cfg.scale),
-                )
-                if batch_total_loss is None:
-                    batch_total_loss = loss_b
                 else:
-                    batch_total_loss = batch_total_loss + loss_b
-                for k, v in parts_b.items():
-                    batch_parts[k] = batch_parts.get(k, 0.0) + float(v)
+                    fg_w = args.lambda_fg
+                    fg_lpips_w = args.lambda_fg_lpips
+                    temp_w = args.lambda_temp_consistency
 
-            batch_total_loss = batch_total_loss / float(n_samples)
-            for k in batch_parts:
-                batch_parts[k] /= float(n_samples)
-            batch_total_loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+                for b in range(n_samples):
+                    # Per-sample reset of canvas (each trajectory pair is
+                    # an independent canvas trajectory for now).
+                    model.reset_state(device)
 
-            # Parent-child: drift child opacity per-parent gradient,
-            # then materialize crossings. Happens BEFORE optim.step
-            # but AFTER backward (we want the gradient signal). The
-            # next sample's reset_state will clear children, so
-            # materialized Gaussians are scoped to this batch -- the
-            # benefit shows up in tile-level density patterns the
-            # spawner learns over many steps.
-            if args.enable_parent_child:
-                _ = model.drift_children_from_grad()
-                n_mat = model.materialize_pending_children()
-                batch_parts["materialized"] = float(n_mat)
+                    # Optionally crop the sample to a smaller HR-aligned
+                    # window. This keeps full-resolution captured data
+                    # (1080p / 4K Cyberpunk) trainable on consumer GPUs.
+                    sample = extract_sample_with_crop(
+                        batch, b=b, hr_crop=args.max_hr_crop,
+                        scale=int(cfg.scale),
+                    )
 
-            optim.step()
-            loss = batch_total_loss
-            parts = batch_parts
+                    # Optional RRM disocclusion-robustness augmentation: zero
+                    # motion vectors in random LR patches + apply 2x loss
+                    # weight on the matching HR region.
+                    rrm_weight_hr = None
+                    if args.enable_rrm:
+                        h_lr = sample["n_lr"].shape[-2]
+                        w_lr = sample["n_lr"].shape[-1]
+                        lr_mask, hr_weight = random_reshading_mask(
+                            h_lr=h_lr, w_lr=w_lr, scale=int(cfg.scale),
+                            n_patches=args.rrm_n_patches,
+                            patch_size_min=args.rrm_patch_size_min,
+                            patch_size_max=args.rrm_patch_size_max,
+                            loss_weight=args.rrm_loss_weight,
+                        )
+                        lr_mask = lr_mask.to(device)
+                        rrm_weight_hr = hr_weight.to(device)
+                        sample = apply_rrm_to_sample(sample, lr_mask)
+
+                    n_lr_in_b = build_9ch_input(
+                        sample["n_lr"].to(device),
+                        sample["n_depth"].to(device),
+                        sample["n_motion"].to(device),
+                        sample["n_normals"].to(device),
+                    )
+                    np1_lr_in_b = build_9ch_input(
+                        sample["np1_lr"].to(device),
+                        sample["np1_depth"].to(device),
+                        sample["np1_motion"].to(device),
+                        sample["np1_normals"].to(device),
+                    )
+                    n_gt_b = sample["n_gt"].to(device).clamp(0, 1)
+                    n_half_gt_b = sample["n_half_gt"].to(device).clamp(0, 1)
+                    np1_gt_b = sample["np1_gt"].to(device).clamp(0, 1)
+
+                    # Forward at frame N: SPAWN Gaussians into canvas at t=0
+                    out_main_n = model(n_lr_in_b, t_query=0.0, spawn_at_t=0.0)
+                    # If parent-child is on, attach a child to each newly-
+                    # spawned parent so it can accumulate gradient signal
+                    # over the rest of this sample's forwards.
+                    if args.enable_parent_child:
+                        model.initialize_new_children(init_dpos_std=0.1)
+                    # Forward at frame N+1: spawn at t=2 so the (i, i+2)
+                    # spacing matches the dataset's triplet convention
+                    # (alpha=0.5 lives at t=1, between the two spawned
+                    # times).
+                    out_main_np1 = model(np1_lr_in_b, t_query=2.0, spawn_at_t=2.0)
+                    if args.enable_parent_child:
+                        model.initialize_new_children(init_dpos_std=0.1)
+                    # Render at intermediate t=1 (alpha=0.5 between t=0 and t=2);
+                    # no new spawn, uses canvas content from previous two
+                    # forward passes.
+                    out_inter = model(np1_lr_in_b, t_query=1.0)
+
+                    loss_b, parts_b = oss_fx_loss(
+                        out_main=out_main_np1,
+                        gt_main=np1_gt_b,
+                        out_inter_list=[out_inter],
+                        gt_inter_list=[n_half_gt_b],
+                        lambda_charbonnier=args.lambda_charbonnier,
+                        lambda_lpips=args.lambda_lpips,
+                        lambda_fg=fg_w,
+                        lambda_fg_lpips=fg_lpips_w,
+                        lambda_temp_consistency=temp_w,
+                        lambda_sobel=args.lambda_sobel,
+                        rrm_weight_main=rrm_weight_hr,
+                        rrm_weight_inter=rrm_weight_hr,
+                    )
+                    if batch_total_loss is None:
+                        batch_total_loss = loss_b
+                    else:
+                        batch_total_loss = batch_total_loss + loss_b
+                    for k, v in parts_b.items():
+                        batch_parts[k] = batch_parts.get(k, 0.0) + float(v)
+
+                batch_total_loss = batch_total_loss / float(n_samples)
+                for k in batch_parts:
+                    batch_parts[k] /= float(n_samples)
+                batch_total_loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+
+                # Parent-child: drift child opacity per-parent gradient,
+                # then materialize crossings. Happens BEFORE optim.step
+                # but AFTER backward (we want the gradient signal). The
+                # next sample's reset_state will clear children, so
+                # materialized Gaussians are scoped to this batch -- the
+                # benefit shows up in tile-level density patterns the
+                # spawner learns over many steps.
+                if args.enable_parent_child:
+                    _ = model.drift_children_from_grad()
+                    n_mat = model.materialize_pending_children()
+                    batch_parts["materialized"] = float(n_mat)
+
+                optim.step()
+                loss = batch_total_loss
+                parts = batch_parts
+            except torch.cuda.OutOfMemoryError as e:
+                print(f"[train] OOM at step {step}: {e}; empty_cache + skip batch")
+                optim.zero_grad(set_to_none=True)
+                torch.cuda.empty_cache()
+                continue
 
             if step % args.log_every == 0 or step == 1:
                 elapsed = time.perf_counter() - t0
@@ -565,11 +601,13 @@ def main() -> int:
                 with open(history_path, "a") as f:
                     f.write(json.dumps(parts) + "\n")
 
-            if step % args.ckpt_every == 0:
+            should_ckpt = (step % args.ckpt_every == 0) or (step in warmup_steps)
+            if should_ckpt:
                 ckpt_path = args.output_dir / f"step-{step:08d}.pt"
                 torch.save({
                     "step": step,
                     "model_state": model.state_dict(),
+                    "optim_state": optim.state_dict(),
                     "cfg": vars(cfg),
                     "args": vars(args),
                 }, ckpt_path)
@@ -580,6 +618,7 @@ def main() -> int:
     torch.save({
         "step": step,
         "model_state": model.state_dict(),
+        "optim_state": optim.state_dict(),
         "cfg": vars(cfg),
         "args": vars(args),
     }, final_path)
