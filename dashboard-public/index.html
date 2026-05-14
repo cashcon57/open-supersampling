@@ -1748,6 +1748,12 @@
           </p>
         </div>
         <div class="flex flex-wrap items-center gap-3 text-sm">
+          <span class="text-zinc-400" data-dim>Run:</span>
+          <select id="oss-fx-run-select" class="rounded-md border border-zinc-700 bg-zinc-950 px-3 py-1 text-xs font-mono text-zinc-200 focus:border-emerald-500" aria-label="OSS-FX run version">
+            <option value="srcnn-v6.2-pico-002" selected>v6.2-pico-002 (baseline)</option>
+            <option value="srcnn-v7.0-pico-005">v7.0-pico-005 (training now)</option>
+          </select>
+          <span id="oss-fx-run-status" class="text-xs font-mono text-zinc-500" data-dim></span>
           <span class="text-zinc-400" data-dim>Mode:</span>
           <button id="oss-fx-mode-sr" class="rounded-md border border-emerald-500/60 bg-emerald-900/30 px-3 py-1 text-xs font-mono text-emerald-200" type="button" aria-pressed="true">SR only · 30 fps</button>
           <button id="oss-fx-mode-fg" class="rounded-md border border-zinc-700 bg-zinc-950/40 px-3 py-1 text-xs font-mono text-zinc-300 hover:border-emerald-500" type="button" aria-pressed="false">SR + FG · 60 fps</button>
@@ -1764,31 +1770,108 @@
         (() => {
           const video = document.getElementById("oss-fx-video");
           const source = document.getElementById("oss-fx-video-source");
+          const runSelect = document.getElementById("oss-fx-run-select");
+          const runStatus = document.getElementById("oss-fx-run-status");
           if (!video || !source) return;
           const buttons = {
-            sr: { el: document.getElementById("oss-fx-mode-sr"), src: video.dataset.srcSr },
-            fg: { el: document.getElementById("oss-fx-mode-fg"), src: video.dataset.srcFg },
-            gt: { el: document.getElementById("oss-fx-mode-gt"), src: video.dataset.srcGt },
+            sr: { el: document.getElementById("oss-fx-mode-sr") },
+            fg: { el: document.getElementById("oss-fx-mode-fg") },
+            gt: { el: document.getElementById("oss-fx-mode-gt") },
           };
+          let activeMode = "sr";
+
+          const FIRST_RENDER_STEP = {
+            "srcnn-v6.2-pico-002": 0,
+            "srcnn-v7.0-pico-005": 5000,
+          };
+
+          function srcFor(runId, mode) {
+            const file = mode === "sr" ? "model_sr_only.mp4"
+                       : mode === "fg" ? "model_sr_fg.mp4"
+                       : "gt.mp4";
+            return `runs/${runId}/oss-fx/${file}`;
+          }
+
+          function setActiveMode(mode) {
+            activeMode = mode;
+            for (const [k, b] of Object.entries(buttons)) {
+              if (!b.el) continue;
+              const active = (k === mode);
+              b.el.setAttribute("aria-pressed", String(active));
+              b.el.classList.toggle("border-emerald-500/60", active);
+              b.el.classList.toggle("bg-emerald-900/30", active);
+              b.el.classList.toggle("text-emerald-200", active);
+              b.el.classList.toggle("border-zinc-700", !active);
+              b.el.classList.toggle("bg-zinc-950/40", !active);
+              b.el.classList.toggle("text-zinc-300", !active);
+            }
+          }
+
+          async function probeVideo(url) {
+            try {
+              const r = await fetch(url, { method: "HEAD", cache: "no-store" });
+              return r.ok;
+            } catch (e) {
+              return false;
+            }
+          }
+
+          async function fetchLatestStep(runId) {
+            try {
+              const r = await fetch(`runs/${runId}/history.jsonl`, { cache: "no-store" });
+              if (!r.ok) return null;
+              const text = await r.text();
+              const lines = text.trim().split(/\r?\n/).filter(Boolean);
+              if (!lines.length) return null;
+              const last = JSON.parse(lines[lines.length - 1]);
+              return Number(last.step) || null;
+            } catch (e) {
+              return null;
+            }
+          }
+
+          async function loadRun(runId) {
+            const url = srcFor(runId, activeMode);
+            const exists = await probeVideo(url);
+            if (exists) {
+              source.src = url;
+              video.style.display = "";
+              video.load();
+              video.play().catch(() => {});
+              if (runStatus) runStatus.textContent = "";
+              return;
+            }
+            video.style.display = "none";
+            const firstStep = FIRST_RENDER_STEP[runId] ?? 5000;
+            const latest = await fetchLatestStep(runId);
+            let msg;
+            if (latest === null) {
+              msg = `Frame Extrapolation preview not rendered yet for ${runId}. First render scheduled around step ${firstStep.toLocaleString()}.`;
+            } else if (latest < firstStep) {
+              const remaining = firstStep - latest;
+              msg = `Frame Extrapolation preview not rendered yet — currently at step ${latest.toLocaleString()}. First render around step ${firstStep.toLocaleString()} (${remaining.toLocaleString()} steps to go).`;
+            } else {
+              msg = `Frame Extrapolation video missing for ${runId} at step ${latest.toLocaleString()}. Render daemon may be lagging — check back shortly.`;
+            }
+            if (runStatus) runStatus.textContent = msg;
+          }
+
           for (const [key, b] of Object.entries(buttons)) {
             if (!b.el) continue;
             b.el.addEventListener("click", () => {
-              source.src = b.src;
-              video.load();
-              video.play().catch(() => {});
-              for (const [k, other] of Object.entries(buttons)) {
-                if (!other.el) continue;
-                const active = (k === key);
-                other.el.setAttribute("aria-pressed", String(active));
-                other.el.classList.toggle("border-emerald-500/60", active);
-                other.el.classList.toggle("bg-emerald-900/30", active);
-                other.el.classList.toggle("text-emerald-200", active);
-                other.el.classList.toggle("border-zinc-700", !active);
-                other.el.classList.toggle("bg-zinc-950/40", !active);
-                other.el.classList.toggle("text-zinc-300", !active);
-              }
+              setActiveMode(key);
+              const runId = runSelect ? runSelect.value : "srcnn-v6.2-pico-002";
+              loadRun(runId);
             });
           }
+
+          if (runSelect) {
+            runSelect.addEventListener("change", () => {
+              loadRun(runSelect.value);
+            });
+          }
+
+          loadRun(runSelect ? runSelect.value : "srcnn-v6.2-pico-002");
         })();
       </script>
     </section>
@@ -2150,14 +2233,21 @@ const GLOSSARY_PATTERN = new RegExp(
 );
 
 const lossComponentDefs = [
-  { key: "loss_charbonnier", label: "loss_charbonnier", color: colors.charbonnier, aliases: ["l1", "t_l1"] },
-  { key: "loss_lpips", label: "loss_lpips", color: colors.lpips, aliases: ["lpips", "t_lpips"] },
-  { key: "loss_msvgg", label: "loss_msvgg", color: colors.msvgg, aliases: [] },
-  { key: "loss_sobel", label: "loss_sobel", color: colors.sobel, aliases: [] },
-  { key: "loss_tc", label: "loss_tc", color: colors.tc, aliases: [] },
-  { key: "loss_wavelet", label: "loss_wavelet", color: colors.wavelet, aliases: [] },
-  { key: "loss_gan_g", label: "loss_gan_g", color: colors.ganG, aliases: [] },
-  { key: "loss_v5_kd", label: "loss_v5_kd", color: colors.v5kd, aliases: [] },
+  // v6 keys (loss_charbonnier, loss_lpips, ...) are the legacy schema.
+  // v7 history.jsonl writes the SR-branch components as
+  // sr_charbonnier / sr_lpips / sr_sobel and the FG-branch as
+  // fg_charbonnier / fg_lpips / temp_consistency. Adding both schemas
+  // as aliases means one chart panel renders both run families.
+  { key: "loss_charbonnier", label: "Charbonnier (SR)", color: colors.charbonnier, aliases: ["l1", "t_l1", "sr_charbonnier"] },
+  { key: "loss_lpips",       label: "LPIPS (SR)",       color: colors.lpips,       aliases: ["lpips", "t_lpips", "sr_lpips"] },
+  { key: "loss_sobel",       label: "Sobel HF (SR)",    color: colors.sobel,       aliases: ["sr_sobel"] },
+  { key: "loss_fg",          label: "FG Charbonnier",   color: colors.msvgg,       aliases: ["fg_charbonnier"] },
+  { key: "loss_fg_lpips",    label: "FG LPIPS",         color: colors.wavelet,     aliases: ["fg_lpips"] },
+  { key: "loss_temp",        label: "Temp consistency", color: colors.tc,          aliases: ["loss_tc", "temp_consistency"] },
+  { key: "loss_msvgg",       label: "loss_msvgg",       color: colors.msvgg,       aliases: [] },
+  { key: "loss_wavelet",     label: "loss_wavelet",     color: colors.wavelet,     aliases: [] },
+  { key: "loss_gan_g",       label: "loss_gan_g",       color: colors.ganG,        aliases: [] },
+  { key: "loss_v5_kd",       label: "loss_v5_kd",       color: colors.v5kd,        aliases: [] },
 ];
 
 const POLL_MS = 30000;
@@ -3011,7 +3101,18 @@ function hasMetricKey(rows, key, aliases = []) {
 }
 
 function trainingPsnrValue(row) {
-  return row?.psnr_db ?? row?.psnr ?? row?.t_psnr ?? row?.psnr_proxy;
+  // v6 schema writes psnr/psnr_db directly; v7 schema doesn't write any
+  // PSNR field (training is loss-based) but DOES write sr_charbonnier
+  // which approximates sqrt(MSE). PSNR (1.0 data range) = -20 log10(sqrt(MSE))
+  // ≈ -20 log10(sr_charbonnier). Fall through to that derivation so the
+  // Live PSNR chart populates for v7 runs without a trainer change.
+  const direct = row?.psnr_db ?? row?.psnr ?? row?.t_psnr ?? row?.psnr_proxy;
+  if (direct !== undefined && direct !== null) return direct;
+  const char = row?.sr_charbonnier ?? row?.loss_charbonnier ?? row?.l1 ?? row?.t_l1;
+  if (char !== undefined && char !== null && char > 0) {
+    return -20.0 * Math.log10(Math.max(1e-8, Number(char)));
+  }
+  return undefined;
 }
 
 function hasTrainingPsnrSeries(rows) {
@@ -5118,9 +5219,86 @@ function renderLossChart(canvas, run) {
   return bindChartControls(attachEventAnnotations(new Chart(canvas, { type: "line", data: { datasets }, options }), run, canvas), canvas);
 }
 
+// Schema-agnostic loss-component auto-discovery. A new training run can
+// write any subset of loss components in its history.jsonl rows; the
+// dashboard learns the columns on data load instead of requiring a code
+// patch for every architecture revision. The regex below matches the
+// common SR loss-term naming conventions (loss_*, *_charbonnier, *_lpips,
+// *_sobel, *_tc, *_temp, fg_*, wavelet, gan_*, *_kd) while explicitly
+// excluding canvas-health metrics, curriculum lambdas, and step counters.
+const LOSS_TERM_RE = /^(loss_|.*charbonnier$|.*lpips$|.*sobel$|.*_tc$|.*temp.*|^fg_|^wavelet|^gan_|.*_kd$|^l1$|^t_l1$|^t_lpips$)/i;
+const LOSS_TERM_EXCLUDE = new Set([
+  "total", "loss", "loss_total",
+  "step", "elapsed_s",
+  "lambda_fg", "lambda_fg_lpips", "lambda_temp", "lambda_charbonnier", "lambda_lpips",
+  "canvas_count", "canvas_mean_opacity", "canvas_mean_L_diag",
+  "materialized",
+  "psnr", "psnr_db", "psnr_proxy", "t_psnr",
+]);
+function discoverLossTermsFromRows(rows) {
+  if (!rows || !rows.length) return [];
+  // Union all keys across rows so we catch components that only appear
+  // once curriculum stage 2 kicks in (e.g. fg_charbonnier at step 20K).
+  const keys = new Set();
+  for (const row of rows) {
+    if (!row || typeof row !== "object") continue;
+    for (const k of Object.keys(row)) {
+      if (LOSS_TERM_EXCLUDE.has(k)) continue;
+      if (typeof row[k] !== "number") continue;
+      if (!LOSS_TERM_RE.test(k)) continue;
+      keys.add(k);
+    }
+  }
+  // Stable order: prefer well-known v6 keys first, then v7, then everything else alphabetical.
+  const preferred = [
+    "loss_charbonnier", "sr_charbonnier", "l1", "t_l1",
+    "loss_lpips", "sr_lpips", "t_lpips", "lpips",
+    "loss_sobel", "sr_sobel",
+    "fg_charbonnier", "fg_lpips", "temp_consistency",
+    "loss_msvgg", "loss_wavelet", "loss_gan_g", "loss_tc", "loss_v5_kd",
+  ];
+  const ordered = preferred.filter((k) => keys.has(k));
+  const extras = Array.from(keys).filter((k) => !preferred.includes(k)).sort();
+  return [...ordered, ...extras];
+}
+function colorForLossTerm(key) {
+  // Stable hash → palette lookup so a given term keeps the same color
+  // across page reloads without us hardcoding a per-key color table.
+  // We still respect the well-known palette assignments where they exist.
+  const named = {
+    "loss_charbonnier": colors.charbonnier, "sr_charbonnier": colors.charbonnier, "l1": colors.charbonnier, "t_l1": colors.charbonnier,
+    "loss_lpips": colors.lpips, "sr_lpips": colors.lpips, "lpips": colors.lpips, "t_lpips": colors.lpips,
+    "loss_sobel": colors.sobel, "sr_sobel": colors.sobel,
+    "loss_msvgg": colors.msvgg, "fg_charbonnier": colors.msvgg,
+    "loss_wavelet": colors.wavelet, "fg_lpips": colors.wavelet,
+    "loss_tc": colors.tc, "temp_consistency": colors.tc,
+    "loss_gan_g": colors.ganG,
+    "loss_v5_kd": colors.v5kd,
+  };
+  if (named[key]) return named[key];
+  // Fallback: hash key → HSL hue
+  let hash = 0;
+  for (let i = 0; i < key.length; i++) hash = ((hash << 5) - hash + key.charCodeAt(i)) | 0;
+  const hue = Math.abs(hash) % 360;
+  return `hsl(${hue}, 60%, 60%)`;
+}
+
 function renderLossDecompositionChart(canvas, run) {
   const rows = run.loss_curve || [];
-  const datasets = lossComponentDefs.filter((def) => hasMetricKey(rows, def.key, def.aliases)).map((def) => ({
+  // Auto-discover loss terms from the data so new training runs don't
+  // need a dashboard patch. lossComponentDefs is kept as the legacy
+  // fallback for runs whose schemas don't match the auto-discovery regex.
+  const dynamicTerms = discoverLossTermsFromRows(rows);
+  const dynamicDefs = dynamicTerms.map((key) => ({
+    key,
+    label: key,
+    color: colorForLossTerm(key),
+    aliases: [],
+  }));
+  const effectiveDefs = dynamicDefs.length > 0
+    ? dynamicDefs
+    : lossComponentDefs.filter((def) => hasMetricKey(rows, def.key, def.aliases));
+  const datasets = effectiveDefs.map((def) => ({
     label: def.label,
     data: xyPositive(rows, def.key, def.aliases),
     borderColor: def.color,
@@ -7279,7 +7457,7 @@ function renderRun(run, index, openByRun = new Map()) {
   const psnrChartBody = hasTrainingPsnrSeries(rows)
     ? `<div class="chart-wrap mt-3"><canvas id="${psnrChartId}"></canvas></div>`
     : `<p class="mt-3 rounded border border-zinc-800 bg-zinc-950/40 px-4 py-5 text-sm text-zinc-400" data-muted-surface data-subtext>No training-crop PSNR rows published for this run.</p>`;
-  const lpipsChartBody = hasMetricKey(rows, "loss_lpips", ["lpips", "t_lpips"])
+  const lpipsChartBody = hasMetricKey(rows, "loss_lpips", ["lpips", "t_lpips", "sr_lpips"])
     ? `<div class="chart-wrap mt-3"><canvas id="${lpipsChartId}"></canvas></div>`
     : `<p class="mt-3 rounded border border-zinc-800 bg-zinc-950/40 px-4 py-5 text-sm text-zinc-400" data-muted-surface data-subtext>No training-crop LPIPS rows published for this run.</p>`;
   const heldoutChartBody = (run.score_log || []).length
