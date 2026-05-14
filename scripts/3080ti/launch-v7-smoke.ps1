@@ -139,7 +139,7 @@ function Run-Smoke {
     $curriculumOk     = $true
     $lastCanvasCount  = $null
     $lastOpacity      = $null
-    $canvasCap        = 4096  # mirror trainer --canvas-capacity default
+    $canvasCap        = 16384  # mirror trainer --canvas-capacity default (post-2026-05-13)
     $lossBadReason    = ''
     $canvasBadReason  = ''
     $currBadReason    = ''

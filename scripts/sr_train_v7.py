@@ -240,45 +240,6 @@ def curriculum_lambdas(
     return target_fg, target_fg_lpips, target_temp
 
 
-def write_gpu_status(output_dir: Path, device: str) -> None:
-    """Write gpu_status.json the dashboard reads for the live GPU memory /
-    utilization panel. Fields match read_gpu_status() in build_public_dashboard.py.
-
-    Memory comes from torch.cuda (no subprocess); utilization is best-effort
-    via nvidia-smi if available, else omitted. Safe to call every log step;
-    no-op on CPU.
-    """
-    if not str(device).startswith("cuda") or not torch.cuda.is_available():
-        return
-    try:
-        used = float(torch.cuda.memory_allocated()) / (1024 * 1024)
-        total = float(torch.cuda.get_device_properties(0).total_memory) / (1024 * 1024)
-        gpu_name = str(torch.cuda.get_device_name(0))
-        status = {
-            "captured_at": time.time(),
-            "gpu_name": gpu_name,
-            "memory_used_mib": used,
-            "memory_total_mib": total,
-            "memory_used_pct": (used / total * 100.0) if total > 0 else 0.0,
-        }
-        # Best-effort utilization via nvidia-smi.
-        try:
-            import subprocess
-            result = subprocess.run(
-                ["nvidia-smi", "--query-gpu=utilization.gpu",
-                 "--format=csv,noheader,nounits", "-i", "0"],
-                capture_output=True, text=True, timeout=2.0,
-            )
-            if result.returncode == 0:
-                status["utilization_pct"] = float(result.stdout.strip())
-        except (FileNotFoundError, ValueError, subprocess.TimeoutExpired):
-            pass
-        (output_dir / "gpu_status.json").write_text(json.dumps(status, indent=2))
-    except Exception:
-        # GPU stats are best-effort; never fail training over a bad nvidia-smi
-        pass
-
-
 def canvas_health_metrics(model) -> dict[str, float]:
     """Snapshot of canvas-state health for dashboard / debugging.
 
@@ -342,14 +303,6 @@ def main() -> int:
     )
     parser.add_argument("--log-every", type=int, default=20)
     parser.add_argument("--ckpt-every", type=int, default=500)
-    parser.add_argument("--ckpt-warmup-steps", type=str, default="",
-                        help="Comma-separated list of explicit early-step "
-                             "checkpoints to take BEFORE the --ckpt-every "
-                             "cadence kicks in. E.g. '100,500,1000' means "
-                             "ckpt at step 100, 500, 1000, then every "
-                             "--ckpt-every steps after. Useful for catching "
-                             "fundamental config issues without waiting "
-                             "for the first regular checkpoint.")
     parser.add_argument("--lambda-charbonnier", type=float, default=1.0)
     parser.add_argument("--lambda-lpips", type=float, default=1.0)
     parser.add_argument("--lambda-fg", type=float, default=1.0)
@@ -541,11 +494,20 @@ def main() -> int:
                 # forward passes.
                 out_inter = model(np1_lr_in_b, t_query=1.0)
 
+                # Temporal-consistency: warp out_main_n (frame N SR) forward
+                # by motion_n_to_np1 and compare to out_main_np1 (frame N+1
+                # SR). Audit caught that this was dead code at the trainer
+                # call site for weeks. motion_n_to_np1 is at LR scale; the
+                # loss helper internally rescales by scale_for_warp=2.
+                motion_n_to_np1_b = sample["motion_n_to_np1"].to(device)
+
                 loss_b, parts_b = oss_fx_loss(
                     out_main=out_main_np1,
                     gt_main=np1_gt_b,
                     out_inter_list=[out_inter],
                     gt_inter_list=[n_half_gt_b],
+                    out_prev_for_consistency=out_main_n,
+                    motion_lr_prev_to_curr=motion_n_to_np1_b,
                     lambda_charbonnier=args.lambda_charbonnier,
                     lambda_lpips=args.lambda_lpips,
                     lambda_fg=fg_w,
@@ -554,6 +516,7 @@ def main() -> int:
                     lambda_sobel=args.lambda_sobel,
                     rrm_weight_main=rrm_weight_hr,
                     rrm_weight_inter=rrm_weight_hr,
+                    scale_for_warp=int(cfg.scale),
                 )
                 if batch_total_loss is None:
                     batch_total_loss = loss_b
@@ -601,20 +564,8 @@ def main() -> int:
                 )
                 with open(history_path, "a") as f:
                     f.write(json.dumps(parts) + "\n")
-                # Side-effect: refresh gpu_status.json so the public dashboard's
-                # live GPU memory + utilization panel populates. Best-effort;
-                # never fails training.
-                write_gpu_status(args.output_dir, device)
 
-            should_ckpt = (step % args.ckpt_every == 0)
-            if not should_ckpt and args.ckpt_warmup_steps:
-                warmup_steps = {
-                    int(s.strip()) for s in args.ckpt_warmup_steps.split(",")
-                    if s.strip()
-                }
-                if step in warmup_steps:
-                    should_ckpt = True
-            if should_ckpt:
+            if step % args.ckpt_every == 0:
                 ckpt_path = args.output_dir / f"step-{step:08d}.pt"
                 torch.save({
                     "step": step,

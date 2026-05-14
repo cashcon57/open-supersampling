@@ -194,10 +194,15 @@ class V7Model(nn.Module):
         # canvas shape and is allocated together.
         self._canvas: Optional[NDCanvasState] = None
         self._child: Optional[ChildState] = None
-        # When parent-child is enabled, this holds the latest active-view
-        # positions tensor with .retain_grad() set, so the trainer can
-        # read per-parent gradient signal after backward.
-        self._last_positions_for_grad: Optional[torch.Tensor] = None
+        # When parent-child is enabled, EVERY render that retains grad on
+        # positions gets pushed here. drift_children_from_grad() iterates
+        # this list to accumulate per-parent attribution across all
+        # renders since the last drift call (e.g. the 3-render flow
+        # spawn-at-t=0, spawn-at-t=2, render-at-t=1 should all contribute).
+        # Previous behavior stashed only the LAST render's tensor,
+        # silently discarding attribution from earlier renders -- caught
+        # by the 2026-05-14 audit.
+        self._retained_positions_for_grad: list[torch.Tensor] = []
         # Tracks how many parents have been initialized as children. New
         # parents (live-but-uninitialized) get children re-initialized
         # at the start of each forward.
@@ -260,7 +265,7 @@ class V7Model(nn.Module):
         if self._child is not None:
             self._child.reset()
             self._n_children_initialized = 0
-        self._last_positions_for_grad = None
+        self._retained_positions_for_grad = []
 
     def render_canvas(self, t_query: float, output_hw: tuple[int, int]) -> torch.Tensor:
         """Render the canvas at t_query to (1, R, H, W). Empty canvas
@@ -275,11 +280,13 @@ class V7Model(nn.Module):
         pos, cov, feat, opacity = canvas.active_view()
         # When parent-child is enabled, mark the active positions for
         # retained gradients so the trainer can read per-parent
-        # attribution after backward(). Stashed on the model so the
-        # trainer can fetch the most-recent one without re-rendering.
+        # attribution after backward(). Append to the list so multiple
+        # renders per step (the SR forward at t=2 AND the OSS-FX forward
+        # at t=1) BOTH contribute to drift signal; previously we
+        # overwrote a scalar and only the last render counted.
         if self.cfg.enable_parent_child and pos.requires_grad:
             pos.retain_grad()
-            self._last_positions_for_grad = pos
+            self._retained_positions_for_grad.append(pos)
         rendered = render_nd_time_slice(
             means=pos, covs=cov, features=feat, opacities=opacity,
             t_query=t_query, image_hw=output_hw,
@@ -293,24 +300,41 @@ class V7Model(nn.Module):
         gradient is large (= the loss cares about that parent).
 
         Call AFTER backward() and BEFORE optim.step(). Reads
-        `self._last_positions_for_grad.grad` (set during the last
-        render_canvas), normalizes per-parent, decays + drifts each
-        child slot.
+        gradients from EVERY retained-grad render since the last drift
+        call, sums per-parent gradient magnitudes across them, normalizes,
+        decays + drifts each child slot.
+
+        Previously stashed only the last render's positions tensor, so
+        a 3-render flow (spawn t=0, spawn t=2, render t=1) only saw
+        the t=1 render's gradients -- in curriculum stage 1 with
+        lambda_fg=0, that's zero gradient signal forever (caught by
+        the 2026-05-14 audit).
 
         Returns the per-parent gradient norm tensor (n_live,) for
         diagnostics; trainer can log this to history.jsonl.
         """
         if not self.cfg.enable_parent_child:
             raise RuntimeError("Parent-child must be enabled to drift children.")
-        if self._last_positions_for_grad is None:
-            # Empty canvas during the last render — nothing to drift.
+        if not self._retained_positions_for_grad:
+            # No renders since last drift -- nothing to drift on.
             return torch.zeros((0,), device=self.canvas.device)
-        pos = self._last_positions_for_grad
-        if pos.grad is None:
-            # No gradient computed (eval mode, or detached path)
-            return torch.zeros((pos.shape[0],), device=pos.device)
+        # All retained tensors come from active_view() since the last
+        # reset_state. They all have the same n_live shape (n_live is
+        # monotonic between resets), so we can sum gradients elementwise.
+        n_live = self._retained_positions_for_grad[0].shape[0]
+        accum_grad = torch.zeros((n_live, 3),
+                                  device=self.canvas.device,
+                                  dtype=torch.float32)
+        for pos in self._retained_positions_for_grad:
+            if pos.grad is None or pos.shape[0] != n_live:
+                continue
+            accum_grad += pos.grad.detach()
+        # Clear the retained list so the next step starts fresh.
+        self._retained_positions_for_grad = []
         # Per-parent gradient magnitude (sum over the 3 position dims).
-        per_parent_grad = pos.grad.detach().abs().sum(dim=-1)  # (n_live_in_view,)
+        per_parent_grad = accum_grad.abs().sum(dim=-1)  # (n_live_in_view,)
+        if per_parent_grad.abs().sum() == 0:
+            return per_parent_grad
         # Normalize by the max so the drift rate is shape-invariant
         # across different canvas sizes / loss scales.
         max_g = per_parent_grad.max().clamp(min=1e-12)
