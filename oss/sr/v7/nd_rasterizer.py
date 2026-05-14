@@ -179,12 +179,20 @@ def _apply_3d_smoothing_filter(
     """
     if variance <= 0:
         return covs, opacities
-    eye3 = variance * torch.eye(3, device=covs.device, dtype=covs.dtype)
-    smoothed = covs + eye3.unsqueeze(0).expand_as(covs)
-    det_orig = torch.det(covs).clamp(min=1e-12)
-    det_smooth = torch.det(smoothed).clamp(min=1e-12)
-    opacity_factor = torch.sqrt(det_orig / det_smooth)
-    return smoothed, opacities * opacity_factor
+    # torch.det dispatches to lu_factor_cublas which has no bf16 kernel.
+    # When the caller is inside a bf16 autocast context, covs arrives in
+    # bf16 and torch.det raises. Force the entire 3x3 smoothing block to
+    # fp32 — covariance numerics need the precision anyway (Cholesky
+    # stability is the whole reason v7's canvas dtype is float32 in the
+    # first place).
+    with torch.amp.autocast(device_type=covs.device.type, enabled=False):
+        covs_f = covs.float()
+        eye3 = variance * torch.eye(3, device=covs.device, dtype=torch.float32)
+        smoothed_f = covs_f + eye3.unsqueeze(0).expand_as(covs_f)
+        det_orig = torch.det(covs_f).clamp(min=1e-12)
+        det_smooth = torch.det(smoothed_f).clamp(min=1e-12)
+        opacity_factor = torch.sqrt(det_orig / det_smooth)
+    return smoothed_f.to(covs.dtype), opacities * opacity_factor.to(opacities.dtype)
 
 
 def _apply_2d_mip_filter(
@@ -207,12 +215,15 @@ def _apply_2d_mip_filter(
     """
     if variance <= 0:
         return cov_2d, weights
-    eye2 = variance * torch.eye(2, device=cov_2d.device, dtype=cov_2d.dtype)
-    smoothed = cov_2d + eye2.unsqueeze(0).expand_as(cov_2d)
-    det_orig = torch.det(cov_2d).clamp(min=1e-12)
-    det_smooth = torch.det(smoothed).clamp(min=1e-12)
-    weight_factor = torch.sqrt(det_orig / det_smooth)
-    return smoothed, weights * weight_factor
+    # Same bf16-autocast guard as _apply_3d_smoothing_filter above.
+    with torch.amp.autocast(device_type=cov_2d.device.type, enabled=False):
+        cov_2d_f = cov_2d.float()
+        eye2 = variance * torch.eye(2, device=cov_2d.device, dtype=torch.float32)
+        smoothed_f = cov_2d_f + eye2.unsqueeze(0).expand_as(cov_2d_f)
+        det_orig = torch.det(cov_2d_f).clamp(min=1e-12)
+        det_smooth = torch.det(smoothed_f).clamp(min=1e-12)
+        weight_factor = torch.sqrt(det_orig / det_smooth)
+    return smoothed_f.to(cov_2d.dtype), weights * weight_factor.to(weights.dtype)
 
 
 def render_nd_time_slice(
