@@ -369,6 +369,14 @@ def main() -> int:
                              "torch.compile(mode='default', dynamic=True) for "
                              "kernel fusion. Use this if compile breaks on a "
                              "given torch/cuda combo and you want eager mode.")
+    parser.add_argument("--no-bf16", action="store_true",
+                        help="Disable bf16 autocast around forward + loss. "
+                             "Default behavior on CUDA is to wrap forward + "
+                             "loss in torch.amp.autocast(dtype=bfloat16). "
+                             "Canvas / Cholesky ops keep their explicit "
+                             "float32 dtype so numeric stability is preserved. "
+                             "bf16 has fp32 exponent range so no GradScaler "
+                             "is needed. Use this for an fp32 baseline run.")
     parser.add_argument("--ckpt-warmup-steps", type=str, default=None,
                         help="Comma-separated extra checkpoint steps before "
                              "--ckpt-every kicks in. Example: '100,500,1000' "
@@ -547,39 +555,50 @@ def main() -> int:
                     n_half_gt_b = sample["n_half_gt"].to(device).clamp(0, 1)
                     np1_gt_b = sample["np1_gt"].to(device).clamp(0, 1)
 
-                    # Forward at frame N: SPAWN Gaussians into canvas at t=0
-                    out_main_n = model(n_lr_in_b, t_query=0.0, spawn_at_t=0.0)
-                    # If parent-child is on, attach a child to each newly-
-                    # spawned parent so it can accumulate gradient signal
-                    # over the rest of this sample's forwards.
-                    if args.enable_parent_child:
-                        model.initialize_new_children(init_dpos_std=0.1)
-                    # Forward at frame N+1: spawn at t=2 so the (i, i+2)
-                    # spacing matches the dataset's triplet convention
-                    # (alpha=0.5 lives at t=1, between the two spawned
-                    # times).
-                    out_main_np1 = model(np1_lr_in_b, t_query=2.0, spawn_at_t=2.0)
-                    if args.enable_parent_child:
-                        model.initialize_new_children(init_dpos_std=0.1)
-                    # Render at intermediate t=1 (alpha=0.5 between t=0 and t=2);
-                    # no new spawn, uses canvas content from previous two
-                    # forward passes.
-                    out_inter = model(np1_lr_in_b, t_query=1.0)
+                    # bf16 autocast wraps forward + loss. backward() inherits
+                    # the dtype context automatically. Canvas / rasterizer /
+                    # Cholesky ops keep their explicit float32 declarations
+                    # so numeric stability is preserved (autocast respects
+                    # explicit dtype). No GradScaler — bf16 has fp32 exponent
+                    # range so underflow protection isn't needed.
+                    with torch.amp.autocast(
+                        device_type="cuda",
+                        dtype=torch.bfloat16,
+                        enabled=(device == "cuda" and not args.no_bf16),
+                    ):
+                        # Forward at frame N: SPAWN Gaussians into canvas at t=0
+                        out_main_n = model(n_lr_in_b, t_query=0.0, spawn_at_t=0.0)
+                        # If parent-child is on, attach a child to each newly-
+                        # spawned parent so it can accumulate gradient signal
+                        # over the rest of this sample's forwards.
+                        if args.enable_parent_child:
+                            model.initialize_new_children(init_dpos_std=0.1)
+                        # Forward at frame N+1: spawn at t=2 so the (i, i+2)
+                        # spacing matches the dataset's triplet convention
+                        # (alpha=0.5 lives at t=1, between the two spawned
+                        # times).
+                        out_main_np1 = model(np1_lr_in_b, t_query=2.0, spawn_at_t=2.0)
+                        if args.enable_parent_child:
+                            model.initialize_new_children(init_dpos_std=0.1)
+                        # Render at intermediate t=1 (alpha=0.5 between t=0 and t=2);
+                        # no new spawn, uses canvas content from previous two
+                        # forward passes.
+                        out_inter = model(np1_lr_in_b, t_query=1.0)
 
-                    loss_b, parts_b = oss_fx_loss(
-                        out_main=out_main_np1,
-                        gt_main=np1_gt_b,
-                        out_inter_list=[out_inter],
-                        gt_inter_list=[n_half_gt_b],
-                        lambda_charbonnier=args.lambda_charbonnier,
-                        lambda_lpips=args.lambda_lpips,
-                        lambda_fg=fg_w,
-                        lambda_fg_lpips=fg_lpips_w,
-                        lambda_temp_consistency=temp_w,
-                        lambda_sobel=args.lambda_sobel,
-                        rrm_weight_main=rrm_weight_hr,
-                        rrm_weight_inter=rrm_weight_hr,
-                    )
+                        loss_b, parts_b = oss_fx_loss(
+                            out_main=out_main_np1,
+                            gt_main=np1_gt_b,
+                            out_inter_list=[out_inter],
+                            gt_inter_list=[n_half_gt_b],
+                            lambda_charbonnier=args.lambda_charbonnier,
+                            lambda_lpips=args.lambda_lpips,
+                            lambda_fg=fg_w,
+                            lambda_fg_lpips=fg_lpips_w,
+                            lambda_temp_consistency=temp_w,
+                            lambda_sobel=args.lambda_sobel,
+                            rrm_weight_main=rrm_weight_hr,
+                            rrm_weight_inter=rrm_weight_hr,
+                        )
                     if batch_total_loss is None:
                         batch_total_loss = loss_b
                     else:
