@@ -6338,12 +6338,26 @@ function handleCompareWheel(event) {
   if (!stage) return;
   event.preventDefault();
   const factor = Math.exp(-event.deltaY * 0.0015);
-  compareState.zoom = clamp(compareState.zoom * factor, compareState.minZoom, compareState.maxZoom);
-  if (compareState.zoom < 1.02) {
+  const oldZoom = compareState.zoom;
+  const newZoom = clamp(oldZoom * factor, compareState.minZoom, compareState.maxZoom);
+  if (newZoom < 1.02) {
     compareState.zoom = 1;
     compareState.panX = 0;
     compareState.panY = 0;
+    applyCompareTransform();
+    return;
   }
+  // Anchor zoom on the pointer: keep the image pixel under the cursor
+  // fixed in viewport coords. The transform is translate(pan) scale(z)
+  // with transform-origin at stage center, so scaling happens around
+  // the stage midpoint. Adjust pan to compensate.
+  const rect = stage.getBoundingClientRect();
+  const dx = event.clientX - (rect.left + rect.width / 2);
+  const dy = event.clientY - (rect.top + rect.height / 2);
+  const f = oldZoom > 0 ? newZoom / oldZoom : 1;
+  compareState.zoom = newZoom;
+  compareState.panX = dx * (1 - f) + compareState.panX * f;
+  compareState.panY = dy * (1 - f) + compareState.panY * f;
   applyCompareTransform();
 }
 
