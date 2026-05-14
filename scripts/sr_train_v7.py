@@ -363,6 +363,12 @@ def main() -> int:
                         help="Disable auto-resume. Default behavior is to "
                              "scan --output-dir for the latest step-NNNNNNNN.pt "
                              "and resume model + optimizer state from it.")
+    parser.add_argument("--no-compile", action="store_true",
+                        help="Disable torch.compile on the HAT backbone. "
+                             "Default behavior is to wrap the backbone with "
+                             "torch.compile(mode='default', dynamic=True) for "
+                             "kernel fusion. Use this if compile breaks on a "
+                             "given torch/cuda combo and you want eager mode.")
     parser.add_argument("--ckpt-warmup-steps", type=str, default=None,
                         help="Comma-separated extra checkpoint steps before "
                              "--ckpt-every kicks in. Example: '100,500,1000' "
@@ -372,6 +378,17 @@ def main() -> int:
     device = _device(args.device)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     (args.output_dir / "history.jsonl").touch()
+
+    # Throughput baselines. cudnn.benchmark picks the fastest conv algorithm
+    # per input shape; our shapes are stable (fixed crop, fixed batch) so the
+    # one-time autotune amortizes immediately. TF32 on Ampere enables tensor-
+    # core matmul/conv with bf16 mantissa range — numerics-equivalent to bf16
+    # autocast already in use; the call just makes the intent explicit and
+    # covers anything the autocast doesn't cover (e.g., fp32 ops). Both are
+    # free wins with no quality cost.
+    if device == "cuda":
+        torch.backends.cudnn.benchmark = True
+        torch.set_float32_matmul_precision("high")
 
     # Build model
     cfg = V7Config(
@@ -433,6 +450,20 @@ def main() -> int:
     warmup_steps: set[int] = set()
     if args.ckpt_warmup_steps:
         warmup_steps = {int(s.strip()) for s in args.ckpt_warmup_steps.split(",") if s.strip()}
+
+    # Wrap the HAT backbone with torch.compile after the resume load so the
+    # checkpoint state_dict matches uncompiled keys. Compile only the backbone
+    # — the rest of V7Model has stateful canvas mutation (Schur marginalize,
+    # parent-child spawn) that doesn't play well with compile's tracing. The
+    # backbone is a pure CNN+attention block and is where most wall-clock
+    # lives. `dynamic=True` lets it handle the variable LR shapes we feed in
+    # without recompile.
+    if device == "cuda" and not args.no_compile:
+        try:
+            model.backbone = torch.compile(model.backbone, mode="default", dynamic=True)
+            print("[train] backbone wrapped with torch.compile (mode=default, dynamic=True)")
+        except Exception as e:
+            print(f"[train] torch.compile failed ({e}); continuing eager")
 
     # Training loop
     t0 = time.perf_counter()
