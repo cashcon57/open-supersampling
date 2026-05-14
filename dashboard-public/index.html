@@ -3640,7 +3640,7 @@ function headlineValue(run, item) {
   if (item.value_from === "latest_step") return Number(run.latest_step || 0).toLocaleString();
   if (item.value_from === "loss_total") {
     const latest = run.latest_metrics || {};
-    return fmtNumber(latest.loss_total ?? latest.loss, 5);
+    return fmtNumber(latest.loss_total ?? latest.loss ?? latest.total, 5);
   }
   if (item.value_from === "v7_sr_loss") {
     const latest = run.latest_metrics || {};
@@ -7245,7 +7245,7 @@ function renderHero(data) {
   }
   document.getElementById("hero-active-title").innerHTML = `${escapeHtml(active.label || active.name)} ${trainingIndicatorHtml(active)}`;
   const latest = active.latest_metrics || {};
-  document.getElementById("hero-active-meta").innerHTML = `step ${Number(active.latest_step || 0).toLocaleString()} / loss ${fmtNumber(latest.loss_total ?? latest.loss, 5)} ${directionHtml("loss_total")}`;
+  document.getElementById("hero-active-meta").innerHTML = `step ${Number(active.latest_step || 0).toLocaleString()} / loss ${fmtNumber(latest.loss_total ?? latest.loss ?? latest.total, 5)} ${directionHtml("loss_total")}`;
   const progress = document.getElementById("hero-progress");
   if (progress) {
     progress.hidden = !active.active;

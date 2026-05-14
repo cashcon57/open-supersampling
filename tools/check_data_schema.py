@@ -389,6 +389,14 @@ def validate_run(run: object, index: int, errors: list[str], warnings: list[str]
     require_int_ge_zero(run, "latest_step", path, errors)
     require_optional_int(run, "max_target_steps", path, errors)
     require_object(run, "latest_metrics", path, errors)
+    metrics = run.get("latest_metrics")
+    if isinstance(metrics, dict) and metrics:
+        loss_keys = ("loss_total", "loss", "total")
+        if not any(key in metrics for key in loss_keys):
+            errors.append(
+                f"{path}.latest_metrics: expected one of {list(loss_keys)} "
+                f"so the hero can render a loss; got keys {sorted(metrics)}"
+            )
     require_object(run, "history", path, errors)
     require_object_list(run, "loss_curve", path, errors)
     require_object_list(run, "score_log", path, errors)
