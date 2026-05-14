@@ -1983,9 +1983,10 @@
             <button id="viz-compare-sync-btn" class="viz-compare-sync-btn" type="button"
                     aria-label="Re-sync all panel sliders to the global step">Sync</button>
           </div>
-          <div class="viz-compare-row-toggle" aria-label="Comparison row">
-            <button class="viz-compare-row-button" type="button" data-viz-compare-row="0" aria-pressed="true">seq A</button>
-            <button class="viz-compare-row-button" type="button" data-viz-compare-row="1" aria-pressed="false">seq B</button>
+          <div id="viz-compare-row-toggle" class="viz-compare-row-toggle" aria-label="Scene row">
+            <!-- Buttons dynamically populated by populateRowButtons() based on
+                 the run's viz strip's row count + sidecar scene_labels.
+                 Defaults to seq A / seq B for v6.x runs (2 rows). -->
           </div>
           <label class="viz-compare-bare-toggle" title="Show the source viz strip with no per-panel comparison">
             <input type="checkbox" id="viz-compare-bare-strip">
@@ -5669,6 +5670,48 @@ function compareBackgroundPosition(columnIndex) {
   return `${x}% ${y}%`;
 }
 
+function populateRowButtons() {
+  // Build the row-selector buttons inside #viz-compare-row-toggle from
+  // compareState.rowCount + .sceneLabels (sidecar-derived for v7; falls
+  // back to "seq A / seq B" for v6.x runs with rowCount=2). The
+  // selected button maps to compareState.rowIndex via
+  // data-viz-compare-row; updateCompareRow() does the actual visual swap.
+  const host = document.getElementById("viz-compare-row-toggle");
+  if (!host) return;
+  host.replaceChildren();
+  const n = Math.max(1, Number(compareState.rowCount || 1));
+  const labels = compareState.sceneLabels && compareState.sceneLabels.length
+    ? compareState.sceneLabels
+    : (n === 2 ? ["seq A", "seq B"] : Array.from({ length: n }, (_, i) => `Row ${i + 1}`));
+  for (let i = 0; i < n; i++) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "viz-compare-row-button";
+    btn.dataset.vizCompareRow = String(i);
+    btn.setAttribute("aria-pressed", i === compareState.rowIndex ? "true" : "false");
+    btn.textContent = labels[i] || `Row ${i + 1}`;
+    btn.addEventListener("click", () => {
+      compareState.rowIndex = i;
+      updateCompareRow();
+    });
+    host.appendChild(btn);
+  }
+}
+
+async function fetchSidecarSceneMeta(vizUrl) {
+  // Try to fetch the .scenes.json sidecar that the v7 inflight-viz daemon
+  // writes alongside each strip PNG. Falls back to null when absent
+  // (e.g. v6.x runs, which keep the legacy 2-row layout).
+  try {
+    const sidecarUrl = vizUrl.replace(/\.png(\?|$)/, ".scenes.json$1");
+    const res = await fetch(sidecarUrl, { cache: "no-store" });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch (err) {
+    return null;
+  }
+}
+
 function updateCompareRow() {
   document.querySelectorAll("[data-viz-compare-row]").forEach((button) => {
     button.setAttribute("aria-pressed", Number(button.dataset.vizCompareRow) === compareState.rowIndex ? "true" : "false");
@@ -5820,7 +5863,13 @@ function openCompareModal(selectedColumns, vizUrl, meta = {}) {
   compareState.selectedColumns = selectedColumns;
   compareState.rowIndex = 0;
   compareState.columnCount = Math.max(1, Number(meta.columnCount || selectedColumns.length || 7));
-  compareState.rowCount = 2;
+  // Row count + scene labels come from the optional sidecar JSON. Default
+  // to 2 (legacy v5/v6 layout). populateRowButtons() at the end of this
+  // function reads compareState and replaces the seq A/B buttons.
+  compareState.rowCount = Math.max(1, Number(meta.rowCount || 2));
+  compareState.sceneLabels = Array.isArray(meta.sceneLabels) && meta.sceneLabels.length
+    ? meta.sceneLabels.slice(0, compareState.rowCount)
+    : null;
   compareState.vizUrl = vizUrl;
   compareState.bareStripFile = null;
   compareState.naturalWidth = 0;
@@ -5964,6 +6013,24 @@ function openCompareModal(selectedColumns, vizUrl, meta = {}) {
     updateCompareBareStrip();
   };
   probe.src = initial.url;
+
+  // Sidecar fetch: when the v7 inflight-viz daemon writes a step-NNN.png
+  // it also writes step-NNN.scenes.json with {row_count, scene_labels}.
+  // Falls back silently for v6.x runs that don't write the sidecar.
+  populateRowButtons();
+  fetchSidecarSceneMeta(initial.url).then((sidecar) => {
+    if (!sidecar) return;
+    const newRowCount = Math.max(1, Number(sidecar.row_count || 0));
+    if (newRowCount > 0) {
+      compareState.rowCount = newRowCount;
+    }
+    if (Array.isArray(sidecar.scene_labels) && sidecar.scene_labels.length) {
+      compareState.sceneLabels = sidecar.scene_labels.slice(0, compareState.rowCount);
+    }
+    populateRowButtons();
+    updateCompareRow();
+    updateCompareImageSizing();
+  });
 
   if (!dialog.open) {
     dialog.showModal();

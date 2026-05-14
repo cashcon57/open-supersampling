@@ -175,6 +175,20 @@ for name in RUN_CONFIG.keys():
         local tmp="${dst}.tmp.$$.$RANDOM"
         cp -p "$png" "$tmp" 2>/dev/null && mv "$tmp" "$dst" 2>/dev/null || rm -f "$tmp"
       done
+      # Also stage scene-label sidecar JSONs that the v7 inflight-viz
+      # daemon writes alongside each PNG (step-NNN.scenes.json). The
+      # dashboard reads these at modal-open time to populate the row-
+      # selector buttons with environment-correct labels.
+      for meta in "$src_run"/viz/*.scenes.json; do
+        [[ -f "$meta" ]] || continue
+        local base; base="$(basename "$meta")"
+        if [[ -f "$dst_run/viz/$base" ]] && [[ ! "$meta" -nt "$dst_run/viz/$base" ]]; then
+          continue
+        fi
+        local dst="$dst_run/viz/$base"
+        local tmp="${dst}.tmp.$$.$RANDOM"
+        cp -p "$meta" "$tmp" 2>/dev/null && mv "$tmp" "$dst" 2>/dev/null || rm -f "$tmp"
+      done
     fi
     # Held-out per-step frame dumps for the dashboard's video player. Skip
     # the staging copy entirely by default -- the trees are huge (~10k PNGs

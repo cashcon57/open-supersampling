@@ -481,6 +481,61 @@ def _v7_panel_labels() -> list[str]:
     ]
 
 
+def _filter_v7_triplets_by_manifest(
+    ds, base, manifest_path: Path,
+) -> list[str]:
+    """Reorder + filter ds._triplet_indices to match the manifest's pair
+    order. Returns the list of scene_labels in the same order. If the
+    manifest contains no scene_labels field, falls back to "Pair N".
+
+    The manifest format (manifest_version=2 in v7_held_out_manifest.json)
+    has `pairs: [{trajectory: "path", idx_t: 100, scene_label: "..."}]`
+    and an optional top-level `scene_labels: ["...", ...]` list. We
+    cross-reference the base dataset's _items (image_path, ...) to find
+    the dataset index whose (trajectory, frame_idx) matches each pair,
+    then rewrite ds._triplet_indices in manifest order."""
+    import json as _json
+    manifest = _json.loads(Path(manifest_path).read_text())
+    pairs = manifest.get("pairs", [])
+    labels = manifest.get("scene_labels") or [
+        p.get("scene_label", f"Pair {i}") for i, p in enumerate(pairs)
+    ]
+    # Build (traj_norm, idx) -> dataset_index lookup
+    items = base._items
+    lookup: dict[tuple[str, int], int] = {}
+    for di, (img_path, _, _) in enumerate(items):
+        # img_path is .../<env>/<level>/<traj>/image_left/000000_left.png
+        traj = str(img_path.parent.parent).replace("\\", "/").lower()
+        try:
+            frame_idx = int(img_path.stem.split("_")[0])
+        except (ValueError, IndexError):
+            continue
+        lookup[(traj, frame_idx)] = di
+    # Find the dataset index for each manifest pair (must also have a
+    # valid triplet -- i.e. ds._triplet_indices contains an entry with
+    # this as the first index).
+    valid_triplet_starts = {t[0] for t in ds._triplet_indices}
+    new_triplets: list[tuple[int, int, int]] = []
+    new_labels: list[str] = []
+    skipped = []
+    for i, p in enumerate(pairs):
+        traj = str(p["trajectory"]).replace("\\", "/").lower()
+        idx = int(p["idx_t"])
+        di = lookup.get((traj, idx))
+        if di is None or di not in valid_triplet_starts:
+            skipped.append((traj, idx))
+            continue
+        new_triplets.append((di, di + 1, di + 2))
+        new_labels.append(labels[i] if i < len(labels) else f"Pair {i}")
+    if not new_triplets:
+        print(f"  manifest filter: NO pairs matched -- falling back to dataset order. skipped={skipped[:3]}", flush=True)
+        return [f"Pair {i}" for i in range(len(ds))]
+    ds._triplet_indices = new_triplets
+    if skipped:
+        print(f"  manifest filter: kept {len(new_triplets)}, dropped {len(skipped)} unmatched pairs", flush=True)
+    return new_labels
+
+
 def _render_iteration_v7(
     *,
     ckpt_path: Path,
@@ -491,6 +546,7 @@ def _render_iteration_v7(
     ckpt_v6: Path | None = None,
     fallback_backbone: str = "hat-l",
     err_scale: float = 0.2,
+    manifest_path: Path | None = None,
 ) -> Path | None:
     """Render a v7 checkpoint into ``viz/step-XXXXXXXX.png``.
 
@@ -526,10 +582,25 @@ def _render_iteration_v7(
     from oss.sr.v7.intermediate_dataset import TartanAirIntermediateTriplets
 
     base = TartanAirGaussianDataset(root=tartanair_root, scale=2.0)
-    ds = TartanAirIntermediateTriplets(base, max_triplets=n_pairs)
+    # If a manifest is provided, build the full triplet list first (no cap)
+    # so the filter can match against the entire dataset; otherwise use the
+    # cap directly.
+    ds = TartanAirIntermediateTriplets(
+        base,
+        max_triplets=None if manifest_path else n_pairs,
+    )
     if len(ds) == 0:
         print(f"  step {step}: no v7 triplets under {tartanair_root}", flush=True)
         return None
+    scene_labels: list[str]
+    if manifest_path is not None and Path(manifest_path).exists():
+        scene_labels = _filter_v7_triplets_by_manifest(ds, base, Path(manifest_path))
+    else:
+        scene_labels = [f"Pair {i}" for i in range(len(ds))]
+    # After filtering, honor n_pairs as a soft cap (truncate, never extend).
+    if len(ds) > n_pairs:
+        ds._triplet_indices = ds._triplet_indices[:n_pairs]
+        scene_labels = scene_labels[:n_pairs]
 
     def _build_9ch(part):
         return torch.cat([
@@ -640,6 +711,17 @@ def _render_iteration_v7(
             drawer.rectangle([(x_left, y_top), (x_right, y_bottom)], fill=(0, 0, 0, 160))
             drawer.text((x_left + 6, y_top + 2), label, fill=(255, 255, 255, 255))
     img.save(out_path, format="PNG", optimize=False)
+
+    # Sidecar JSON: scene labels + row count, so the dashboard can build
+    # row-selector buttons dynamically. Written alongside the PNG. The
+    # build script + R2 publisher mirror it through to the staging tree.
+    import json as _json
+    meta_path = out_path.with_suffix(".scenes.json")
+    meta_path.write_text(_json.dumps({
+        "row_count": n_strips,
+        "scene_labels": scene_labels[:n_strips],
+        "panel_labels": panel_labels,
+    }))
     return out_path
 
 
@@ -977,6 +1059,7 @@ def main(argv: list[str] | None = None) -> int:
                             ckpt_v6=args.ckpt_v6,
                             fallback_backbone=args.backbone,
                             err_scale=args.err_scale,
+                            manifest_path=args.manifest,
                         )
                     else:
                         ckpt_v5 = (

@@ -46,7 +46,10 @@ while ($true) {
     # skips the v5 manifest. The v6 path keeps the legacy v5-ckpt + manifest.
     if ($primaryVersion -eq 'v7') {
       $v62ckpt = 'E:\checkpoints\srcnn-v6.2-pico-002\step-00074000.pt'
-      $daemonCmd = "cmd /c `"cd /d $repo && $pyEnv\python.exe scripts\sr_temporal_inflight_viz.py --output-dir E:\checkpoints\$activeRun --primary-version v7 --tartanair-root E:\datasets\tartanair_extracted --device cpu --interval 120 --n-pairs 2 --ckpt-v6 $v62ckpt >> E:\logs\viz-daemon-$activeRun.log 2>&1`""
+      # v7 manifest has 6 oldtown pairs spread across the trajectory
+      # so each strip row shows a visually-distinct chunk of the run.
+      $manifest = 'E:\checkpoints\v7_held_out_manifest.json'
+      $daemonCmd = "cmd /c `"cd /d $repo && $pyEnv\python.exe scripts\sr_temporal_inflight_viz.py --output-dir E:\checkpoints\$activeRun --primary-version v7 --tartanair-root E:\datasets\tartanair_extracted --manifest $manifest --device cpu --interval 120 --n-pairs 6 --ckpt-v6 $v62ckpt >> E:\logs\viz-daemon-$activeRun.log 2>&1`""
     } else {
       $daemonCmd = "cmd /c `"cd /d $repo && $pyEnv\python.exe scripts\sr_temporal_inflight_viz.py --output-dir E:\checkpoints\$activeRun --ckpt-v5 E:\checkpoints\srcnn-v5-pixel-temporal-validated\step-00080000.pt --manifest E:\checkpoints\v5_held_out_manifest.json --primary-version v6 --backbone hat-tiny --tartanair-root E:\datasets\tartanair_extracted --device cpu --interval 60 --n-pairs 2 >> E:\logs\viz-daemon-$activeRun.log 2>&1`""
     }
