@@ -39,13 +39,15 @@ Loss-weight ramp matches the v7 spec's prescription. The intermediate-frame supe
 
 | Ablation | Δ vs baseline | Hypothesis |
 |---|---|---|
-| **A0 — baseline** | v7-pico-005 as specified above | Reference: OSS-FX teacher works at all |
-| **A1 — canvas off** | `enable_spawner=False`, freeze N-D canvas empty | Quantify the canvas contribution. If A1 ≈ A0 on α=1 metrics, the canvas is dead weight at the pico tier. |
-| **A2 — spawner off, hand-spawn at t=0 only** | Spawner present but never fires (force opacity_init_bias to -inf); seed canvas once per trajectory with a deterministic grid | Tests whether the learned spawner adds value over a fixed schedule. |
-| **A3 — no α-curriculum (all losses on from step 0)** | Stage 3 weights applied from step 0 | Validates the curriculum's necessity. If A3 trains stably, the curriculum is over-cautious. |
-| **A4 — placeholder backbone instead of HAT-Tiny** | `backbone_kind="placeholder"` | Cheap-baseline reference for the backbone choice. Expect noticeably worse α=1 metrics; if not, HAT-Tiny isn't pulling its weight at this size. |
+| **A0 — baseline** | v7-pico-005 as specified above (curriculum + parent-child + no RRM, no Sobel, no Mip filters tweak) | Reference: OSS-FX teacher works at all |
+| **A1 — canvas off** | Add `--enable-spawner-noop` (or equivalent: drop `--enable-parent-child` and zero `spawner_k_per_tile`) | Quantify the canvas contribution. If A1 ≈ A0 on α=1 metrics, the canvas is dead weight at the pico tier. |
+| **A2 — parent-child off** | Drop `--enable-parent-child` from A0. Spawner still produces parents per tile; just no loss-adaptive density growth. | Tests whether parent-child carries its weight at this scale. Compares "uniform-density-only" vs "uniform + adaptive". |
+| **A3 — no α-curriculum** | Drop `--curriculum` from A0; lambda_fg and lambda_temp ramp in from step 0 | Validates the curriculum's necessity. If A3 trains stably, the curriculum is over-cautious. |
+| **A4 — placeholder backbone instead of HAT-Tiny** | Replace `--backbone-kind hat_tiny` with `--backbone-kind placeholder` | Cheap-baseline reference for the backbone choice. Expect noticeably worse α=1 metrics; if not, HAT-Tiny isn't pulling its weight at this size. |
+| **B0 — Sobel HF on** | A0 plus `--lambda-sobel 0.1` | Tests whether the Sobel high-frequency edge loss improves thin-geometry preservation enough to justify its mild added noise sensitivity. |
+| **B1 — RRM on** | A0 plus `--enable-rrm --rrm-loss-weight 2.0` | Tests whether STSS-style synthetic disocclusion augmentation improves real-disocclusion robustness. Measured via α=0.5 OSS-FX PSNR specifically, not α=1 SR PSNR. |
 
-Run order: A0 → A1 → A3, then A2 and A4 if budget allows. Each ablation only runs to step 60K (end of stage 2) — full 100K is reserved for A0.
+Run order: **A0 first (full 100K)**, then A1, A2, A3 to 60K to test ablation deltas, then B0 and B1 to 60K to test the new training signals. A4 is lowest priority. Each non-A0 ablation = ~3 days of 3080 Ti time.
 
 ## Metrics
 
@@ -77,8 +79,40 @@ Pre-flight checklist (run before kicking the job off):
 
 1. `cd E:\oss-gaussian` → `git fetch && git checkout main && git pull` (resolve 472-file working-tree state with the user first — DO NOT clobber).
 2. `conda activate image-gs` → `python -c "from oss.sr.v7.model import V7Model; print('ok')"` (verifies the v7 stack imports cleanly with the remote's torch).
-3. Smoke test: `python scripts/sr_train_v7.py --tartanair-root E:/datasets/tartanair_extracted --output-dir E:/checkpoints/srcnn-v7.0-smoke --steps 50 --batch-size 2 --device cuda --log-every 10 --max-triplets 8 --backbone-kind hat_tiny`. Should complete in ~3 min and produce a history.jsonl with 5 entries.
-4. If smoke clean, kick the full job under WMI orphan-spawn (per `tailnet_3080ti.md`): same command without `--max-triplets`, with `--steps 100000 --ckpt-every 10000 --output-dir E:/checkpoints/srcnn-v7.0-pico-005`.
+3. Smoke test — use the dedicated launcher `scripts/3080ti/launch-v7-smoke.ps1` (commit e0cc578) which wraps the trainer with built-in pass/fail validation, OR invoke the trainer directly:
+
+   ```bash
+   python scripts/sr_train_v7.py \
+       --tartanair-root E:/datasets/tartanair_extracted \
+       --output-dir E:/checkpoints/srcnn-v7.0-smoke \
+       --steps 50 --batch-size 2 --device cuda \
+       --log-every 10 --max-triplets 8 \
+       --backbone-kind hat_tiny \
+       --curriculum \
+       --enable-parent-child --parent-child-drift-rate 0.05 \
+       --canvas-capacity 16384
+   ```
+
+   Expected: ~3 min runtime, history.jsonl has 5 entries, validation in launcher passes (canvas count grows, lambdas stay in stage-1 = 0 for fg, finite losses).
+
+4. If smoke clean, kick the full job under WMI orphan-spawn (per `tailnet_3080ti.md`):
+
+   ```bash
+   python scripts/sr_train_v7.py \
+       --tartanair-root E:/datasets/tartanair_extracted \
+       --output-dir E:/checkpoints/srcnn-v7.0-pico-005 \
+       --steps 100000 --batch-size 2 --device cuda \
+       --log-every 100 --ckpt-every 10000 \
+       --backbone-kind hat_tiny \
+       --curriculum \
+       --enable-parent-child --parent-child-drift-rate 0.05 \
+       --canvas-capacity 16384 \
+       --lambda-sobel 0.0    # OFF for first run (clean ablation; turn on for run b)
+   ```
+
+   `--enable-rrm` and `--lambda-sobel 0.1` are reserved for ablation runs A2+B (see § "Ablation matrix"). The CLI exposes them; the first scientific run keeps them off.
+
+5. Register the v7 eval supervisor on the 3080 Ti by running `scripts/3080ti/register-v7-supervisors.ps1` (commit 6097e2f). Once registered, the supervisor will auto-eval every new checkpoint via `sr_eval_v7.py` and append to `score_log_v7.json`, which the v7 dashboard lane (build_public_dashboard.py with `--version v7`) surfaces.
 
 ## Risks / open items
 
