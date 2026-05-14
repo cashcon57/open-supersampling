@@ -64,6 +64,16 @@ function timingSafeEqual(a, b) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+
+    // Apex redirect: .com → .org. Both apex names are bound to this worker
+    // via Workers Custom Domains; .org is the primary site, .com is the
+    // alias that 301s. Do this BEFORE auth/upload paths so unauthenticated
+    // GETs to .com also redirect cleanly. upload.opensupersampling.com is
+    // unaffected — only the bare .com apex is rewritten.
+    if (url.hostname === 'opensupersampling.com') {
+      return Response.redirect('https://opensupersampling.org' + url.pathname + url.search, 301);
+    }
+
     const path = url.pathname;
     const method = request.method;
 
