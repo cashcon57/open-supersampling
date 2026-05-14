@@ -64,7 +64,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="Optional explicit primary checkpoint to render. "
                         "Default uses latest step-*.pt in --output-dir.")
     p.add_argument("--primary-version",
-                   choices=("v4", "v5-pixel", "v5-gaussian", "v6"),
+                   choices=("v4", "v5-pixel", "v5-gaussian", "v6", "v7"),
                    default=None,
                    help="Checkpoint family in --output-dir. Default infers from run name.")
     p.add_argument("--backbone", choices=("hat-tiny", "hat-small", "hat-l"),
@@ -108,6 +108,8 @@ def _infer_primary_version(output_dir: Path, explicit: str | None) -> str:
     if explicit is not None:
         return explicit
     name = output_dir.name.lower()
+    if name.startswith("srcnn-v7"):
+        return "v7"
     if name.startswith("srcnn-v6-") or name == "srcnn-v6":
         return "v6"
     # v6.1 runs are excluded from the comparison strip until a `.viz_validated`
@@ -356,6 +358,86 @@ def _comparison_panels(
     return panels, labels
 
 
+def _is_v7_checkpoint(ckpt_path: Path, device: str = "cpu") -> bool:
+    """Detect a v7 checkpoint by probing ``cfg["backbone_kind"]``.
+
+    v5/v6 checkpoints either have no top-level ``cfg`` dict or use
+    different schema keys (v6 has ``v6_config`` with ``backbone`` not
+    ``backbone_kind``). v7's trainer stores ``vars(V7Config)`` under
+    ``cfg``, and ``backbone_kind`` is mandatory there. So the presence
+    of ``cfg["backbone_kind"]`` is the cleanest signal.
+    """
+    import torch
+
+    try:
+        ck = torch.load(ckpt_path, map_location=device, weights_only=False)
+    except Exception:
+        return False
+    if not isinstance(ck, dict):
+        return False
+    cfg = ck.get("cfg")
+    if not isinstance(cfg, dict):
+        return False
+    return "backbone_kind" in cfg
+
+
+def _load_v7_model(ckpt_path: Path, device: str):
+    """Load a V7Model from a sr_train_v7.py checkpoint. Mirrors
+    ``scripts/sr_eval_v7.py::_load_checkpoint`` but raises
+    NonFiniteCheckpointError when the saved state has bad weights so the
+    daemon can skip + retry on the next checkpoint.
+    """
+    import torch
+    from dataclasses import fields
+
+    from oss.sr.v7.model import V7Config, V7Model
+
+    ck = torch.load(ckpt_path, map_location=device, weights_only=False)
+    if not isinstance(ck, dict):
+        raise ValueError(f"{ckpt_path}: expected dict checkpoint")
+    cfg_data = ck.get("cfg", {}) or {}
+    valid_keys = {f.name for f in fields(V7Config)}
+    cfg_kwargs = {k: v for k, v in cfg_data.items() if k in valid_keys}
+    cfg = V7Config(**cfg_kwargs)
+    model = V7Model(cfg).to(device)
+    model.allocate_canvas(device)
+    state = ck.get("model_state")
+    if state is None:
+        for key in ("state_dict", "model"):
+            if key in ck:
+                state = ck[key]
+                break
+    if state is None:
+        raise KeyError(f"{ckpt_path} has no model_state / state_dict key")
+    if _state_has_nonfinite(state):
+        raise NonFiniteCheckpointError(f"{ckpt_path} contains non-finite v7 weights")
+    model.load_state_dict(state, strict=False)
+    model.train(False)
+    return model
+
+
+def _v7_predictions(model, n_inputs, np1_inputs, output_hw, device):
+    """Run the v7 trainer's exact forward flow on one triplet and return
+    both head outputs.
+
+    Forward flow (matches scripts/sr_train_v7.py and sr_eval_v7.py):
+        model.reset_state(device)
+        _      = model(n_lr_in,   t_query=0.0, spawn_at_t=0.0)   # warmup
+        alpha1 = model(np1_lr_in, t_query=2.0, spawn_at_t=2.0)   # SR head
+        alpha05 = model(np1_lr_in, t_query=1.0)                  # OSS-FX
+    """
+    import torch
+
+    with torch.no_grad():
+        model.reset_state(device)
+        _ = model(n_inputs, t_query=0.0, spawn_at_t=0.0, output_hw=output_hw)
+        alpha_1 = model(
+            np1_inputs, t_query=2.0, spawn_at_t=2.0, output_hw=output_hw,
+        ).clamp(0.0, 1.0)
+        alpha_0_5 = model(np1_inputs, t_query=1.0, output_hw=output_hw).clamp(0.0, 1.0)
+    return {"v7_alpha_1": alpha_1, "v7_alpha_0_5": alpha_0_5}
+
+
 def _error_heatmap(pred, gt, err_scale: float):
     import torch
 
@@ -365,6 +447,200 @@ def _error_heatmap(pred, gt, err_scale: float):
     green = (err_norm * 2.0 - 1.0).clamp(0.0, 1.0)
     blue = torch.zeros_like(err_norm)
     return torch.cat([red, green, blue], dim=0)
+
+
+def _bicubic_midpoint_triplet(n_lr_rgb, np1_lr_rgb, output_hw):
+    """Pixel-averaged bicubic upsample of frame N and frame N+1 LR.
+
+    Mirrors ``scripts/sr_eval_v7.py::_bicubic_midpoint`` -- the symmetric
+    "predict the alpha=0.5 frame from neighbors" baseline that v7 has to
+    beat by >= 1 dB. Inputs are (1, 3, H_lr, W_lr); output (1, 3, H, W).
+    """
+    import torch.nn.functional as F
+
+    def _up(x):
+        return F.interpolate(
+            x, size=output_hw, mode="bicubic",
+            antialias=True, align_corners=False,
+        )
+    return (0.5 * (_up(n_lr_rgb) + _up(np1_lr_rgb))).clamp(0.0, 1.0)
+
+
+def _v7_panel_labels() -> list[str]:
+    """Single source of truth for the v7 viz column ordering."""
+    return [
+        "LR-bilinear",
+        "bicubic",
+        "bicubic-midpoint",
+        "v6.2",
+        "v7 alpha=1",
+        "v7 alpha=0.5",
+        "GT",
+        "GT-half",
+        "|err v7 alpha=0.5|",
+    ]
+
+
+def _render_iteration_v7(
+    *,
+    ckpt_path: Path,
+    tartanair_root: Path,
+    output_dir: Path,
+    n_pairs: int,
+    device: str,
+    ckpt_v6: Path | None = None,
+    fallback_backbone: str = "hat-l",
+    err_scale: float = 0.2,
+) -> Path | None:
+    """Render a v7 checkpoint into ``viz/step-XXXXXXXX.png``.
+
+    Output is a single composite strip matching the existing v5/v6 file
+    naming convention (one PNG per checkpoint step, stacked across pairs).
+    The 9-column layout is documented in
+    ``scripts/build_public_dashboard.py::viz_columns_for_run``.
+    """
+    import torch
+    import torch.nn.functional as F
+
+    step = _step_from_ckpt_name(ckpt_path)
+    viz_dir = output_dir / "viz"
+    viz_dir.mkdir(exist_ok=True, parents=True)
+    out_path = viz_dir / f"step-{step:08d}.png"
+    if out_path.exists():
+        return None
+
+    # Load v7 model once per checkpoint; render all triplets in one
+    # invocation; unload at the end of this function.
+    model = _load_v7_model(ckpt_path, device)
+
+    # Optional v6.2 comparison column. Re-uses the existing v6 loader so
+    # we don't fork the v6.x architecture inference logic.
+    v6_model = None
+    if ckpt_v6 is not None and ckpt_v6.exists() and _v6_column_allowed(ckpt_v6):
+        v6_model = _load_v6_model(ckpt_v6, device, fallback_backbone=fallback_backbone)
+
+    # Build a triplet dataset that matches sr_eval_v7.py's contract:
+    # (frame N, frame N+1, frame N+0.5 GT). max_triplets=n_pairs gives a
+    # deterministic small subset for fast inflight rendering.
+    from oss.gaussian.data import TartanAirGaussianDataset
+    from oss.sr.v7.intermediate_dataset import TartanAirIntermediateTriplets
+
+    base = TartanAirGaussianDataset(root=tartanair_root, scale=2.0)
+    ds = TartanAirIntermediateTriplets(base, max_triplets=n_pairs)
+    if len(ds) == 0:
+        print(f"  step {step}: no v7 triplets under {tartanair_root}", flush=True)
+        return None
+
+    def _build_9ch(part):
+        return torch.cat([
+            part["lr"].unsqueeze(0).to(device),
+            part["depth"].unsqueeze(0).to(device),
+            part["motion"].unsqueeze(0).to(device),
+            part["normals"].unsqueeze(0).to(device),
+        ], dim=1).contiguous()
+
+    rendered_strips: list[torch.Tensor] = []
+    for i in range(len(ds)):
+        sample = ds[i]
+        n_in = _build_9ch(sample["n"])
+        np1_in = _build_9ch(sample["n_plus_1"])
+        np1_gt = sample["n_plus_1"]["gt_hr"].unsqueeze(0).to(device).clamp(0.0, 1.0)
+        n_half_gt = sample["n_half"]["gt_hr"].unsqueeze(0).to(device).clamp(0.0, 1.0)
+        output_hw = (np1_gt.shape[-2], np1_gt.shape[-1])
+
+        preds = _v7_predictions(model, n_in, np1_in, output_hw=output_hw, device=device)
+        alpha_1 = preds["v7_alpha_1"]
+        alpha_0_5 = preds["v7_alpha_0_5"]
+
+        np1_rgb = np1_in[:, :3]
+        n_rgb = n_in[:, :3]
+        bicubic = F.interpolate(
+            np1_rgb, size=output_hw, mode="bicubic", antialias=True, align_corners=False,
+        ).clamp(0.0, 1.0)
+        lr_up = F.interpolate(
+            np1_rgb, size=output_hw, mode="bilinear", align_corners=False,
+        ).clamp(0.0, 1.0)
+        bicubic_mid = _bicubic_midpoint_triplet(n_rgb, np1_rgb, output_hw)
+
+        # v6.2 column: feed frame N+1 LR through the v6 model in
+        # single-shot mode (no prev-frame state). Mirrors the existing
+        # v6 viz path's channel-count negotiation.
+        v6_panel = None
+        if v6_model is not None:
+            v6_model.reset_state(device=torch.device(device))
+            in_channels = int(v6_model.cfg.in_channels)
+            if in_channels <= np1_in.shape[1]:
+                v6_inputs = np1_in[:, :in_channels]
+            else:
+                raise ValueError(
+                    f"v6 ckpt expects {in_channels} channels, "
+                    f"viz only has {np1_in.shape[1]}"
+                )
+            depth_hr = F.interpolate(
+                np1_in[:, 3:4], size=output_hw,
+                mode="bilinear", align_corners=False,
+            )
+            with torch.no_grad():
+                v6_out = v6_model(
+                    lr_inputs=v6_inputs,
+                    motion_lr=None,
+                    depth_hr_curr=depth_hr,
+                    depth_hr_prev=depth_hr,
+                    frame_index=0,
+                ).clamp(0.0, 1.0)
+            v6_panel = v6_out[0]
+        else:
+            # No v6 comparator available: re-show bicubic as a neutral
+            # placeholder so the strip width stays at 9 columns and the
+            # dashboard's panel-label drawer aligns correctly.
+            v6_panel = bicubic[0]
+
+        err_panel = _error_heatmap(alpha_0_5[0], n_half_gt[0], err_scale)
+
+        panels = [
+            lr_up[0],
+            bicubic[0],
+            bicubic_mid[0],
+            v6_panel,
+            alpha_1[0],
+            alpha_0_5[0],
+            np1_gt[0],
+            n_half_gt[0],
+            err_panel,
+        ]
+        rendered_strips.append(torch.cat(panels, dim=-1).cpu())
+
+    # Drop the v7 (and v6) models before writing the PNG so memory is
+    # released for the next checkpoint iteration.
+    del model
+    if v6_model is not None:
+        del v6_model
+
+    if not rendered_strips:
+        return None
+
+    composite = torch.cat(rendered_strips, dim=-2)
+    panel_labels = _v7_panel_labels()
+
+    from PIL import Image, ImageDraw
+    arr = (composite.clamp(0.0, 1.0).permute(1, 2, 0).numpy() * 255).astype("uint8")
+    img = Image.fromarray(arr)
+    drawer = ImageDraw.Draw(img, mode="RGBA")
+    panel_w = img.width // len(panel_labels)
+    n_strips = len(rendered_strips)
+    strip_h = img.height // n_strips
+    for i, label in enumerate(panel_labels):
+        text_w = 6 * len(label) + 12
+        text_h = 18
+        x_right = (i + 1) * panel_w - 6
+        x_left = x_right - text_w
+        for s in range(n_strips):
+            y_bottom = (s + 1) * strip_h - 6
+            y_top = y_bottom - text_h
+            drawer.rectangle([(x_left, y_top), (x_right, y_bottom)], fill=(0, 0, 0, 160))
+            drawer.text((x_left + 6, y_top + 2), label, fill=(255, 255, 255, 255))
+    img.save(out_path, format="PNG", optimize=False)
+    return out_path
 
 
 def _render_iteration(
@@ -683,36 +959,56 @@ def main(argv: list[str] | None = None) -> int:
             if step != last_step:
                 t0 = time.monotonic()
                 try:
-                    ckpt_v5 = (
-                        _auto_resolve_v5_ckpt(args.ckpt_v5)
-                        if primary_version == "v6" else args.ckpt_v5
+                    # v7 uses its own triplet dataset (no manifest) and a
+                    # separate render path. Detect-by-ckpt so this also
+                    # works for runs that don't follow the srcnn-v7-*
+                    # naming convention.
+                    is_v7 = (
+                        primary_version == "v7"
+                        or _is_v7_checkpoint(ckpt, device=args.device)
                     )
-                    manifest = _auto_resolve_manifest(
-                        explicit=args.manifest,
-                        primary_ckpt=ckpt,
-                        output_dir=args.output_dir,
-                        device=args.device,
-                    )
-                    if manifest is None:
-                        raise FileNotFoundError(
-                            "held-out manifest not found. Pass --manifest, or place it at "
-                            "<output-dir>/held_out_manifest.json / "
-                            r"<train-host-data>\checkpoints\v5_held_out_manifest*.json / "
-                            "/tmp/oss-runs/v5_held_out_manifest*.json."
+                    if is_v7:
+                        out = _render_iteration_v7(
+                            ckpt_path=ckpt,
+                            tartanair_root=args.tartanair_root,
+                            output_dir=args.output_dir,
+                            n_pairs=args.n_pairs,
+                            device=args.device,
+                            ckpt_v6=args.ckpt_v6,
+                            fallback_backbone=args.backbone,
+                            err_scale=args.err_scale,
                         )
-                    out = _render_iteration(
-                        ckpt_path=ckpt, manifest_path=manifest,
-                        tartanair_root=args.tartanair_root, output_dir=args.output_dir,
-                        n_pairs=args.n_pairs, device=args.device,
-                        primary_version=primary_version,
-                        ckpt_baseline=args.ckpt_baseline,
-                        ckpt_v5_gaussian=args.ckpt_v5_gaussian,
-                        ckpt_v6=args.ckpt_v6,
-                        ckpt_v5=ckpt_v5,
-                        fallback_backbone=args.backbone,
-                        traj_length=args.traj_length,
-                        err_scale=args.err_scale,
-                    )
+                    else:
+                        ckpt_v5 = (
+                            _auto_resolve_v5_ckpt(args.ckpt_v5)
+                            if primary_version == "v6" else args.ckpt_v5
+                        )
+                        manifest = _auto_resolve_manifest(
+                            explicit=args.manifest,
+                            primary_ckpt=ckpt,
+                            output_dir=args.output_dir,
+                            device=args.device,
+                        )
+                        if manifest is None:
+                            raise FileNotFoundError(
+                                "held-out manifest not found. Pass --manifest, or place it at "
+                                "<output-dir>/held_out_manifest.json / "
+                                r"<train-host-data>\checkpoints\v5_held_out_manifest*.json / "
+                                "/tmp/oss-runs/v5_held_out_manifest*.json."
+                            )
+                        out = _render_iteration(
+                            ckpt_path=ckpt, manifest_path=manifest,
+                            tartanair_root=args.tartanair_root, output_dir=args.output_dir,
+                            n_pairs=args.n_pairs, device=args.device,
+                            primary_version=primary_version,
+                            ckpt_baseline=args.ckpt_baseline,
+                            ckpt_v5_gaussian=args.ckpt_v5_gaussian,
+                            ckpt_v6=args.ckpt_v6,
+                            ckpt_v5=ckpt_v5,
+                            fallback_backbone=args.backbone,
+                            traj_length=args.traj_length,
+                            err_scale=args.err_scale,
+                        )
                     elapsed = time.monotonic() - t0
                     if out is None:
                         print(f"  step {step}: no new viz", flush=True)

@@ -642,6 +642,23 @@ def repro_manifests_for_run(run_dir: Path) -> dict[str, Any]:
 def viz_columns_for_run(name: str) -> list[str]:
     """Return the comparison-strip column order used by sr_temporal_inflight_viz."""
 
+    # v7 OSS-FX inflight strip: 9 columns covering both the SR head (alpha=1)
+    # and the OSS-FX intermediate head (alpha=0.5). Mirrors the v6 branch
+    # below in style — list lives in exactly one place so the dashboard JS
+    # and the daemon's panel-label drawer stay in sync.
+    if name == "srcnn-v7.0-pico-005":
+        return [
+            "LR-bilinear",
+            "bicubic",
+            "bicubic-midpoint",
+            "v6.2",
+            "v7 alpha=1",
+            "v7 alpha=0.5",
+            "GT",
+            "GT-half",
+            "|err v7 alpha=0.5|",
+        ]
+
     revision = v6_revision_from_run_name(name)
     if revision:
         return [
