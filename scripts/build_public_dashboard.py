@@ -35,9 +35,24 @@ DASHBOARD_PITCH = (
 )
 
 RUN_CONFIG = {
+    "srcnn-v7.0-pico-005": {
+        "active": True,
+        "default_open": True,
+        "arch_version": "v7",
+        "history_title": "v7.0 Pico OSS-FX",
+        "status": "active, training now (v7)",
+        "summary": "v7.0-pico-005 — OSS-FX frame extrapolation Phase 3 inflight. Tracks alpha=1 SR baseline + alpha=0.5 OSS-FX vs bicubic +1 dB pass criterion.",
+        "note": "Phase 3 spec: docs/architecture/2026-05-12-v7-pico-005-phase-3-plan.md. New history schema (sr_charbonnier, sr_lpips, sr_sobel, canvas_count, materialized).",
+        "headline": [
+            {"label": "Status", "value": "training now", "caption": "v7 OSS-FX inflight"},
+            {"label": "Latest step", "value_from": "latest_step", "caption": "from history.jsonl"},
+            {"label": "SR loss", "value_from": "v7_sr_loss", "caption": "latest sr_charbonnier"},
+        ],
+    },
     "srcnn-v6.2-pico-002": {
         "active": True,
         "default_open": True,
+        "arch_version": "v6",
         "history_title": "v6.2 Pico",
         "status": "active, training now",
         "summary": "v6.2 Pico-002 — disocclusion spawner + ConcatFusion + R=16 (v4 spawn arch fix for stippling)",
@@ -758,15 +773,104 @@ def load_previous_runs() -> dict[str, dict[str, Any]]:
     return {str(run.get("name")): run for run in runs if isinstance(run, dict) and run.get("name")}
 
 
+V7_HISTORY_KEYS = (
+    "step",
+    "total",
+    "sr_charbonnier",
+    "sr_lpips",
+    "sr_sobel",
+    "fg_charbonnier",
+    "lambda_fg",
+    "lambda_fg_lpips",
+    "lambda_temp",
+    "canvas_count",
+    "canvas_mean_opacity",
+    "canvas_mean_L_diag",
+    "materialized",
+    "elapsed_s",
+)
+
+
+def parse_v7_history_row(row: dict[str, Any]) -> dict[str, Any]:
+    """Slim a v7 history.jsonl row down to the canonical keys.
+
+    Tolerant of missing keys (early rows may omit canvas stats). Preserves
+    any extra primitive fields so future v7 schema additions don't silently
+    drop on the floor.
+    """
+    out: dict[str, Any] = {}
+    for key in V7_HISTORY_KEYS:
+        if key in row:
+            primitive = primitive_value(row[key])
+            if primitive is not None or row[key] is None:
+                out[key] = primitive
+    # Pass through any unrecognized primitive fields so we don't lose data
+    # when v7 schema gains a new metric.
+    for key, value in row.items():
+        if key in out:
+            continue
+        primitive = primitive_value(value)
+        if primitive is not None or value is None:
+            out[str(key)] = primitive
+    return out
+
+
+def parse_v7_score_row(row: dict[str, Any]) -> dict[str, Any]:
+    """Flatten one sr_eval_v7.py result so the JS dashboard can read it
+    without descending into nested dicts.
+
+    Headline OSS-FX number is ``delta_oss_fx_over_bicubic_psnr_db`` — the
+    +1 dB pass criterion lives here.
+    """
+    out: dict[str, Any] = {"step": step_value(row)}
+    for parent_key, child_prefix in (
+        ("alpha_1_sr", "alpha_1_sr"),
+        ("alpha_0_5_oss_fx", "alpha_0_5_oss_fx"),
+        ("alpha_0_5_bicubic_baseline", "alpha_0_5_bicubic"),
+    ):
+        block = row.get(parent_key)
+        if not isinstance(block, dict):
+            continue
+        for metric in ("psnr", "ssim", "lpips"):
+            value = finite_float(block.get(metric))
+            if value is not None:
+                out[f"{child_prefix}_{metric}"] = value
+    headline = finite_float(row.get("delta_oss_fx_over_bicubic_psnr_db"))
+    if headline is not None:
+        out["delta_oss_fx_over_bicubic_psnr_db"] = headline
+    n_triplets = row.get("n_triplets")
+    if isinstance(n_triplets, (int, float)):
+        out["n_triplets"] = int(n_triplets)
+    return out
+
+
+def read_v7_history(run_dir: Path) -> list[dict[str, Any]]:
+    """Read v7 history.jsonl (preferred) or fall back to metrics.json."""
+    history_path = run_dir / "history.jsonl"
+    if history_path.is_file():
+        return [parse_v7_history_row(row) for row in read_rows(history_path)]
+    return [parse_v7_history_row(row) for row in read_rows(run_dir / "metrics.json")]
+
+
+def read_v7_score_log(run_dir: Path) -> list[dict[str, Any]]:
+    rows = read_rows(run_dir / "score_log_v7.json")
+    return [parse_v7_score_row(row) for row in rows]
+
+
 def build_run(name: str, previous: dict[str, Any] | None) -> dict[str, Any] | None:
     if DENY_RE.search(name) or name not in RUN_CONFIG:
         return None
 
     slug = run_storage_slug(name)
     config = RUN_CONFIG[name]
+    arch_version = run_arch_version(name)
     run_dir = RUNS_DIR / slug
-    metrics = read_rows(run_dir / "metrics.json")
+    if arch_version == "v7":
+        metrics = read_v7_history(run_dir)
+    else:
+        metrics = read_rows(run_dir / "metrics.json")
     scores = read_rows(run_dir / "score_log.json")
+    v7_scores = read_v7_score_log(run_dir) if arch_version == "v7" else []
     viz_pngs = list_viz_pngs(run_dir)
     events = read_events(run_dir)
     repro_manifest = repro_manifests_for_run(run_dir)
@@ -777,10 +881,11 @@ def build_run(name: str, previous: dict[str, Any] | None) -> dict[str, Any] | No
             previous.get("latest_step")
             or previous.get("loss_curve")
             or previous.get("score_log")
+            or previous.get("score_log_v7")
             or previous.get("viz_pngs")
         )
     )
-    if not metrics and not scores and not viz_pngs and previous_has_data:
+    if not metrics and not scores and not v7_scores and not viz_pngs and previous_has_data:
         cached = dict(previous)
         if isinstance(cached.get("score_log"), list):
             cached["score_log"] = [
@@ -796,7 +901,10 @@ def build_run(name: str, previous: dict[str, Any] | None) -> dict[str, Any] | No
         cached["label"] = label_for_run(name, config)
         cached["slug"] = slug
         cached["active"] = config["active"]
+        cached["arch_version"] = arch_version
         cached["history"] = history_for_run(name, config)
+        if arch_version == "v7":
+            cached["score_log_v7"] = v7_scores or cached.get("score_log_v7") or []
         gpu_status = read_gpu_status(run_dir) or cached.get("gpu_status")
         cached["gpu_status"] = gpu_status
         cached["gpu_mem_log"] = build_gpu_mem_log(cached, gpu_status if isinstance(gpu_status, dict) else None)
@@ -813,7 +921,7 @@ def build_run(name: str, previous: dict[str, Any] | None) -> dict[str, Any] | No
         )
         return cached
 
-    if not metrics and not scores and not viz_pngs:
+    if not metrics and not scores and not v7_scores and not viz_pngs:
         max_target_steps = max_steps_for_run(name, [], previous)
         gpu_status = read_gpu_status(run_dir)
         return {
@@ -821,11 +929,13 @@ def build_run(name: str, previous: dict[str, Any] | None) -> dict[str, Any] | No
             "slug": slug,
             "label": label_for_run(name, config),
             "active": config["active"],
+            "arch_version": arch_version,
             "history": history_for_run(name, config),
             "latest_step": 0,
             "latest_metrics": {},
             "loss_curve": [],
             "score_log": [],
+            "score_log_v7": [],
             "viz_pngs": [],
             "viz_columns": viz_columns_for_run(name),
             "events": events,
@@ -837,7 +947,10 @@ def build_run(name: str, previous: dict[str, Any] | None) -> dict[str, Any] | No
             "cost": build_cost([], 0, max_target_steps),
         }
 
-    metrics = [row_with_derived_metrics(row) for row in sorted(metrics, key=step_value)]
+    if arch_version != "v7":
+        metrics = [row_with_derived_metrics(row) for row in sorted(metrics, key=step_value)]
+    else:
+        metrics = sorted(metrics, key=step_value)
     latest = slim_row(metrics[-1]) if metrics else {}
     latest_step = step_value(metrics[-1]) if metrics else 0
     viz_columns = viz_columns_for_run(name)
@@ -849,11 +962,13 @@ def build_run(name: str, previous: dict[str, Any] | None) -> dict[str, Any] | No
         "slug": slug,
         "label": label_for_run(name, config),
         "active": config["active"],
+        "arch_version": arch_version,
         "history": history_for_run(name, config),
         "latest_step": latest_step,
         "latest_metrics": latest,
         "loss_curve": _downsampled_loss_curve(metrics),
         "score_log": [slim_row(row, enrich_score=True) for row in scores],
+        "score_log_v7": v7_scores,
         "viz_pngs": viz_pngs,
         "viz_columns": viz_columns,
         "events": events,
@@ -1242,7 +1357,77 @@ function headlineValue(run, item) {
     const latest = run.latest_metrics || {};
     return fmtNumber(latest.loss_total ?? latest.loss, 5);
   }
+  if (item.value_from === "v7_sr_loss") {
+    const latest = run.latest_metrics || {};
+    return fmtNumber(latest.sr_charbonnier ?? latest.total, 5);
+  }
   return "--";
+}
+
+function v7PanelHtml(run) {
+  if (run.arch_version !== "v7") return "";
+  const scores = Array.isArray(run.score_log_v7) ? run.score_log_v7 : [];
+  if (!scores.length) {
+    return `<article class="min-w-0 rounded-md border border-violet-900/60 bg-violet-950/20 p-4" data-muted-surface data-v7-panel>
+      <h3 class="text-base font-semibold text-violet-100" data-text>v7 OSS-FX inflight</h3>
+      <p class="mt-2 text-sm text-zinc-400" data-subtext>No score_log_v7.json rows yet. The +1 dB OSS-FX vs bicubic delta will appear here once sr_eval_v7.py emits its first row.</p>
+    </article>`;
+  }
+  const latest = scores.reduce((acc, row) => (Number(row.step || 0) > Number(acc.step || 0) ? row : acc), scores[0]);
+  const delta = Number(latest.delta_oss_fx_over_bicubic_psnr_db);
+  const deltaPass = Number.isFinite(delta) && delta >= 1.0;
+  const deltaText = Number.isFinite(delta) ? `${delta >= 0 ? "+" : ""}${fmtNumber(delta, 3)} dB` : "--";
+  const cell = (label, value, digits = 4) => `
+    <div class="rounded border border-zinc-800 bg-zinc-950/40 px-3 py-2" data-muted-surface>
+      <div class="text-xs uppercase text-zinc-500" data-dim>${escapeHtml(label)}</div>
+      <div class="mt-1 font-mono text-base text-zinc-100" data-text>${escapeHtml(fmtNumber(value, digits))}</div>
+    </div>`;
+  return `<article class="min-w-0 rounded-md border border-violet-900/60 bg-violet-950/20 p-4" data-muted-surface data-v7-panel>
+    <div class="flex items-center justify-between gap-3">
+      <h3 class="text-base font-semibold text-violet-100" data-text>v7 OSS-FX inflight</h3>
+      <span class="text-sm text-zinc-500" data-dim>step ${Number(latest.step || 0).toLocaleString()} / ${scores.length} eval${scores.length === 1 ? "" : "s"}</span>
+    </div>
+    <div class="mt-3 rounded border ${deltaPass ? "border-emerald-700 bg-emerald-950/30" : "border-amber-800 bg-amber-950/20"} px-3 py-3">
+      <div class="text-xs uppercase ${deltaPass ? "text-emerald-300" : "text-amber-200"}" data-dim>delta_oss_fx_over_bicubic_psnr_db</div>
+      <div class="mt-1 font-mono text-2xl font-semibold ${deltaPass ? "text-emerald-200" : "text-amber-100"}">${escapeHtml(deltaText)}</div>
+      <div class="mt-1 text-xs ${deltaPass ? "text-emerald-300" : "text-amber-300"}" data-dim>pass gate: alpha=0.5 OSS-FX must beat bicubic by +1 dB</div>
+    </div>
+    <div class="mt-3 grid gap-2 sm:grid-cols-3">
+      ${cell("alpha=1 SR PSNR", latest.alpha_1_sr_psnr, 3)}
+      ${cell("alpha=1 SR SSIM", latest.alpha_1_sr_ssim)}
+      ${cell("alpha=1 SR LPIPS", latest.alpha_1_sr_lpips)}
+      ${cell("alpha=0.5 OSS-FX PSNR", latest.alpha_0_5_oss_fx_psnr, 3)}
+      ${cell("alpha=0.5 OSS-FX SSIM", latest.alpha_0_5_oss_fx_ssim)}
+      ${cell("alpha=0.5 OSS-FX LPIPS", latest.alpha_0_5_oss_fx_lpips)}
+      ${cell("alpha=0.5 bicubic PSNR", latest.alpha_0_5_bicubic_psnr, 3)}
+      ${cell("alpha=0.5 bicubic SSIM", latest.alpha_0_5_bicubic_ssim)}
+      ${cell("alpha=0.5 bicubic LPIPS", latest.alpha_0_5_bicubic_lpips)}
+    </div>
+  </article>`;
+}
+
+function v7CanvasPanelHtml(run) {
+  if (run.arch_version !== "v7") return "";
+  const rows = (run.loss_curve || []).filter((row) => row && (row.canvas_count !== undefined || row.materialized !== undefined));
+  if (!rows.length) return "";
+  const latest = rows[rows.length - 1];
+  const cell = (label, value, digits) => `
+    <div class="rounded border border-zinc-800 bg-zinc-950/40 px-3 py-2" data-muted-surface>
+      <div class="text-xs uppercase text-zinc-500" data-dim>${escapeHtml(label)}</div>
+      <div class="mt-1 font-mono text-base text-zinc-100" data-text>${escapeHtml(fmtNumber(value, digits))}</div>
+    </div>`;
+  return `<article class="min-w-0 rounded-md border border-zinc-800 bg-zinc-950/25 p-4" data-muted-surface data-v7-canvas>
+    <div class="flex items-center justify-between gap-3">
+      <h3 class="text-base font-semibold text-zinc-50" data-text>v7 canvas health</h3>
+      <span class="text-sm text-zinc-500" data-dim>step ${Number(latest.step || 0).toLocaleString()}</span>
+    </div>
+    <div class="mt-3 grid gap-2 sm:grid-cols-2">
+      ${cell("canvas_count", latest.canvas_count, 0)}
+      ${cell("materialized", latest.materialized, 0)}
+      ${cell("canvas_mean_opacity", latest.canvas_mean_opacity, 4)}
+      ${cell("canvas_mean_L_diag", latest.canvas_mean_L_diag, 4)}
+    </div>
+  </article>`;
 }
 
 function setTheme(light) {
@@ -1289,9 +1474,9 @@ function chartOptions({ yTitle = "loss", componentAxis = false } = {}) {
 function renderLossChart(canvas, run) {
   const rows = run.loss_curve || [];
   const datasets = [
-    { label: "loss_total", yAxisID: "y", data: xy(rows, "loss_total", "loss"), borderColor: colors.total, backgroundColor: colors.total, pointRadius: 0, borderWidth: 2, tension: 0 },
-    { label: "loss_charbonnier", yAxisID: "y1", data: xy(rows, "loss_charbonnier", "l1", "t_l1"), borderColor: colors.charbonnier, backgroundColor: colors.charbonnier, pointRadius: 0, borderWidth: 1.5, borderDash: [5, 3], tension: 0 },
-    { label: "loss_lpips", yAxisID: "y1", data: xy(rows, "loss_lpips", "t_lpips"), borderColor: colors.lpips, backgroundColor: colors.lpips, pointRadius: 0, borderWidth: 1.5, tension: 0 },
+    { label: "loss_total", yAxisID: "y", data: xy(rows, "loss_total", "total", "loss"), borderColor: colors.total, backgroundColor: colors.total, pointRadius: 0, borderWidth: 2, tension: 0 },
+    { label: "loss_charbonnier", yAxisID: "y1", data: xy(rows, "loss_charbonnier", "sr_charbonnier", "l1", "t_l1"), borderColor: colors.charbonnier, backgroundColor: colors.charbonnier, pointRadius: 0, borderWidth: 1.5, borderDash: [5, 3], tension: 0 },
+    { label: "loss_lpips", yAxisID: "y1", data: xy(rows, "loss_lpips", "sr_lpips", "t_lpips"), borderColor: colors.lpips, backgroundColor: colors.lpips, pointRadius: 0, borderWidth: 1.5, tension: 0 },
   ].filter((dataset) => dataset.data.length);
   if (!datasets.length) return null;
   return new Chart(canvas, { type: "line", data: { datasets }, options: chartOptions({ yTitle: "total loss", componentAxis: true }) });
@@ -1427,6 +1612,8 @@ function renderRun(run, index) {
     </div>`).join("");
   const note = history.note ? `<p class="rounded border border-amber-900/60 bg-amber-950/20 px-4 py-3 text-sm text-amber-100">${escapeHtml(history.note)}</p>` : "";
   const gpu = run.active ? gpuPanelHtml(run) : "";
+  const v7Panel = v7PanelHtml(run);
+  const v7Canvas = v7CanvasPanelHtml(run);
   const chartId = `loss-chart-${index}`;
   const gpuMemChartId = `gpu-mem-chart-${index}`;
   const scoreId = `score-table-${index}`;
@@ -1478,6 +1665,8 @@ function renderRun(run, index) {
         </article>
       </div>
       <div class="flex min-w-0 flex-col gap-4">
+        ${v7Panel}
+        ${v7Canvas}
         <article class="min-w-0 rounded-md border border-zinc-800 bg-zinc-950/25 p-4" data-muted-surface>
           <h3 class="text-base font-semibold text-zinc-50" data-text>Held-out scores</h3>
           <div id="${scoreId}" class="mt-3"></div>
@@ -1557,13 +1746,32 @@ document.addEventListener("DOMContentLoaded", () => {
 """
 
 
-def active_run_name() -> str | None:
+def run_arch_version(name: str) -> str:
+    """Return the arch_version tag for a run from RUN_CONFIG.
+
+    Defaults to 'v6' when unset so legacy entries (which never carried the
+    tag) keep their existing routing. The v7 lane explicitly sets
+    arch_version='v7' so the v7 history schema + score_log_v7.json reader
+    branch can pick it up.
+    """
+    config = RUN_CONFIG.get(name) or {}
+    return str(config.get("arch_version") or "v6")
+
+
+def active_run_name(version: str | None = None) -> str | None:
     """Return the name of the run flagged active=True in RUN_CONFIG, or
     None if no active run is configured. When multiple are flagged active
-    the first in insertion order wins."""
+    the first in insertion order wins.
+
+    When ``version`` is provided, only consider runs whose arch_version
+    matches. Used by the v7 supervisor (--print-active-run --version v7).
+    """
     for name, config in RUN_CONFIG.items():
-        if config.get("active"):
-            return name
+        if not config.get("active"):
+            continue
+        if version is not None and run_arch_version(name) != version:
+            continue
+        return name
     return None
 
 
@@ -1573,6 +1781,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--out", type=Path, default=PUBLIC_DIR)
     parser.add_argument("--print-active-run", action="store_true",
                         help="Print the canonical active run name (RUN_CONFIG with active=True) and exit. Used by watcher + viz-daemon supervisors.")
+    parser.add_argument("--version", default="v6", choices=["v6", "v7"],
+                        help="Architecture version filter for --print-active-run. Defaults to v6 to preserve legacy callers; --version v7 resolves the active v7 run (used by heldout-eval-v7-supervisor.ps1).")
     parser.add_argument("--print-run-names", action="store_true",
                         help="Print the canonical run-name list (RUN_CONFIG keys, one per line) and exit.")
     parser.add_argument("--print-run-slug", metavar="NAME",
@@ -1583,7 +1793,11 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     if args.print_active_run:
-        name = active_run_name()
+        # --version explicitly filters by arch_version (default 'v6' preserves
+        # legacy watcher/viz-daemon behavior — they only ever cared about v6
+        # runs, and v6 entries that predate the arch_version tag fall through
+        # to the v6 default in run_arch_version()).
+        name = active_run_name(version=args.version)
         if name:
             print(name)
         return

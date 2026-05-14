@@ -3540,7 +3540,53 @@ function headlineValue(run, item) {
     const latest = run.latest_metrics || {};
     return fmtNumber(latest.loss_total ?? latest.loss, 5);
   }
+  if (item.value_from === "v7_sr_loss") {
+    const latest = run.latest_metrics || {};
+    return fmtNumber(latest.sr_charbonnier ?? latest.total, 5);
+  }
   return "--";
+}
+
+function v7InflightPanelHtml(run) {
+  if (!run || run.arch_version !== "v7") return "";
+  const scores = Array.isArray(run.score_log_v7) ? run.score_log_v7 : [];
+  if (!scores.length) {
+    return `<article class="rounded-md border border-violet-900/60 bg-violet-950/20 p-4" data-muted-surface data-v7-panel>
+      <h3 class="text-base font-semibold text-violet-100" data-text>v7 OSS-FX inflight</h3>
+      <p class="mt-2 text-sm text-zinc-400" data-subtext>Waiting for score_log_v7.json. The +1 dB OSS-FX vs bicubic gate will surface here.</p>
+    </article>`;
+  }
+  const latest = scores.reduce((acc, row) => (Number(row.step || 0) > Number(acc.step || 0) ? row : acc), scores[0]);
+  const delta = Number(latest.delta_oss_fx_over_bicubic_psnr_db);
+  const pass = Number.isFinite(delta) && delta >= 1.0;
+  const deltaText = Number.isFinite(delta) ? `${delta >= 0 ? "+" : ""}${fmtNumber(delta, 3)} dB` : "--";
+  const cell = (label, value, digits) => `
+    <div class="rounded border border-zinc-800 bg-zinc-950/40 px-3 py-2" data-muted-surface>
+      <div class="text-xs uppercase text-zinc-500" data-dim>${escapeHtml(label)}</div>
+      <div class="mt-1 font-mono text-base text-zinc-100" data-text>${escapeHtml(fmtNumber(value, digits))}</div>
+    </div>`;
+  return `<article class="rounded-md border border-violet-900/60 bg-violet-950/20 p-4" data-muted-surface data-v7-panel>
+    <div class="flex items-center justify-between gap-3">
+      <h3 class="text-base font-semibold text-violet-100" data-text>v7 OSS-FX inflight</h3>
+      <span class="text-sm text-zinc-500" data-dim>step ${Number(latest.step || 0).toLocaleString()} / ${scores.length} eval${scores.length === 1 ? "" : "s"}</span>
+    </div>
+    <div class="mt-3 rounded border ${pass ? "border-emerald-700 bg-emerald-950/30" : "border-amber-800 bg-amber-950/20"} px-3 py-3">
+      <div class="text-xs uppercase ${pass ? "text-emerald-300" : "text-amber-200"}" data-dim>delta_oss_fx_over_bicubic_psnr_db</div>
+      <div class="mt-1 font-mono text-2xl font-semibold ${pass ? "text-emerald-200" : "text-amber-100"}">${escapeHtml(deltaText)}</div>
+      <div class="mt-1 text-xs ${pass ? "text-emerald-300" : "text-amber-300"}" data-dim>pass gate: alpha=0.5 OSS-FX beats bicubic by +1 dB</div>
+    </div>
+    <div class="mt-3 grid gap-2 sm:grid-cols-3">
+      ${cell("alpha=1 SR PSNR", latest.alpha_1_sr_psnr, 3)}
+      ${cell("alpha=1 SR SSIM", latest.alpha_1_sr_ssim, 4)}
+      ${cell("alpha=1 SR LPIPS", latest.alpha_1_sr_lpips, 4)}
+      ${cell("alpha=0.5 OSS-FX PSNR", latest.alpha_0_5_oss_fx_psnr, 3)}
+      ${cell("alpha=0.5 OSS-FX SSIM", latest.alpha_0_5_oss_fx_ssim, 4)}
+      ${cell("alpha=0.5 OSS-FX LPIPS", latest.alpha_0_5_oss_fx_lpips, 4)}
+      ${cell("alpha=0.5 bicubic PSNR", latest.alpha_0_5_bicubic_psnr, 3)}
+      ${cell("alpha=0.5 bicubic SSIM", latest.alpha_0_5_bicubic_ssim, 4)}
+      ${cell("alpha=0.5 bicubic LPIPS", latest.alpha_0_5_bicubic_lpips, 4)}
+    </div>
+  </article>`;
 }
 
 function metricKeyForHeadline(item) {
@@ -5034,7 +5080,7 @@ function renderLossChart(canvas, run) {
     {
       label: "loss_total",
       yAxisID: "y",
-      data: xy(rows, "loss_total", "loss"),
+      data: xy(rows, "loss_total", "total", "loss"),
       borderColor: colors.total,
       backgroundColor: colors.total,
       pointRadius: (context) => shouldHighlightLastPoint(run, rows, context) ? 5 : 0,
@@ -5046,8 +5092,8 @@ function renderLossChart(canvas, run) {
       borderWidth: 2,
       tension: 0,
     },
-    { label: "loss_charbonnier", yAxisID: "y1", data: xy(rows, "loss_charbonnier", "l1", "t_l1"), borderColor: colors.charbonnier, backgroundColor: colors.charbonnier, pointRadius: 0, pointHitRadius: 6, borderWidth: 1.5, borderDash: [5, 3], tension: 0 },
-    { label: "loss_lpips", yAxisID: "y1", data: xy(rows, "loss_lpips", "t_lpips"), borderColor: colors.lpips, backgroundColor: colors.lpips, pointRadius: 0, pointHitRadius: 6, borderWidth: 1.5, tension: 0 },
+    { label: "loss_charbonnier", yAxisID: "y1", data: xy(rows, "loss_charbonnier", "sr_charbonnier", "l1", "t_l1"), borderColor: colors.charbonnier, backgroundColor: colors.charbonnier, pointRadius: 0, pointHitRadius: 6, borderWidth: 1.5, borderDash: [5, 3], tension: 0 },
+    { label: "loss_lpips", yAxisID: "y1", data: xy(rows, "loss_lpips", "sr_lpips", "t_lpips"), borderColor: colors.lpips, backgroundColor: colors.lpips, pointRadius: 0, pointHitRadius: 6, borderWidth: 1.5, tension: 0 },
   ].filter((dataset) => dataset.data.length);
   if (!datasets.length) return null;
   const options = chartOptions({ yTitle: "total loss", componentAxis: true });
@@ -7139,6 +7185,7 @@ function renderRun(run, index, openByRun = new Map()) {
     </button>`).join("");
   const note = history.note ? `<p class="rounded border border-amber-900/60 bg-amber-950/20 px-4 py-3 text-sm text-amber-100">${escapeHtml(history.note)}</p>` : "";
   const gpu = run.active ? gpuPanelHtml(run) : "";
+  const v7Panel = v7InflightPanelHtml(run);
   // Cost panel was per-run; promoted to a single page-level "bottom of signal
   // section" host (#signal-cost-panel) populated by renderHero. Keeping it
   // here would render two copies for the active run.
@@ -7207,6 +7254,7 @@ function renderRun(run, index, openByRun = new Map()) {
     <div class="grid min-w-0 gap-4 p-4 lg:grid-cols-[1.15fr_0.85fr]">
       <div class="flex min-w-0 flex-col gap-4">
         ${note}
+        ${v7Panel}
         <div class="grid min-w-0 gap-3 sm:grid-cols-3">${headline}</div>
         ${ticker}
         ${progress}

@@ -41,7 +41,7 @@ def test_public_dashboard_fixture_passes_schema(tmp_path: Path) -> None:
     )
 
     assert proc.returncode == 0, proc.stderr
-    assert "OK schema_version=2026-05-07 runs=7 models=" in proc.stdout
+    assert "OK schema_version=2026-05-07 runs=8 models=" in proc.stdout
     data = json.loads(data_json.read_text(encoding="utf-8"))
     assert len(data["models"]) >= 5
     assert all(run["slug"] == run["name"] for run in data["runs"])
