@@ -7372,7 +7372,7 @@ function renderHeroCompactStatus(active) {
   }
   if (vizAnchor && vizImg && vizCaption) {
     if (latestViz && active?.name) {
-      const url = `runs/${encodeURIComponent(active.name)}/${encodeURIComponent(latestViz)}`;
+      const url = runUrl(active, latestViz);
       vizImg.src = url;
       vizImg.alt = `${arch} latest visual at step ${vizStep || "?"}`;
       vizCaption.textContent = `${arch} · ${vizStr}`;
