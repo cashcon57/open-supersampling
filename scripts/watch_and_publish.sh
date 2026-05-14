@@ -276,13 +276,24 @@ GIT_PULL_EVERY="${GIT_PULL_EVERY:-4}"
 cycle_idx=0
 
 while :; do
-  # Periodic git pull. Failures are non-fatal — log and keep cycling so a
-  # transient network blip doesn't kill the publish path.
+  # Periodic git sync. We use fetch + hard-reset-to-origin/main instead of
+  # `git pull --ff-only` because the latter wedges as soon as ANYTHING dirties
+  # the working tree -- direct scp from the operator, .pyc generation racing
+  # the watcher, an accidentally-touched .ps1, etc. The watcher's job is to
+  # keep the local checkout in lockstep with origin/main; local mods on a
+  # training host are a bug, not a feature. The trainer / inflight-viz /
+  # eval-supervisor processes hold their imports in memory and don't re-read
+  # source mid-execution, so a hard-reset is benign even mid-run.
+  #
+  # Failures (network blip, fetch timeout) are non-fatal -- log and keep cycling.
   if (( cycle_idx % GIT_PULL_EVERY == 0 )); then
     if [[ -d "${REPO_ROOT}/.git" ]]; then
-      pull_out="$(cd "${REPO_ROOT}" && git pull --ff-only origin main 2>&1)" || pull_out="(pull failed: $pull_out)"
-      if [[ -n "$pull_out" ]] && [[ "$pull_out" != *"Already up to date"* ]]; then
-        echo "[watch_and_publish] git pull: $pull_out"
+      sync_out="$(cd "${REPO_ROOT}" && {
+        git fetch origin main --quiet 2>&1 && \
+        git reset --hard origin/main 2>&1
+      })" || sync_out="(sync failed: $sync_out)"
+      if [[ -n "$sync_out" ]] && [[ "$sync_out" != *"HEAD is now at"*"already"* ]]; then
+        echo "[watch_and_publish] git sync: $sync_out"
       fi
     fi
   fi
