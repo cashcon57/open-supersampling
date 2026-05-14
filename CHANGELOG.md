@@ -5,6 +5,14 @@ Versioning: SemVer pre-1.0 (PATCH = bug fixes / docs; MINOR = new features; MAJO
 
 ## [Unreleased] — `v0.2-dev` branch
 
+### v7 Phase 3 kickoff + v6.2-pico-002 stopped early (2026-05-14)
+
+`srcnn-v6.2-pico-002` terminated 2026-05-12 at step 74,000 of 100,000 when the GPU was reclaimed by another process. Rather than resume the remaining 26K steps the project moved to v7-pico-005 because the architecture has changed substantially (N-D Gaussian primitive with V_xt cross-correlation in the Cholesky covariance, parent-child loss-adaptive density, OSS-FX time-slice rendering, Mip-Splatting anti-aliasing filters) and the marginal v6.2 training would not validate any of that. The step-00074000.pt checkpoint is preserved as the **α=1 SR PSNR baseline-to-beat** per the Phase 3 pass criterion.
+
+- `srcnn-v7.0-pico-005` launched on 3080 Ti 2026-05-14 with `--curriculum --enable-parent-child --max-hr-crop 256 --canvas-capacity 16384` against TartanAir. 100K steps planned, ~7.4 days wall-clock at ~6.4 s/step.
+- Graduated checkpoint schedule: ckpts at step 100, 500, 1000 (early-warning), then every 10K. Added `--ckpt-warmup-steps` CLI flag to `scripts/sr_train_v7.py` to support this.
+- Dashboard updated: v6.2 status reflects "stopped at 74K -- baseline for v7", v7 RUN_CONFIG entry now the default-open run.
+
 ### v7 Phase 2 closed — N-D Gaussian model wiring + training scaffold (2026-05-12)
 
 The OSS-FX pivot from inference-time canvas-scaling (H010, falsified) to a native N-D Gaussian canvas with time-slice rasterization is implemented end-to-end. Phase 0 ref rasterizer → Phase 2A canvas + spawner + model + loss + dataset → Phase 2B BackboneSpawner wiring → Phase 2C HAT-Tiny backbone swap-in + canvas pruning policy → Phase 2C closeout end-to-end training-step integration test. 61/61 v7 tests pass.

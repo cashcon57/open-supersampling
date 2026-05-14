@@ -165,9 +165,12 @@ def test_print_active_run_version_v7_returns_configured_run() -> None:
         check=True,
     )
     stdout = proc_v6.stdout.strip()
-    assert stdout, "default --print-active-run must still print an active run"
-    # The legacy active run is a v6.x entry, not the v7 one.
-    assert "v7" not in stdout
+    # After v6.2-pico-002 stopped on 2026-05-12, no v6 run is active.
+    # Default --print-active-run (v6) is allowed to return empty in this
+    # state; the v6 eval supervisor handles "no active v6 run" by skipping.
+    # If a v6 run IS returned, it must be a v6.x entry, never v7.
+    if stdout:
+        assert "v7" not in stdout
 
 
 def test_v7_build_run_surfaces_score_log_and_arch_version(tmp_path: Path) -> None:

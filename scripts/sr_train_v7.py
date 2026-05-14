@@ -303,6 +303,14 @@ def main() -> int:
     )
     parser.add_argument("--log-every", type=int, default=20)
     parser.add_argument("--ckpt-every", type=int, default=500)
+    parser.add_argument("--ckpt-warmup-steps", type=str, default="",
+                        help="Comma-separated list of explicit early-step "
+                             "checkpoints to take BEFORE the --ckpt-every "
+                             "cadence kicks in. E.g. '100,500,1000' means "
+                             "ckpt at step 100, 500, 1000, then every "
+                             "--ckpt-every steps after. Useful for catching "
+                             "fundamental config issues without waiting "
+                             "for the first regular checkpoint.")
     parser.add_argument("--lambda-charbonnier", type=float, default=1.0)
     parser.add_argument("--lambda-lpips", type=float, default=1.0)
     parser.add_argument("--lambda-fg", type=float, default=1.0)
@@ -555,7 +563,15 @@ def main() -> int:
                 with open(history_path, "a") as f:
                     f.write(json.dumps(parts) + "\n")
 
-            if step % args.ckpt_every == 0:
+            should_ckpt = (step % args.ckpt_every == 0)
+            if not should_ckpt and args.ckpt_warmup_steps:
+                warmup_steps = {
+                    int(s.strip()) for s in args.ckpt_warmup_steps.split(",")
+                    if s.strip()
+                }
+                if step in warmup_steps:
+                    should_ckpt = True
+            if should_ckpt:
                 ckpt_path = args.output_dir / f"step-{step:08d}.pt"
                 torch.save({
                     "step": step,
