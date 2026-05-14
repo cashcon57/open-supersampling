@@ -547,6 +547,86 @@
       background: rgba(140, 255, 193, 0.12);
     }
     .repro-command-copy.copied::after { content: " copied"; }
+
+    /* Visual-history drawer (per-run viz strips). Slides in from the right on
+       desktop, slides up from the bottom on mobile. Mirrors the repro-panel
+       overlay pattern but is reusable across runs. */
+    .viz-drawer {
+      position: fixed;
+      inset: 0;
+      z-index: 10025;
+      display: grid;
+      justify-items: end;
+    }
+    .viz-drawer[hidden] { display: none; }
+    .viz-drawer-backdrop {
+      position: absolute;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.62);
+    }
+    .viz-drawer-shell {
+      position: relative;
+      display: flex;
+      width: min(56rem, 100vw);
+      max-width: 100vw;
+      height: 100dvh;
+      flex-direction: column;
+      border-left: 1px solid var(--oss-line-strong);
+      background: rgba(0, 0, 0, 0.96);
+      box-shadow: -24px 0 70px rgba(0, 0, 0, 0.5), 0 0 26px rgba(140, 255, 193, 0.08);
+      transform: translateX(100%);
+      transition: transform 220ms ease-out;
+    }
+    .viz-drawer.is-open .viz-drawer-shell { transform: translateX(0); }
+    .viz-drawer-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 1rem;
+      border-bottom: 1px solid var(--oss-line);
+      padding: 1rem;
+    }
+    .viz-drawer-title {
+      color: var(--oss-text);
+      font-size: 0.95rem;
+      font-weight: 700;
+      line-height: 1.35;
+    }
+    .viz-drawer-meta {
+      margin-top: 0.25rem;
+      color: var(--oss-dim);
+      font-size: 0.72rem;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
+    .viz-drawer-close {
+      flex: 0 0 auto;
+      color: var(--oss-accent);
+      font-size: 1.35rem;
+      line-height: 1;
+    }
+    .viz-drawer-close:hover,
+    .viz-drawer-close:focus-visible {
+      outline: none;
+      background: rgba(140, 255, 193, 0.12);
+    }
+    .viz-drawer-body {
+      display: flex;
+      flex-direction: column;
+      overflow: auto;
+      padding: 1rem;
+    }
+    /* Inside the drawer, render strips as a vertical scroll (one frame per
+       row) so users can scrub all checkpoints without horizontal panning.
+       Override the inline-flex `.viz-strip` default with column layout. */
+    #visual-history-drawer-strip.viz-strip {
+      flex-direction: column;
+      gap: 0.75rem;
+      overflow-x: visible;
+    }
+    #visual-history-drawer-strip .viz-frame { width: 100%; }
+    #visual-history-drawer-strip .viz-frame img { width: 100%; height: auto; }
+
     .comparison-chart-wrap { height: 20rem; min-height: 18rem; }
     .chart-card { position: relative; scroll-margin-top: 1rem; }
     .title-with-info {
@@ -1497,6 +1577,18 @@
         border-top: 1px solid var(--oss-line-strong);
         border-left: 0;
       }
+      .viz-drawer {
+        align-items: end;
+        justify-items: stretch;
+      }
+      .viz-drawer-shell {
+        width: 100vw;
+        height: min(85dvh, 48rem);
+        border-top: 1px solid var(--oss-line-strong);
+        border-left: 0;
+        transform: translateY(100%);
+      }
+      .viz-drawer.is-open .viz-drawer-shell { transform: translateY(0); }
     }
     /* F3 — Mobile viz control stacking (≤ 480px).
        Selector full-width on row 1, Compare + Play side-by-side on row 2,
@@ -1752,12 +1844,12 @@
       </p>
     </section>
 
-    <div class="terminal-divider" aria-hidden="true"><span class="td-corner">├─ viz strips ─</span><span class="td-rule"></span><span class="td-corner">─┤</span></div>
+    <div class="terminal-divider" aria-hidden="true"><span class="td-corner">├─ visual progress ─</span><span class="td-rule"></span><span class="td-corner">─┤</span></div>
     <section id="global-viz-section" class="rounded-md border border-zinc-800 bg-zinc-900/60 p-5" data-surface aria-labelledby="global-viz-title">
       <header class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h2 id="global-viz-title" class="text-xl font-semibold text-zinc-50" data-text>Viz strips</h2>
-          <p class="mt-1 max-w-3xl text-sm text-zinc-400" data-subtext>Recent rendered comparisons (LR · bicubic · model · GT · |error| · features) for any tracked run. Click any strip to open the lightbox compare view.</p>
+          <h2 id="global-viz-title" class="text-xl font-semibold text-zinc-50" data-text>Visual Progress</h2>
+          <p class="mt-1 max-w-3xl text-sm text-zinc-400" data-subtext>Recent rendered comparisons (LR · bicubic · model · GT · |error| · features) for any tracked run. Click any strip to open the lightbox compare view. Select an <em>OSS-FX</em> option to watch the continuous frame-extrapolation clip for that run.</p>
         </div>
         <div class="flex items-center gap-2 text-sm">
           <label for="global-viz-run-select" class="text-zinc-400" data-dim>Run:</label>
@@ -1772,13 +1864,19 @@
         </div>
       </header>
       <div id="global-viz-strip" class="viz-strip mt-4 flex gap-3 overflow-x-auto pb-2"></div>
-    </section>
 
-    <div class="terminal-divider" aria-hidden="true"><span class="td-corner">├─ oss-fx (frame extrapolation) ─</span><span class="td-rule"></span><span class="td-corner">─┤</span></div>
-    <section id="oss-fx-section" class="rounded-md border border-zinc-800 bg-zinc-900/60 p-5" data-surface aria-labelledby="oss-fx-title">
-      <header class="flex flex-col gap-3">
-        <div>
-          <h2 id="oss-fx-title" class="text-xl font-semibold text-zinc-50" data-text>OSS-FX — continuous frame extrapolation</h2>
+      <!-- OSS-FX video surface (shown only when an "ossfx:" option is selected) -->
+      <div id="global-viz-ossfx" class="mt-4" hidden>
+        <div class="flex flex-wrap items-center gap-3 text-sm">
+          <span class="text-zinc-400" data-dim>Mode:</span>
+          <button id="oss-fx-mode-sr" class="rounded-md border border-emerald-500/60 bg-emerald-900/30 px-3 py-1 text-xs font-mono text-emerald-200" type="button" aria-pressed="true">SR only · 30 fps</button>
+          <button id="oss-fx-mode-fg" class="rounded-md border border-zinc-700 bg-zinc-950/40 px-3 py-1 text-xs font-mono text-zinc-300 hover:border-emerald-500" type="button" aria-pressed="false">SR + FG · 60 fps</button>
+          <button id="oss-fx-mode-gt" class="rounded-md border border-zinc-700 bg-zinc-950/40 px-3 py-1 text-xs font-mono text-zinc-300 hover:border-emerald-500" type="button" aria-pressed="false">Ground truth · 30 fps</button>
+          <span id="oss-fx-run-status" class="text-xs font-mono text-zinc-500" data-dim></span>
+          <button id="oss-fx-info-toggle" class="ml-auto rounded border border-zinc-700 px-2 py-0.5 text-xs text-zinc-300 hover:border-emerald-500" type="button" aria-expanded="false" aria-controls="oss-fx-info-panel">About OSS-FX</button>
+        </div>
+        <div id="oss-fx-info-panel" class="mt-3 rounded border border-zinc-800 bg-zinc-950/40 p-3 text-sm leading-6 text-zinc-300" hidden>
+          <h3 class="text-base font-semibold text-zinc-100" data-text>OSS-FX — continuous frame extrapolation</h3>
           <p class="mt-2 max-w-4xl text-sm leading-6 text-zinc-400" data-subtext>
             Real-time games can't wait for frame <em>N+1</em> to render the moment <em>between</em> <em>N</em> and <em>N+1</em>.
             <strong>Interpolation</strong> (DLSS-FG style) needs both endpoints already rendered, so the in-between frame
@@ -1799,133 +1897,13 @@
             <strong>Honest disclosure on the FG frames.</strong> Per <a class="underline hover:text-amber-100" href="https://github.com/cashcon57/open-supersampling/blob/main/docs/research/hypotheses/H009-canvas-not-utilized.md">H009</a>, the composite_head learned to weight the Gaussian canvas near zero, so scaling motion by α=0.5 in a vanilla forward pass produces frames pixel-near-identical to the SR frames (0.000225 mean abs diff vs 0.128 inter-frame motion → ratio 0.0017, no visible motion). To get something visible at this checkpoint, the FG frames in the <em>SR + FG</em> stream are rendered with an <strong>inference-time canvas magnification of ×50</strong> applied at the composite_head input — equivalent to the v6.3 fusion-magnitude intervention without retraining. That bumps the extrap-vs-SR pixel diff to 0.008 (37× the unscaled baseline; ~6% of inter-frame motion). It's a hack: the model was never trained with canvas magnitudes that large, so artifacts are expected. v6.3 properly retrains with the magnitude balanced.
           </p>
         </div>
-        <div class="flex flex-wrap items-center gap-3 text-sm">
-          <span class="text-zinc-400" data-dim>Run:</span>
-          <select id="oss-fx-run-select" class="rounded-md border border-zinc-700 bg-zinc-950 px-3 py-1 text-xs font-mono text-zinc-200 focus:border-emerald-500" aria-label="OSS-FX run version">
-            <option value="srcnn-v6.2-pico-002" selected>v6.2-pico-002 (baseline)</option>
-            <option value="srcnn-v7.0-pico-005">v7.0-pico-005 (training now)</option>
-          </select>
-          <span id="oss-fx-run-status" class="text-xs font-mono text-zinc-500" data-dim></span>
-          <span class="text-zinc-400" data-dim>Mode:</span>
-          <button id="oss-fx-mode-sr" class="rounded-md border border-emerald-500/60 bg-emerald-900/30 px-3 py-1 text-xs font-mono text-emerald-200" type="button" aria-pressed="true">SR only · 30 fps</button>
-          <button id="oss-fx-mode-fg" class="rounded-md border border-zinc-700 bg-zinc-950/40 px-3 py-1 text-xs font-mono text-zinc-300 hover:border-emerald-500" type="button" aria-pressed="false">SR + FG · 60 fps</button>
-          <button id="oss-fx-mode-gt" class="rounded-md border border-zinc-700 bg-zinc-950/40 px-3 py-1 text-xs font-mono text-zinc-300 hover:border-emerald-500" type="button" aria-pressed="false">Ground truth · 30 fps</button>
+        <div class="mt-3 overflow-x-auto rounded border border-zinc-800 bg-black">
+          <video id="oss-fx-video" class="block w-full max-w-full" controls loop muted playsinline preload="metadata" data-src-sr="runs/srcnn-v6.2-pico-002/oss-fx/model_sr_only.mp4" data-src-fg="runs/srcnn-v6.2-pico-002/oss-fx/model_sr_fg.mp4" data-src-gt="runs/srcnn-v6.2-pico-002/oss-fx/gt.mp4">
+            <source id="oss-fx-video-source" src="runs/srcnn-v6.2-pico-002/oss-fx/model_sr_only.mp4" type="video/mp4">
+            Your browser does not support inline video.
+          </video>
         </div>
-      </header>
-      <div class="mt-4 overflow-x-auto rounded border border-zinc-800 bg-black">
-        <video id="oss-fx-video" class="block w-full max-w-full" controls loop muted playsinline preload="metadata" data-src-sr="runs/srcnn-v6.2-pico-002/oss-fx/model_sr_only.mp4" data-src-fg="runs/srcnn-v6.2-pico-002/oss-fx/model_sr_fg.mp4" data-src-gt="runs/srcnn-v6.2-pico-002/oss-fx/gt.mp4">
-          <source id="oss-fx-video-source" src="runs/srcnn-v6.2-pico-002/oss-fx/model_sr_only.mp4" type="video/mp4">
-          Your browser does not support inline video.
-        </video>
       </div>
-      <script>
-        (() => {
-          const video = document.getElementById("oss-fx-video");
-          const source = document.getElementById("oss-fx-video-source");
-          const runSelect = document.getElementById("oss-fx-run-select");
-          const runStatus = document.getElementById("oss-fx-run-status");
-          if (!video || !source) return;
-          const buttons = {
-            sr: { el: document.getElementById("oss-fx-mode-sr") },
-            fg: { el: document.getElementById("oss-fx-mode-fg") },
-            gt: { el: document.getElementById("oss-fx-mode-gt") },
-          };
-          let activeMode = "sr";
-
-          const FIRST_RENDER_STEP = {
-            "srcnn-v6.2-pico-002": 0,
-            "srcnn-v7.0-pico-005": 5000,
-          };
-
-          function srcFor(runId, mode) {
-            const file = mode === "sr" ? "model_sr_only.mp4"
-                       : mode === "fg" ? "model_sr_fg.mp4"
-                       : "gt.mp4";
-            return `runs/${runId}/oss-fx/${file}`;
-          }
-
-          function setActiveMode(mode) {
-            activeMode = mode;
-            for (const [k, b] of Object.entries(buttons)) {
-              if (!b.el) continue;
-              const active = (k === mode);
-              b.el.setAttribute("aria-pressed", String(active));
-              b.el.classList.toggle("border-emerald-500/60", active);
-              b.el.classList.toggle("bg-emerald-900/30", active);
-              b.el.classList.toggle("text-emerald-200", active);
-              b.el.classList.toggle("border-zinc-700", !active);
-              b.el.classList.toggle("bg-zinc-950/40", !active);
-              b.el.classList.toggle("text-zinc-300", !active);
-            }
-          }
-
-          async function probeVideo(url) {
-            try {
-              const r = await fetch(url, { method: "HEAD", cache: "no-store" });
-              return r.ok;
-            } catch (e) {
-              return false;
-            }
-          }
-
-          async function fetchLatestStep(runId) {
-            try {
-              const r = await fetch(`runs/${runId}/history.jsonl`, { cache: "no-store" });
-              if (!r.ok) return null;
-              const text = await r.text();
-              const lines = text.trim().split(/\r?\n/).filter(Boolean);
-              if (!lines.length) return null;
-              const last = JSON.parse(lines[lines.length - 1]);
-              return Number(last.step) || null;
-            } catch (e) {
-              return null;
-            }
-          }
-
-          async function loadRun(runId) {
-            const url = srcFor(runId, activeMode);
-            const exists = await probeVideo(url);
-            if (exists) {
-              source.src = url;
-              video.style.display = "";
-              video.load();
-              video.play().catch(() => {});
-              if (runStatus) runStatus.textContent = "";
-              return;
-            }
-            video.style.display = "none";
-            const firstStep = FIRST_RENDER_STEP[runId] ?? 5000;
-            const latest = await fetchLatestStep(runId);
-            let msg;
-            if (latest === null) {
-              msg = `Frame Extrapolation preview not rendered yet for ${runId}. First render scheduled around step ${firstStep.toLocaleString()}.`;
-            } else if (latest < firstStep) {
-              const remaining = firstStep - latest;
-              msg = `Frame Extrapolation preview not rendered yet — currently at step ${latest.toLocaleString()}. First render around step ${firstStep.toLocaleString()} (${remaining.toLocaleString()} steps to go).`;
-            } else {
-              msg = `Frame Extrapolation video missing for ${runId} at step ${latest.toLocaleString()}. Render daemon may be lagging — check back shortly.`;
-            }
-            if (runStatus) runStatus.textContent = msg;
-          }
-
-          for (const [key, b] of Object.entries(buttons)) {
-            if (!b.el) continue;
-            b.el.addEventListener("click", () => {
-              setActiveMode(key);
-              const runId = runSelect ? runSelect.value : "srcnn-v6.2-pico-002";
-              loadRun(runId);
-            });
-          }
-
-          if (runSelect) {
-            runSelect.addEventListener("change", () => {
-              loadRun(runSelect.value);
-            });
-          }
-
-          loadRun(runSelect ? runSelect.value : "srcnn-v6.2-pico-002");
-        })();
-      </script>
     </section>
 
     <div class="terminal-divider" aria-hidden="true"><span class="td-corner">├─ lineage ─</span><span class="td-rule"></span><span class="td-corner">─┤</span></div>
@@ -2189,6 +2167,25 @@
         </div>
       </div>
     </div>
+  </div>
+
+  <!-- Visual-history drawer (right on desktop, bottom on mobile). Populated
+       lazily on open by openVisualHistoryDrawer(runId). -->
+  <div id="visual-history-drawer" class="viz-drawer" hidden data-drawer-target="visual-history">
+    <div class="viz-drawer-backdrop" data-drawer-close></div>
+    <aside class="viz-drawer-shell" role="dialog" aria-modal="true" aria-labelledby="visual-history-drawer-title">
+      <div class="viz-drawer-head">
+        <div class="min-w-0">
+          <h3 class="viz-drawer-title" id="visual-history-drawer-title">Visual history</h3>
+          <div class="viz-drawer-meta" id="visual-history-drawer-meta"></div>
+        </div>
+        <button class="viz-drawer-close" type="button" data-drawer-close aria-label="Close visual history">&times;</button>
+      </div>
+      <div class="viz-drawer-body">
+        <div id="visual-history-drawer-compare" class="viz-compare-controls"></div>
+        <div id="visual-history-drawer-strip" class="viz-strip mt-3 flex flex-col gap-3"></div>
+      </div>
+    </aside>
   </div>
 
   <script>
@@ -7680,11 +7677,18 @@ function renderRun(run, index, openByRun = new Map()) {
         </article>
         <article class="min-w-0 rounded-md border border-zinc-800 bg-zinc-950/25 p-4" data-muted-surface>
           <div class="flex items-center justify-between gap-3">
-            <h3 class="text-base font-semibold text-zinc-50" data-text>Viz strips</h3>
+            <h3 class="text-base font-semibold text-zinc-50" data-text>Visual history</h3>
             <span class="text-sm text-zinc-500" data-dim>${(run.viz_pngs || []).length} images</span>
           </div>
-          <div id="${vizId}-compare" class="viz-compare-controls mt-3"></div>
-          <div id="${vizId}" class="viz-strip mt-2 flex gap-3 overflow-x-auto pb-2"></div>
+          <p class="mt-2 text-xs text-zinc-400" data-dim>Open the drawer to scrub through every checkpoint render for this run (LR · bicubic · model · GT · |error| · features).</p>
+          <button type="button"
+                  class="viz-compare-cta mt-3 w-full justify-center"
+                  data-drawer-target="visual-history"
+                  data-drawer-run="${escapeHtml(run.name)}"
+                  data-drawer-label="${escapeHtml(run.label || run.name)}"
+                  ${(run.viz_pngs || []).length === 0 ? "disabled aria-disabled=\"true\"" : ""}>
+            Open visual history for ${escapeHtml(run.label || run.name)}
+          </button>
         </article>
       </div>
     </div>
@@ -7732,8 +7736,8 @@ function renderRuns(data) {
       if (chart) charts.push(chart);
     }
     renderScoreTable(document.getElementById(`score-table-${index}`), run);
-    renderVizCompareControls(document.getElementById(`viz-strip-${index}-compare`), run);
-    renderVizStrip(document.getElementById(`viz-strip-${index}`), run, 4);
+    // Visual history strips are rendered lazily inside the drawer (see
+    // openVisualHistoryDrawer) — no inline DOM target exists anymore.
   });
   activeCharts = charts;
   host.querySelectorAll("details").forEach((details) => {
@@ -7920,16 +7924,35 @@ function bindIndustryRefsCheckbox() {
 // Top-level viz strip with a run-selector dropdown. Lets users compare any
 // run's recent strips without expanding the full per-run accordion in the
 // lineage section. Default selection: the active/training run; sticks across
-// poll cycles via window.__globalVizSelectedRun.
+// poll cycles via window.__globalVizSelectedRun. The same dropdown also
+// surfaces OSS-FX (frame-extrapolation) options — selecting one hides the
+// strip and shows an inline video player.
 let _globalVizSelectedRun = null;
+
+// OSS-FX variants that should appear as options in the global-viz select.
+// Encoded with an "ossfx:" prefix so the change handler can route them to the
+// video player instead of the strip renderer.
+const OSS_FX_VARIANTS = [
+  { id: "srcnn-v6.2-pico-002", label: "v6.2-pico-002 OSS-FX (baseline)" },
+  { id: "srcnn-v7.0-pico-005", label: "v7.0-pico-005 OSS-FX (training now)" },
+];
+const OSS_FX_FIRST_RENDER_STEP = {
+  "srcnn-v6.2-pico-002": 0,
+  "srcnn-v7.0-pico-005": 5000,
+};
+const OSS_FX_PREFIX = "ossfx:";
+
 function renderGlobalVizStrip(data) {
   const select = document.getElementById("global-viz-run-select");
   const host = document.getElementById("global-viz-strip");
   if (!select || !host) return;
   const runs = (data.runs || []).filter((run) => (run.viz_pngs || []).length > 0);
-  if (runs.length === 0) {
+  if (runs.length === 0 && OSS_FX_VARIANTS.length === 0) {
     host.replaceChildren();
-    select.innerHTML = '<option>(no runs with viz strips)</option>';
+    select.replaceChildren();
+    const opt = document.createElement("option");
+    opt.textContent = "(no runs with viz strips)";
+    select.appendChild(opt);
     select.disabled = true;
     return;
   }
@@ -7939,37 +7962,285 @@ function renderGlobalVizStrip(data) {
   const candidate = stored && runs.find((r) => r.name === stored)
     || runs.find((r) => r.name === activeName)
     || runs.slice().sort((a, b) => (b.viz_pngs?.length || 0) - (a.viz_pngs?.length || 0))[0];
-  const selectedName = candidate?.name || runs[0].name;
+  const selectedName = (stored && stored.startsWith(OSS_FX_PREFIX)) ? stored : (candidate?.name || runs[0]?.name);
   // Rebuild the option list (preserves selection across poll cycles)
-  select.innerHTML = "";
-  for (const run of runs) {
-    const opt = document.createElement("option");
-    opt.value = run.name;
-    const stripCount = (run.viz_pngs || []).length;
-    opt.textContent = `${run.label || run.name} (${stripCount} strip${stripCount === 1 ? "" : "s"})`;
-    if (run.name === selectedName) opt.selected = true;
-    select.appendChild(opt);
+  select.replaceChildren();
+  if (runs.length) {
+    const stripGroup = document.createElement("optgroup");
+    stripGroup.label = "Run strips";
+    for (const run of runs) {
+      const opt = document.createElement("option");
+      opt.value = run.name;
+      const stripCount = (run.viz_pngs || []).length;
+      opt.textContent = `${run.label || run.name} (${stripCount} strip${stripCount === 1 ? "" : "s"})`;
+      if (run.name === selectedName) opt.selected = true;
+      stripGroup.appendChild(opt);
+    }
+    select.appendChild(stripGroup);
+  }
+  if (OSS_FX_VARIANTS.length) {
+    const fxGroup = document.createElement("optgroup");
+    fxGroup.label = "OSS-FX (frame extrapolation)";
+    for (const variant of OSS_FX_VARIANTS) {
+      const opt = document.createElement("option");
+      opt.value = `${OSS_FX_PREFIX}${variant.id}`;
+      opt.textContent = variant.label;
+      if (opt.value === selectedName) opt.selected = true;
+      fxGroup.appendChild(opt);
+    }
+    select.appendChild(fxGroup);
   }
   select.disabled = false;
   _globalVizSelectedRun = selectedName;
 
-  // Render strips for the selected run
-  const sel = runs.find((r) => r.name === selectedName) || runs[0];
-  renderVizStrip(host, sel, 12);
+  applyGlobalVizSelection(selectedName, runs);
 
   // Wire change handler (idempotent — replace prior listener)
   if (!select._oss_bound) {
     select.addEventListener("change", () => {
       _globalVizSelectedRun = select.value;
-      const r = (lastKnownData?.runs || []).find((x) => x.name === select.value);
-      if (r) renderVizStrip(host, r, 12);
-      updateGlobalVizCompareBtn();
+      const allRuns = (lastKnownData?.runs || []).filter((run) => (run.viz_pngs || []).length > 0);
+      applyGlobalVizSelection(select.value, allRuns);
       stopGlobalVizPlayback();
     });
     select._oss_bound = true;
   }
-  updateGlobalVizCompareBtn();
   bindGlobalVizPlaybackControls();
+  bindOssFxControls();
+}
+
+// Switch the global-viz body between the strip view and the OSS-FX video
+// view based on the dropdown value.
+function applyGlobalVizSelection(value, runs) {
+  const stripHost = document.getElementById("global-viz-strip");
+  const fxHost = document.getElementById("global-viz-ossfx");
+  const compareBtn = document.getElementById("global-viz-compare-btn");
+  const playBtn = document.getElementById("global-viz-play-btn");
+  const fpsSlider = document.getElementById("global-viz-fps-slider");
+  if (!stripHost || !fxHost) return;
+  if (typeof value === "string" && value.startsWith(OSS_FX_PREFIX)) {
+    const variantId = value.slice(OSS_FX_PREFIX.length);
+    stripHost.hidden = true;
+    fxHost.hidden = false;
+    if (compareBtn) compareBtn.disabled = true;
+    if (playBtn) playBtn.disabled = true;
+    if (fpsSlider) fpsSlider.disabled = true;
+    loadOssFxRun(variantId);
+    return;
+  }
+  stripHost.hidden = false;
+  fxHost.hidden = true;
+  if (compareBtn) compareBtn.disabled = false;
+  if (playBtn) playBtn.disabled = false;
+  if (fpsSlider) fpsSlider.disabled = false;
+  const sel = runs.find((r) => r.name === value) || runs[0];
+  if (sel) renderVizStrip(stripHost, sel, 12);
+  updateGlobalVizCompareBtn();
+}
+
+// --- OSS-FX video player (folded into the global-viz section) ---
+const ossFxState = { mode: "sr", activeVariant: null };
+
+function ossFxSrcFor(runId, mode) {
+  const file = mode === "sr" ? "model_sr_only.mp4"
+             : mode === "fg" ? "model_sr_fg.mp4"
+             : "gt.mp4";
+  return `runs/${runId}/oss-fx/${file}`;
+}
+
+async function _ossFxProbe(url) {
+  try {
+    const r = await fetch(url, { method: "HEAD", cache: "no-store" });
+    return r.ok;
+  } catch (e) {
+    return false;
+  }
+}
+
+async function _ossFxLatestStep(runId) {
+  try {
+    const r = await fetch(`runs/${runId}/history.jsonl`, { cache: "no-store" });
+    if (!r.ok) return null;
+    const text = await r.text();
+    const lines = text.trim().split(/\r?\n/).filter(Boolean);
+    if (!lines.length) return null;
+    const last = JSON.parse(lines[lines.length - 1]);
+    return Number(last.step) || null;
+  } catch (e) {
+    return null;
+  }
+}
+
+async function loadOssFxRun(runId) {
+  ossFxState.activeVariant = runId;
+  const video = document.getElementById("oss-fx-video");
+  const source = document.getElementById("oss-fx-video-source");
+  const runStatus = document.getElementById("oss-fx-run-status");
+  if (!video || !source) return;
+  const url = ossFxSrcFor(runId, ossFxState.mode);
+  const exists = await _ossFxProbe(url);
+  if (exists) {
+    source.src = url;
+    video.style.display = "";
+    video.load();
+    video.play().catch(() => {});
+    if (runStatus) runStatus.textContent = "";
+    return;
+  }
+  video.style.display = "none";
+  const firstStep = OSS_FX_FIRST_RENDER_STEP[runId] ?? 5000;
+  const latest = await _ossFxLatestStep(runId);
+  let msg;
+  if (latest === null) {
+    msg = `Frame Extrapolation preview not rendered yet for ${runId}. First render scheduled around step ${firstStep.toLocaleString()}.`;
+  } else if (latest < firstStep) {
+    const remaining = firstStep - latest;
+    msg = `Frame Extrapolation preview not rendered yet — currently at step ${latest.toLocaleString()}. First render around step ${firstStep.toLocaleString()} (${remaining.toLocaleString()} steps to go).`;
+  } else {
+    msg = `Frame Extrapolation video missing for ${runId} at step ${latest.toLocaleString()}. Render daemon may be lagging — check back shortly.`;
+  }
+  if (runStatus) runStatus.textContent = msg;
+}
+
+function _setOssFxMode(mode) {
+  ossFxState.mode = mode;
+  const buttons = {
+    sr: document.getElementById("oss-fx-mode-sr"),
+    fg: document.getElementById("oss-fx-mode-fg"),
+    gt: document.getElementById("oss-fx-mode-gt"),
+  };
+  for (const [k, el] of Object.entries(buttons)) {
+    if (!el) continue;
+    const active = (k === mode);
+    el.setAttribute("aria-pressed", String(active));
+    el.classList.toggle("border-emerald-500/60", active);
+    el.classList.toggle("bg-emerald-900/30", active);
+    el.classList.toggle("text-emerald-200", active);
+    el.classList.toggle("border-zinc-700", !active);
+    el.classList.toggle("bg-zinc-950/40", !active);
+    el.classList.toggle("text-zinc-300", !active);
+  }
+  if (ossFxState.activeVariant) loadOssFxRun(ossFxState.activeVariant);
+}
+
+function bindOssFxControls() {
+  const wire = (id, mode) => {
+    const el = document.getElementById(id);
+    if (!el || el._oss_bound) return;
+    el._oss_bound = true;
+    el.addEventListener("click", () => _setOssFxMode(mode));
+  };
+  wire("oss-fx-mode-sr", "sr");
+  wire("oss-fx-mode-fg", "fg");
+  wire("oss-fx-mode-gt", "gt");
+  const info = document.getElementById("oss-fx-info-toggle");
+  const panel = document.getElementById("oss-fx-info-panel");
+  if (info && panel && !info._oss_bound) {
+    info._oss_bound = true;
+    info.addEventListener("click", () => {
+      const open = panel.hidden;
+      panel.hidden = !open;
+      info.setAttribute("aria-expanded", String(open));
+    });
+  }
+}
+
+// --- Visual-history drawer (replaces per-run inline viz-strip cards) ---
+const visualHistoryDrawerState = {
+  open: false,
+  triggerEl: null,
+  keyHandler: null,
+};
+
+function openVisualHistoryDrawer(runId) {
+  const drawer = document.getElementById("visual-history-drawer");
+  const stripHost = document.getElementById("visual-history-drawer-strip");
+  const compareHost = document.getElementById("visual-history-drawer-compare");
+  const titleEl = document.getElementById("visual-history-drawer-title");
+  const metaEl = document.getElementById("visual-history-drawer-meta");
+  if (!drawer || !stripHost || !compareHost || !titleEl || !metaEl) return;
+  const run = (lastKnownData?.runs || []).find((r) => r.name === runId);
+  if (!run) return;
+  titleEl.textContent = `Visual history — ${run.label || run.name}`;
+  const count = (run.viz_pngs || []).length;
+  metaEl.textContent = `${count} image${count === 1 ? "" : "s"} · step range ${
+    run.first_step != null ? Number(run.first_step).toLocaleString() : "?"
+  } → ${Number(run.latest_step || 0).toLocaleString()}`;
+  renderVizCompareControls(compareHost, run);
+  renderVizStrip(stripHost, run, count || 12);
+  visualHistoryDrawerState.triggerEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  drawer.hidden = false;
+  // Defer the is-open class so the CSS transition triggers.
+  window.requestAnimationFrame(() => drawer.classList.add("is-open"));
+  visualHistoryDrawerState.open = true;
+  // Focus the close button so Esc/Tab cycling starts in the drawer.
+  const closeBtn = drawer.querySelector(".viz-drawer-close");
+  closeBtn?.focus();
+  if (!visualHistoryDrawerState.keyHandler) {
+    visualHistoryDrawerState.keyHandler = (event) => {
+      if (!visualHistoryDrawerState.open) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeVisualHistoryDrawer();
+      } else if (event.key === "Tab") {
+        // Trap focus inside the drawer.
+        const focusables = Array.from(drawer.querySelectorAll(
+          'button:not([disabled]), [href], input:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        )).filter((el) => el.offsetParent !== null);
+        if (!focusables.length) return;
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      }
+    };
+    document.addEventListener("keydown", visualHistoryDrawerState.keyHandler);
+  }
+}
+
+function closeVisualHistoryDrawer() {
+  const drawer = document.getElementById("visual-history-drawer");
+  if (!drawer) return;
+  drawer.classList.remove("is-open");
+  // Wait out the slide-out transition before hiding.
+  window.setTimeout(() => { drawer.hidden = true; }, 240);
+  visualHistoryDrawerState.open = false;
+  if (visualHistoryDrawerState.keyHandler) {
+    document.removeEventListener("keydown", visualHistoryDrawerState.keyHandler);
+    visualHistoryDrawerState.keyHandler = null;
+  }
+  const trigger = visualHistoryDrawerState.triggerEl;
+  if (trigger && document.body.contains(trigger)) {
+    try { trigger.focus(); } catch (e) { /* ignore */ }
+  }
+  visualHistoryDrawerState.triggerEl = null;
+}
+
+// Expose globally so the hero thumbnail (Agent A) can open the drawer.
+window.__ossOpenVisualHistory = openVisualHistoryDrawer;
+
+// Delegate drawer open/close clicks at the document level so per-run buttons
+// rendered dynamically (via renderRun) pick them up without rebinding.
+if (typeof document !== "undefined" && !document.body?.dataset?.vizDrawerBound) {
+  document.addEventListener("click", (event) => {
+    const opener = event.target.closest?.('[data-drawer-target="visual-history"][data-drawer-run]');
+    if (opener && !opener.disabled) {
+      event.preventDefault();
+      openVisualHistoryDrawer(opener.dataset.drawerRun);
+      return;
+    }
+    const closer = event.target.closest?.("[data-drawer-close]");
+    if (closer) {
+      event.preventDefault();
+      closeVisualHistoryDrawer();
+    }
+  });
+  if (document.body) document.body.dataset.vizDrawerBound = "true";
 }
 
 // --- Global viz strip step playback ---
