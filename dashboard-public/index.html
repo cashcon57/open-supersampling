@@ -5409,7 +5409,7 @@ function renderTrainingPsnrChart(canvas, run) {
 
 function renderTrainingLpipsChart(canvas, run) {
   const rows = run.loss_curve || [];
-  const series = xy(rows, "loss_lpips", "lpips", "t_lpips");
+  const series = xy(rows, "loss_lpips", "sr_lpips", "lpips", "t_lpips");
   if (!series.length) return null;
   const ref = referenceLine(rows, 0.1666);
   const options = chartOptions({ yTitle: "training-crop LPIPS" });
