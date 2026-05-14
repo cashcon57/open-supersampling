@@ -240,6 +240,45 @@ def curriculum_lambdas(
     return target_fg, target_fg_lpips, target_temp
 
 
+def write_gpu_status(output_dir: Path, device: str) -> None:
+    """Write gpu_status.json the dashboard reads for the live GPU memory /
+    utilization panel. Fields match read_gpu_status() in build_public_dashboard.py.
+
+    Memory comes from torch.cuda (no subprocess); utilization is best-effort
+    via nvidia-smi if available, else omitted. Safe to call every log step;
+    no-op on CPU.
+    """
+    if not str(device).startswith("cuda") or not torch.cuda.is_available():
+        return
+    try:
+        used = float(torch.cuda.memory_allocated()) / (1024 * 1024)
+        total = float(torch.cuda.get_device_properties(0).total_memory) / (1024 * 1024)
+        gpu_name = str(torch.cuda.get_device_name(0))
+        status = {
+            "captured_at": time.time(),
+            "gpu_name": gpu_name,
+            "memory_used_mib": used,
+            "memory_total_mib": total,
+            "memory_used_pct": (used / total * 100.0) if total > 0 else 0.0,
+        }
+        # Best-effort utilization via nvidia-smi.
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["nvidia-smi", "--query-gpu=utilization.gpu",
+                 "--format=csv,noheader,nounits", "-i", "0"],
+                capture_output=True, text=True, timeout=2.0,
+            )
+            if result.returncode == 0:
+                status["utilization_pct"] = float(result.stdout.strip())
+        except (FileNotFoundError, ValueError, subprocess.TimeoutExpired):
+            pass
+        (output_dir / "gpu_status.json").write_text(json.dumps(status, indent=2))
+    except Exception:
+        # GPU stats are best-effort; never fail training over a bad nvidia-smi
+        pass
+
+
 def canvas_health_metrics(model) -> dict[str, float]:
     """Snapshot of canvas-state health for dashboard / debugging.
 
@@ -562,6 +601,10 @@ def main() -> int:
                 )
                 with open(history_path, "a") as f:
                     f.write(json.dumps(parts) + "\n")
+                # Side-effect: refresh gpu_status.json so the public dashboard's
+                # live GPU memory + utilization panel populates. Best-effort;
+                # never fails training.
+                write_gpu_status(args.output_dir, device)
 
             should_ckpt = (step % args.ckpt_every == 0)
             if not should_ckpt and args.ckpt_warmup_steps:
