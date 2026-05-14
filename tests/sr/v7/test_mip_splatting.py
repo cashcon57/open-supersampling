@@ -206,6 +206,31 @@ def test_render_with_filters_rescues_subpixel_gaussian_from_aliasing():
     )
 
 
+def test_rasterizer_propagates_grad_through_opacity_and_features():
+    """Audit-regression (2026-05-14): the rasterizer used to call
+    float(opacity[i].item()) and float(weight[i].item()), which DETACHED
+    opacity + time-falloff gradients. That killed the v7 opacity head
+    and V_tt training signal silently. Fix: keep them as tensors.
+
+    This test fails on the pre-fix code by asserting opacity.grad is not
+    None and nonzero."""
+    torch.manual_seed(42)
+    means = torch.zeros((4, 3))
+    means[:, :2] = 8.0
+    covs = torch.eye(3).unsqueeze(0).expand(4, -1, -1).clone().contiguous() * 2.0
+    covs.requires_grad_(True)
+    features = torch.randn((4, 2), requires_grad=True)
+    opacities = torch.full((4,), 0.5, requires_grad=True)
+    out = render_nd_time_slice(
+        means=means, covs=covs, features=features, opacities=opacities,
+        t_query=0.0, image_hw=(16, 16),
+        mip_3d_variance=0.0, mip_2d_variance=0.0,
+    )
+    out.sum().backward()
+    assert opacities.grad is not None, "opacity must flow gradient (rasterizer used to .item() this)"
+    assert opacities.grad.abs().sum().item() > 0
+
+
 def test_filters_preserve_grad_end_to_end():
     """Backward through the full render-with-filters path should populate
     gradients on the parameters that DO flow through the rasterizer.

@@ -139,7 +139,12 @@ def _evaluate_2d_gaussian_at_pixels(
         # convolution to V before inversion; we skip here -- this is a
         # correctness reference, not aliasing-correct.
         g = (-0.5 * q).exp()        # (h, w)
-        contrib = g * float(opacity[i].item()) * float(weight[i].item())
+        # KEEP THESE AS TENSORS, NOT .item()'d. Previous code used
+        # float(opacity[i].item()) which broke gradient flow on both
+        # opacity AND the time-axis weight — meaning the spawner's
+        # opacity head and the V_tt Cholesky entry got zero training
+        # signal through the rasterizer. Audit caught this 2026-05-14.
+        contrib = g * opacity[i].to(torch.float32) * weight[i].to(torch.float32)
         feat_i = feature[i].to(torch.float32)        # (R,)
         accum[:, y0:y1, x0:x1] = accum[:, y0:y1, x0:x1] + \
             contrib.unsqueeze(0) * feat_i.view(R, 1, 1)
