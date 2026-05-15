@@ -432,15 +432,14 @@ def main() -> int:
     base = TartanAirGaussianDataset(root=args.tartanair_root, scale=2.0)
     ds = TartanAirIntermediateTriplets(base, max_triplets=args.max_triplets)
     print(f"[train] dataset: {len(ds)} triplets")
-    # num_workers=2 lets one worker pre-fetch the next batch while GPU computes
-    # the current. pin_memory + persistent_workers cut CPU→GPU transfer +
-    # avoid worker respawn cost each epoch. prefetch_factor=2 keeps a small
-    # batch buffer per worker. On Windows + torch DataLoader this is sometimes
-    # finicky on first epoch — if it hangs, set num_workers=0 to revert.
+    # num_workers=0 (single-process data loading): num_workers=2 deadlocked
+    # on WSL2 (torch DataLoader multiprocessing hangs on first batch under
+    # the WSL fork semantics + /mnt cross-FS dataset access). pin_memory still
+    # helps CPU→GPU transfer even with workers=0.
     loader = DataLoader(
         ds, batch_size=args.batch_size, shuffle=True,
-        num_workers=2, pin_memory=True, persistent_workers=True,
-        prefetch_factor=2, collate_fn=collate_triplets, drop_last=True,
+        num_workers=0, pin_memory=True,
+        collate_fn=collate_triplets, drop_last=True,
     )
 
     # Optimizer
