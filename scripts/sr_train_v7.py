@@ -32,9 +32,19 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import pathlib
 import sys
 import time
 from pathlib import Path
+
+# Cross-OS checkpoint resume: when a Windows trainer saves a checkpoint, the
+# torch state dict may include serialized pathlib.WindowsPath instances. On
+# Linux/WSL, pathlib.WindowsPath is a class shim that cannot be instantiated;
+# torch.load raises NotImplementedError. Alias it to PurePosixPath so resume
+# from Windows-side checkpoints works.
+if os.name != "nt":
+    pathlib.WindowsPath = pathlib.PurePosixPath  # type: ignore[misc]
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
