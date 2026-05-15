@@ -33,6 +33,18 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+# flash-attn 2 fused kernel. Drop-in for F.scaled_dot_product_attention on
+# CUDA with bf16/fp16 inputs. ~1.5-2× faster on Ampere (sm_75+) backbones.
+# When torch wheel was built without flash-attn linkage, SDPA falls back to
+# math/mem-efficient kernels; calling the separate flash_attn package's
+# kernel directly here ALWAYS uses the fused path if the package is installed.
+try:
+    from flash_attn import flash_attn_func as _FLASH_ATTN_FUNC
+    _HAS_FLASH_ATTN = True
+except ImportError:
+    _FLASH_ATTN_FUNC = None
+    _HAS_FLASH_ATTN = False
+
 
 def _to_windows(x: torch.Tensor, window: int) -> torch.Tensor:
     """(B, H, W, C) -> (B*nW, window*window, C). Caller pads H, W first."""
@@ -75,10 +87,21 @@ class WindowAttention(nn.Module):
         qkv = self.qkv(x).reshape(bn, n, 3, self.num_heads, self.head_dim)
         qkv = qkv.permute(2, 0, 3, 1, 4)  # (3, Bn, heads, N, head_dim)
         q, k, v = qkv[0], qkv[1], qkv[2]
-        # Use F.scaled_dot_product_attention so flash / memory-efficient kernels
-        # apply where available; bf16-safe.
-        out = F.scaled_dot_product_attention(q, k, v, scale=self.scale)
-        out = out.transpose(1, 2).reshape(bn, n, c)
+        if (
+            _HAS_FLASH_ATTN
+            and q.is_cuda
+            and q.dtype in (torch.float16, torch.bfloat16)
+        ):
+            # flash-attn expects (B, N, heads, head_dim) — transpose H, N axes.
+            q_fa = q.transpose(1, 2).contiguous()
+            k_fa = k.transpose(1, 2).contiguous()
+            v_fa = v.transpose(1, 2).contiguous()
+            out = _FLASH_ATTN_FUNC(q_fa, k_fa, v_fa, softmax_scale=self.scale)
+            out = out.reshape(bn, n, c)
+        else:
+            # Fallback: torch SDPA picks math / mem-efficient kernel; bf16-safe.
+            out = F.scaled_dot_product_attention(q, k, v, scale=self.scale)
+            out = out.transpose(1, 2).reshape(bn, n, c)
         return self.proj(out)
 
 
