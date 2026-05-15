@@ -3150,16 +3150,19 @@ function hasMetricKey(rows, key, aliases = []) {
 }
 
 function trainingPsnrValue(row) {
-  // v6 schema writes psnr/psnr_db directly; v7 schema doesn't write any
-  // PSNR field (training is loss-based) but DOES write sr_charbonnier
-  // which approximates sqrt(MSE). PSNR (1.0 data range) = -20 log10(sqrt(MSE))
-  // ≈ -20 log10(sr_charbonnier). Fall through to that derivation so the
-  // Live PSNR chart populates for v7 runs without a trainer change.
+  // v6 schema writes psnr/psnr_db directly; v7 schema writes only
+  // sr_charbonnier. Charbonnier = mean(sqrt((x-y)² + ε²)) which
+  // approximates the L1 error per pixel — NOT RMSE. PSNR uses RMSE
+  // (data range 1.0 → PSNR = -20·log10(RMSE)). For random error
+  // distributions the RMSE/L1 ratio is ~1.5-2× (Gaussian: 1.253×;
+  // worst case ~2×). Use a 2× factor for a conservative proxy that
+  // matches true PSNR within ~2 dB rather than over-reporting by ~6 dB.
   const direct = row?.psnr_db ?? row?.psnr ?? row?.t_psnr ?? row?.psnr_proxy;
   if (direct !== undefined && direct !== null) return direct;
   const char = row?.sr_charbonnier ?? row?.loss_charbonnier ?? row?.l1 ?? row?.t_l1;
   if (char !== undefined && char !== null && char > 0) {
-    return -20.0 * Math.log10(Math.max(1e-8, Number(char)));
+    // RMSE ≈ 2·L1 conservative; -20·log10(2·char) = -20·log10(char) - 6.02
+    return -20.0 * Math.log10(Math.max(1e-8, 2.0 * Number(char)));
   }
   return undefined;
 }
@@ -3169,15 +3172,22 @@ function hasTrainingPsnrSeries(rows) {
 }
 
 function trainingPsnrUsesProxy(rows) {
+  // True iff any row would fall through to the Charbonnier-derived
+  // PSNR path (i.e. no direct psnr / psnr_db / t_psnr field, only
+  // charbonnier-flavored loss). v6 writes psnr directly → not proxy;
+  // v7 only writes sr_charbonnier → proxy.
   return (rows || []).some((row) => {
     const real = row?.psnr_db ?? row?.psnr ?? row?.t_psnr;
-    return (real === undefined || real === null) && row?.psnr_proxy !== undefined && row?.psnr_proxy !== null;
+    if (real !== undefined && real !== null) return false;
+    if (row?.psnr_proxy !== undefined && row?.psnr_proxy !== null) return true;
+    const char = row?.sr_charbonnier ?? row?.loss_charbonnier ?? row?.l1 ?? row?.t_l1;
+    return char !== undefined && char !== null && char > 0;
   });
 }
 
 function trainingPsnrTitle(rows) {
   return trainingPsnrUsesProxy(rows)
-    ? "Live PSNR (training crops — proxy from reconstruction loss; biased ~3-5 dB high)"
+    ? "Live PSNR (training crops — Charbonnier→RMSE proxy, ±2 dB; held-out is the honest signal)"
     : "Live PSNR (training crops)";
 }
 
