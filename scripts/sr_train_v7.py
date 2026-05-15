@@ -396,6 +396,8 @@ def main() -> int:
     # free wins with no quality cost.
     if device == "cuda":
         torch.backends.cudnn.benchmark = True
+        torch.backends.cudnn.allow_tf32 = True  # TF32 for conv kernels outside autocast
+        torch.backends.cuda.matmul.allow_tf32 = True
         torch.set_float32_matmul_precision("high")
 
     # Build model
@@ -420,9 +422,15 @@ def main() -> int:
     base = TartanAirGaussianDataset(root=args.tartanair_root, scale=2.0)
     ds = TartanAirIntermediateTriplets(base, max_triplets=args.max_triplets)
     print(f"[train] dataset: {len(ds)} triplets")
+    # num_workers=2 lets one worker pre-fetch the next batch while GPU computes
+    # the current. pin_memory + persistent_workers cut CPU→GPU transfer +
+    # avoid worker respawn cost each epoch. prefetch_factor=2 keeps a small
+    # batch buffer per worker. On Windows + torch DataLoader this is sometimes
+    # finicky on first epoch — if it hangs, set num_workers=0 to revert.
     loader = DataLoader(
         ds, batch_size=args.batch_size, shuffle=True,
-        num_workers=0, collate_fn=collate_triplets, drop_last=True,
+        num_workers=2, pin_memory=True, persistent_workers=True,
+        prefetch_factor=2, collate_fn=collate_triplets, drop_last=True,
     )
 
     # Optimizer
