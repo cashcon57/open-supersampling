@@ -92,3 +92,16 @@ id_ed25519*
 .playwright-mcp/
 .wrangler/
 artifacts/
+
+# Wipe-recovery archive: explicit override for committed checkpoints and metrics.
+# These snapshots preserve trained state across host re-installs. Anything
+# outside archive/ remains ignored.
+!archive/**/*.pt
+!archive/**/*.pth
+!archive/**/history.jsonl
+!archive/**/score_log*.json
+!archive/**/events.json
+!archive/**/metrics.json
+!archive/**/held_out_results.json
+!archive/**/gpu_status.json
+!archive/**/stdout.log

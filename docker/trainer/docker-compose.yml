@@ -1,0 +1,82 @@
+# OpenSuperSampling trainer — docker compose entry.
+#
+# Bring up:    docker compose up -d
+# Bring down:  docker compose down
+# Live logs:   docker compose logs -f
+# Force rebuild after a Dockerfile change:
+#              docker compose build --no-cache && docker compose up -d
+#
+# Required on host: NVIDIA Container Toolkit (`nvidia-container-runtime`)
+# and a working `--gpus all` path. On CachyOS:
+#     sudo pacman -S nvidia-container-toolkit
+#     sudo systemctl restart docker
+#
+# This file assumes:
+#   - The repo lives at $HOME/OpenSuperSampling
+#   - TartanAir dataset extracted to $HOME/datasets/tartanair_extracted
+#   - Checkpoints persist to $HOME/checkpoints/srcnn-v7.0-pico-005
+#   - A flash-attn linux wheel sits in this directory at build time (the
+#     COPY in the Dockerfile is `flash_attn-*.whl`; see "Starting up after
+#     wipe.md" for where to obtain it).
+
+services:
+  oss-trainer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: oss-trainer:latest
+    container_name: oss-trainer
+    restart: unless-stopped
+
+    # Cap RAM so the trainer cannot OOM-kill dockerd or pressure other home-lab
+    # containers running in the same WSL/Linux box. 12 GB matches the 3080 Ti's
+    # VRAM ceiling and is plenty for the canvas + bf16 activations + lpips.
+    # memswap_limit MUST equal mem_limit to prevent silent swap thrash.
+    mem_limit: 12g
+    memswap_limit: 12g
+
+    # GPU passthrough via NVIDIA Container Toolkit. The `deploy.resources.reservations`
+    # path is the docker-compose-spec way to express `--gpus all`; older docker
+    # versions may also need the legacy `runtime: nvidia` line below.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+    # Legacy alias for nvidia-container-runtime — harmless when modern toolkit
+    # also handles deploy.resources. Comment out if Docker complains about a
+    # double-runtime decl.
+    # runtime: nvidia
+
+    environment:
+      # Trainer's torch process inherits these. Adjust here if you want to
+      # disable bf16 or compile via the trainer's CLI flags instead.
+      PYTHONUNBUFFERED: "1"
+      PYTHONFAULTHANDLER: "1"
+
+    volumes:
+      # Code: bind-mount the repo so commits land without an image rebuild.
+      # The entrypoint does `git fetch + reset --hard origin/main` at start.
+      - ${OSS_REPO:-${HOME}/OpenSuperSampling}:/workspace/oss-gaussian:rw
+
+      # Dataset: read-only to prevent accidental writes from inside the
+      # container.
+      - ${OSS_DATASETS:-${HOME}/datasets}/tartanair_extracted:/datasets/tartanair_extracted:ro
+
+      # Checkpoints: writable. The trainer saves step-NNNNNNNN.pt files here
+      # plus history.jsonl, score_log_v7.json, viz frames, etc.
+      - ${OSS_CHECKPOINTS:-${HOME}/checkpoints}/srcnn-v7.0-pico-005:/checkpoints/srcnn-v7.0-pico-005:rw
+
+      # Torch hub cache so VGG16 (used by lpips) does not re-download every
+      # restart. About 528 MB of model weights live here.
+      - ${HOME}/.cache/torch:/root/.cache/torch:rw
+
+    # Health: the Dockerfile defines a healthcheck on history.jsonl mtime.
+    # Compose will mark the container "healthy"/"unhealthy" automatically and
+    # `docker compose ps` reflects it.
+
+    # Useful for ad-hoc work inside the container without taking it down:
+    #     docker compose exec oss-trainer bash

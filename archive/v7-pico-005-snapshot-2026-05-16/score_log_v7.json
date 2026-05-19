@@ -1,0 +1,132 @@
+﻿[
+    {
+        "n_triplets":  64,
+        "alpha_1_sr":  {
+                           "psnr":  31.3361695529373,
+                           "ssim":  0.8903404595330358,
+                           "lpips":  0.20120055926963687
+                       },
+        "alpha_0_5_oss_fx":  {
+                                 "psnr":  18.742818219200416,
+                                 "ssim":  0.5460442695766687,
+                                 "lpips":  0.39921801816672087
+                             },
+        "alpha_0_5_bicubic_baseline":  {
+                                           "psnr":  20.774448713218714,
+                                           "ssim":  0.5638693816727027,
+                                           "lpips":  0.4311804808676243
+                                       },
+        "delta_oss_fx_over_bicubic_psnr_db":  -2.031630494018298,
+        "canvas_health_final":  {
+                                    "count":  4800,
+                                    "mean_opacity":  0.04409897327423096,
+                                    "mean_L_diag":  1.3684196472167969
+                                },
+        "checkpoint":  "E:\\checkpoints\\srcnn-v7.0-pico-005\\step-00000100.pt",
+        "step":  100
+    },
+    {
+        "n_triplets":  64,
+        "alpha_1_sr":  {
+                           "psnr":  31.34267533301421,
+                           "ssim":  0.8904499169439077,
+                           "lpips":  0.2009700663620606
+                       },
+        "alpha_0_5_oss_fx":  {
+                                 "psnr":  18.741853302997306,
+                                 "ssim":  0.5461006051627919,
+                                 "lpips":  0.39897581841796637
+                             },
+        "alpha_0_5_bicubic_baseline":  {
+                                           "psnr":  20.774448713218714,
+                                           "ssim":  0.5638693816727027,
+                                           "lpips":  0.4311804808676243
+                                       },
+        "delta_oss_fx_over_bicubic_psnr_db":  -2.0325954102214077,
+        "canvas_health_final":  {
+                                    "count":  4800,
+                                    "mean_opacity":  0.040942199528217316,
+                                    "mean_L_diag":  1.4221856594085693
+                                },
+        "checkpoint":  "E:\\checkpoints\\srcnn-v7.0-pico-005\\step-00000500.pt",
+        "step":  500
+    },
+    {
+        "n_triplets":  64,
+        "alpha_1_sr":  {
+                           "psnr":  31.342734338608313,
+                           "ssim":  0.8913533519953489,
+                           "lpips":  0.1604037773795426
+                       },
+        "alpha_0_5_oss_fx":  {
+                                 "psnr":  18.610337465548074,
+                                 "ssim":  0.5314842120278627,
+                                 "lpips":  0.3764230420347303
+                             },
+        "alpha_0_5_bicubic_baseline":  {
+                                           "psnr":  20.774448713218714,
+                                           "ssim":  0.5638693816727027,
+                                           "lpips":  0.4311804808676243
+                                       },
+        "delta_oss_fx_over_bicubic_psnr_db":  -2.1641112476706397,
+        "canvas_health_final":  {
+                                    "count":  4800,
+                                    "mean_opacity":  0.044199615716934204,
+                                    "mean_L_diag":  1.4452862739562988
+                                },
+        "checkpoint":  "E:\\checkpoints\\srcnn-v7.0-pico-005\\step-00001000.pt",
+        "step":  1000
+    },
+    {
+        "n_triplets":  64,
+        "alpha_1_sr":  {
+                           "psnr":  31.495518888272766,
+                           "ssim":  0.8883551238104701,
+                           "lpips":  0.11787715123500675
+                       },
+        "alpha_0_5_oss_fx":  {
+                                 "psnr":  18.57255045872262,
+                                 "ssim":  0.5283477344783023,
+                                 "lpips":  0.3517181249335408
+                             },
+        "alpha_0_5_bicubic_baseline":  {
+                                           "psnr":  20.774448713218714,
+                                           "ssim":  0.5638693816727027,
+                                           "lpips":  0.4311804808676243
+                                       },
+        "delta_oss_fx_over_bicubic_psnr_db":  -2.2018982544960934,
+        "canvas_health_final":  {
+                                    "count":  4800,
+                                    "mean_opacity":  0.049410298466682434,
+                                    "mean_L_diag":  1.3894802331924438
+                                },
+        "checkpoint":  "E:\\checkpoints\\srcnn-v7.0-pico-005\\step-00002000.pt",
+        "step":  2000
+    },
+    {
+        "n_triplets":  64,
+        "alpha_1_sr":  {
+                           "psnr":  31.839630193732916,
+                           "ssim":  0.8957722242921591,
+                           "lpips":  0.10661606414942071
+                       },
+        "alpha_0_5_oss_fx":  {
+                                 "psnr":  18.54141998718385,
+                                 "ssim":  0.5288303046254441,
+                                 "lpips":  0.34771925234235823
+                             },
+        "alpha_0_5_bicubic_baseline":  {
+                                           "psnr":  20.774448713218714,
+                                           "ssim":  0.5638693816727027,
+                                           "lpips":  0.4311804808676243
+                                       },
+        "delta_oss_fx_over_bicubic_psnr_db":  -2.2330287260348634,
+        "canvas_health_final":  {
+                                    "count":  4800,
+                                    "mean_opacity":  0.06953377276659012,
+                                    "mean_L_diag":  1.97971510887146
+                                },
+        "checkpoint":  "E:\\checkpoints\\srcnn-v7.0-pico-005\\step-00005000.pt",
+        "step":  5000
+    }
+]

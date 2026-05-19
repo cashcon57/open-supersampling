@@ -5,6 +5,27 @@ Versioning: SemVer pre-1.0 (PATCH = bug fixes / docs; MINOR = new features; MAJO
 
 ## [Unreleased] — `v0.2-dev` branch
 
+### Host migration prep — 3080 Ti wipe Windows → CachyOS Linux (2026-05-17)
+
+The 3080 Ti training host is being reinstalled from Windows 11 + WSL2 to native CachyOS Linux to escape a series of WSL2-specific failure modes that surfaced during the v7 training run:
+
+- WSL2's 9P cross-filesystem protocol stalls walks over `/mnt/e/datasets/tartanair_extracted` for tens of minutes on first launch.
+- Multiple silent process-death modes (the `expandable_segments` env var, MSVC `cl.exe` missing for torch.compile inductor, PowerShell `Start-Process` pipe lifetime quirks, AVX-512 codegen bugs in torch 2.9+ Windows wheels on Zen 3 CPUs, etc.).
+- A Hyper-V Compute Service API storm during the wipe-prep day correlated with dockerd restarting all 18+ home-lab containers simultaneously, which knocked the Cloudflare Tunnel into a bad state until origin routing was changed.
+
+Linux native sidesteps all of the above (no WSL, GCC-built torch wheels avoid the AVX-512 bug, real systemd for process management, normal filesystem semantics for the dataset).
+
+- New: `Starting up after wipe.md` — comprehensive recovery runbook for the new host.
+- New: `docker/trainer/` — Dockerfile + entrypoint + docker-compose.yml that replace the Windows PowerShell launchers. Healthcheck on `history.jsonl` mtime, hard `mem_limit=12g` so a runaway trainer cannot kill dockerd.
+- New: `archive/v7-pico-005-snapshot-2026-05-16/` — full preserved set of checkpoints (`step-00000100.pt` through `step-00005000.pt`), `history.jsonl`, `score_log_v7.json`, and `gpu_status.json`. Trainer auto-resumes from step 5000 on the new host.
+- New: `archive/legacy-runs/` — metric-only snapshots of the prior runs (prod-v4-lpips, v5-pixel-temporal-validated, v6-pico-001, v6.1-pico-001, v6.2-pico-002). No checkpoints — those weights are not coming back, but the loss / held-out / event JSON is preserved for historical analysis.
+- New: `archive/legacy-windows-launchers/` — historical reference copies of `launch_v7_debug.ps1`, `restart_v7.ps1`, `check_v7.ps1`, `find_v7.ps1` from the wiped host. On Linux these are replaced by the docker-compose entry; preserved only so the wipe is fully forensic-recoverable for a few months.
+- New: `archive/README.md` — index of what is preserved, what is on R2, and what is intentionally not preserved (TartanAir dataset, viz strips, v6.2 intermediate ckpts).
+- `.gitignore`: added explicit overrides for `archive/**/*.pt` and related metric formats so the snapshot survives the existing `*.pt` ignore rule.
+- Secrets: nightly age-encrypted backup of `.secrets/` to R2 bucket `oss-secrets-backup` ran on 2026-05-19 02:42 UTC (`secrets-cashs-macbook-pro-20260519T024248Z.tar.gz.age`). Recovery procedure: `.secrets/RECOVERY-README.md`.
+
+The active training run state at wipe time: **step 5000**, `total_loss=0.11950`, `canvas_count=2304`. Compare any post-wipe step 5050+ metrics against `archive/v7-pico-005-snapshot-2026-05-16/history.jsonl` to detect regressions from the host transition.
+
 ### v7 Phase 3 kickoff + v6.2-pico-002 stopped early (2026-05-14)
 
 `srcnn-v6.2-pico-002` terminated 2026-05-12 at step 74,000 of 100,000 when the GPU was reclaimed by another process. Rather than resume the remaining 26K steps the project moved to v7-pico-005 because the architecture has changed substantially (N-D Gaussian primitive with V_xt cross-correlation in the Cholesky covariance, parent-child loss-adaptive density, OSS-FX time-slice rendering, Mip-Splatting anti-aliasing filters) and the marginal v6.2 training would not validate any of that. The step-00074000.pt checkpoint is preserved as the **α=1 SR PSNR baseline-to-beat** per the Phase 3 pass criterion.

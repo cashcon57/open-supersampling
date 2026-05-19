@@ -1,0 +1,34 @@
+{
+  "n_samples": 64,
+  "ckpt_temporal": "E:\\checkpoints\\srcnn-v5-pixel-temporal\\step-00080000.pt",
+  "ckpt_baseline": "E:\\checkpoints\\srcnn-prod-v4-lpips\\step-00385000.pt",
+  "manifests": [
+    "E:\\checkpoints\\v5_held_out_manifest.json"
+  ],
+  "datasets": {
+    "tartanair": 64
+  },
+  "psnr": {
+    "baseline_mean": 11.717891347839938,
+    "temporal_mean": 25.702895281104215,
+    "bicubic_mean": 23.90926984440673,
+    "delta_b_minus_a": 13.985003933264277,
+    "B_gt_A": 64,
+    "B_gt_bicubic": 64,
+    "A_gt_bicubic": 0
+  },
+  "lpips": {
+    "baseline_mean": 0.6367337964475155,
+    "temporal_mean": 0.16663300478830934,
+    "bicubic_mean": 0.2944577056914568,
+    "B_lt_A": 64,
+    "B_lt_bicubic": 64
+  },
+  "temporal_stability": {
+    "baseline_mean": 0.11756361194420606,
+    "temporal_mean": 0.03960851358715445,
+    "ratio_b_over_a": 0.33691133618752767
+  },
+  "joint_b_beats_bicubic": 64,
+  "joint_b_beats_bicubic_pct": 100.0
+}
