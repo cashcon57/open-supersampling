@@ -1286,6 +1286,27 @@ HTML_TEMPLATE = r"""<!doctype html>
       </article>
     </section>
 
+    <section id="training-controls" class="hidden rounded-md border border-cyan-700 bg-cyan-950/15 p-4" data-surface aria-label="Training controls">
+      <div class="flex items-center justify-between gap-3 mb-3">
+        <div>
+          <h2 class="text-lg font-semibold text-cyan-200" data-text>Training controls</h2>
+          <p class="text-xs text-zinc-400" data-subtext>Only visible on your Tailscale tailnet</p>
+        </div>
+        <span id="train-status-badge" class="rounded border border-zinc-700 px-2 py-0.5 text-xs text-zinc-300">checking</span>
+      </div>
+      <div id="train-secret-prompt" class="mb-3 flex items-center gap-2">
+        <input id="train-secret-input" type="password" placeholder="API secret" class="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm text-zinc-200 w-64" />
+        <button id="train-secret-save" class="rounded border border-cyan-600 px-3 py-1 text-sm text-cyan-200 hover:bg-cyan-900/50">Unlock</button>
+        <span id="train-secret-msg" class="text-xs text-zinc-500"></span>
+      </div>
+      <div class="flex flex-wrap items-center gap-2">
+        <button id="train-btn-start" disabled class="rounded border border-emerald-700 px-4 py-2 text-sm font-medium text-emerald-300 hover:bg-emerald-950/50 disabled:opacity-40 disabled:cursor-not-allowed">Start training</button>
+        <button id="train-btn-stop" disabled class="rounded border border-red-700 px-4 py-2 text-sm font-medium text-red-300 hover:bg-red-950/50 disabled:opacity-40 disabled:cursor-not-allowed">Stop training</button>
+        <button id="train-btn-restart" disabled class="rounded border border-amber-700 px-4 py-2 text-sm font-medium text-amber-300 hover:bg-amber-950/50 disabled:opacity-40 disabled:cursor-not-allowed">Restart</button>
+      </div>
+      <pre id="train-api-output" class="mt-3 hidden max-h-40 overflow-auto rounded border border-zinc-800 bg-zinc-950/60 p-2 text-xs text-zinc-400 font-mono"></pre>
+    </section>
+
     <section class="flex flex-col gap-3" aria-labelledby="run-history-title">
       <div class="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
         <div>
@@ -1756,7 +1777,91 @@ document.addEventListener("DOMContentLoaded", () => {
     setTheme(document.documentElement.classList.contains("dark"));
   });
   loadDashboard();
+  initTrainingControls();
 });
+
+// ── Training control panel (tailnet-gated) ──────────────────────────
+async function initTrainingControls() {
+  const API = 'http://100.126.238.73:8765';
+  const SECRET_KEY='***';
+  const panel = document.getElementById('training-controls');
+  const badge = document.getElementById('train-status-badge');
+  const secretInput = document.getElementById('train-secret-input');
+  const secretSave = document.getElementById('train-secret-save');
+  const secretMsg = document.getElementById('train-secret-msg');
+  const startBtn = document.getElementById('train-btn-start');
+  const stopBtn = document.getElementById('train-btn-stop');
+  const restartBtn = document.getElementById('train-btn-restart');
+  const output = document.getElementById('train-api-output');
+
+  let secret = localStorage.getItem(SECRET_KEY) || '';
+
+  // Check if we're on the tailnet
+  try {
+    const resp = await fetch(`${API}/health`, { mode: 'cors', signal: AbortSignal.timeout(3000) });
+    if (!resp.ok) return;
+    panel.classList.remove('hidden');
+  } catch { return; /* not on tailnet */ }
+
+  function authHeaders() { return { 'Authorization': `Bearer ${secret}` }; }
+
+  function showOutput(text) {
+    output.textContent = text;
+    output.classList.remove('hidden');
+  }
+
+  async function refreshStatus() {
+    if (!secret) { badge.textContent = 'locked'; badge.className = 'rounded border border-zinc-700 px-2 py-0.5 text-xs text-zinc-300'; return; }
+    try {
+      const resp = await fetch(`${API}/status`, { headers: authHeaders(), signal: AbortSignal.timeout(5000) });
+      if (!resp.ok) { badge.textContent = 'auth failed'; return; }
+      const data = await resp.json();
+      if (data.running) {
+        badge.textContent = 'running';
+        badge.className = 'rounded border border-emerald-700 px-2 py-0.5 text-xs text-emerald-300';
+        startBtn.disabled = true;
+        stopBtn.disabled = false;
+        restartBtn.disabled = false;
+      } else {
+        badge.textContent = data.state || 'stopped';
+        badge.className = 'rounded border border-red-700 px-2 py-0.5 text-xs text-red-300';
+        startBtn.disabled = false;
+        stopBtn.disabled = true;
+        restartBtn.disabled = true;
+      }
+    } catch { badge.textContent = 'unreachable'; }
+  }
+
+  async function apiAction(action) {
+    if (!secret) return;
+    try {
+      const resp = await fetch(`${API}/${action}`, { method: 'POST', headers: authHeaders(), signal: AbortSignal.timeout(120000) });
+      const data = await resp.json();
+      showOutput(`${action}: ${data.result}\n${data.stdout || ''}${data.stderr ? '\nSTDERR:\n' + data.stderr : ''}`);
+      setTimeout(refreshStatus, 2000);
+    } catch (err) { showOutput(`Error: ${err.message}`); }
+  }
+
+  secretSave.addEventListener('click', () => {
+    const val = secretInput.value.trim();
+    if (!val) { secretMsg.textContent = 'enter a secret'; return; }
+    secret = val;
+    localStorage.setItem(SECRET_KEY, secret);
+    secretMsg.textContent = 'saved';
+    secretMsg.className = 'text-xs text-emerald-400';
+    refreshStatus();
+  });
+
+  // Pre-fill from localStorage
+  if (secret) { secretInput.value = secret; secretMsg.textContent = 'loaded'; refreshStatus(); }
+
+  startBtn.addEventListener('click', () => apiAction('start'));
+  stopBtn.addEventListener('click', () => apiAction('stop'));
+  restartBtn.addEventListener('click', () => apiAction('restart'));
+
+  // Enable buttons once secret is set
+  if (secret) { startBtn.disabled = false; stopBtn.disabled = false; restartBtn.disabled = false; }
+}
 </script>
 </body>
 </html>
@@ -1810,10 +1915,6 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     if args.print_active_run:
-        # --version explicitly filters by arch_version (default 'v6' preserves
-        # legacy watcher/viz-daemon behavior — they only ever cared about v6
-        # runs, and v6 entries that predate the arch_version tag fall through
-        # to the v6 default in run_arch_version()).
         name = active_run_name(version=args.version)
         if name:
             print(name)
