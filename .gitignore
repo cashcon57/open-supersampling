@@ -105,3 +105,4 @@ artifacts/
 !archive/**/held_out_results.json
 !archive/**/gpu_status.json
 !archive/**/stdout.log
+docker/training-api/.env

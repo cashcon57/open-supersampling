@@ -1,0 +1,39 @@
+# Training control API — start/stop/resume OSS training from the dashboard.
+# Only accessible via Tailscale IP (100.126.238.73:8765).
+#
+# Bring up:   docker compose up -d
+# Bring down: docker compose down
+# Logs:       docker compose logs -f
+
+services:
+  training-api:
+    build:
+      context: ../..          # repo root (need scripts/training_api.py)
+      dockerfile: docker/training-api/Dockerfile
+    image: oss-training-api:latest
+    container_name: oss-training-api
+    restart: unless-stopped
+
+    ports:
+      - "100.126.238.73:8765:8765"
+
+    environment:
+      LISTEN_HOST: "0.0.0.0"          # 0.0.0.0 inside container (port mapping restricts to tailscale IP)
+      LISTEN_PORT: "8765"
+      COMPOSE_DIR: "/workspace/oss-gaussian/docker/trainer"
+      CONTAINER_NAME: "oss-trainer"
+      SHARED_SECRET: ${OSS_API_SECRET}
+
+    volumes:
+      # Docker socket so we can control oss-trainer
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+      # The repo (needed for compose file path)
+      - ${HOME}/OpenSuperSampling:/workspace/oss-gaussian:ro
+
+    # Security: drop all capabilities, read-only rootfs (except /tmp for python)
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:exec
