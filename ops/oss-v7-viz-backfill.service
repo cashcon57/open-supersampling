@@ -1,0 +1,15 @@
+[Unit]
+Description=Backfill OpenSuperSampling v7 dashboard viz strips
+After=docker.service oss-training-api.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=cashc
+Group=cashc
+WorkingDirectory=/home/cashc/OpenSuperSampling
+Environment=HOME=/home/cashc
+Environment=RUN_DIR=/home/cashc/checkpoints/srcnn-v7.0-pico-005
+Environment=CONTAINER=oss-trainer
+Environment=MAX_PER_RUN=2
+ExecStart=/home/cashc/OpenSuperSampling/scripts/3080ti/v7-viz-backfill-linux.sh
