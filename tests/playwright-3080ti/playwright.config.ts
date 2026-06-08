@@ -28,6 +28,15 @@ export default defineConfig({
       },
   projects: [
     {
+      name: "local-chrome",
+      use: {
+        baseURL,
+        channel: "chrome",
+        viewport: { width: 1440, height: 900 },
+        launchOptions: { args: ["--no-sandbox"] },
+      },
+    },
+    {
       name: "3080ti-chromium",
       metadata: { cdpURL },
       use: {
