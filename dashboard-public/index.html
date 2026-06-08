@@ -1793,6 +1793,18 @@
       </article>
     </section>
 
+    <section id="training-controls" class="rounded-md border border-cyan-700 bg-cyan-950/15 p-4" data-surface aria-label="Training controls">
+      <div class="flex items-center justify-between gap-3 mb-3">
+        <div>
+          <h2 class="text-lg font-semibold text-cyan-200" data-text>Training controls</h2>
+          <p class="text-xs text-zinc-400" data-subtext>Tailscale-only — opens the control surface served by homelab-desktop</p>
+        </div>
+        <span class="rounded border border-zinc-700 px-2 py-0.5 text-xs text-zinc-300">tailnet</span>
+      </div>
+      <a href="http://100.126.238.73:8765/control" target="_blank" rel="noreferrer" class="inline-flex rounded border border-emerald-700 px-4 py-2 text-sm font-medium text-emerald-300 hover:bg-emerald-950/50">Open training controls</a>
+      <p class="mt-3 text-xs text-zinc-500">If it does not load, connect this browser to the Tailscale tailnet.</p>
+    </section>
+
     <div id="signal-cost-panel" class="mt-4"></div>
 
     <div class="terminal-divider" aria-hidden="true"><span class="td-corner">├─ teacher / student tiers ─</span><span class="td-rule"></span><span class="td-corner">─┤</span></div>
@@ -5421,15 +5433,18 @@ function renderTrainingLpipsChart(canvas, run) {
   const rows = run.loss_curve || [];
   const series = xy(rows, "loss_lpips", "sr_lpips", "lpips", "t_lpips");
   if (!series.length) return null;
-  const ref = referenceLine(rows, 0.1666);
+  const v5Ref = referenceLine(rows, 0.1666);
+  const v6Ref = referenceLine(rows, 0.112);
+  const referenceYs = [...v5Ref, ...v6Ref].map((p) => p.y);
   const options = chartOptions({ yTitle: "training-crop LPIPS" });
   // Auto-fit y-axis to actual data range with 10% headroom on each side.
   // Hard-coded [0, 1] squashed real LPIPS values (~0.07-0.20 typical) to the
-  // bottom 7-20% of the chart, which looked like an empty chart.
+  // bottom 7-20% of the chart, which looked like an empty chart. Include
+  // static reference lines so the comparison targets stay visible.
   const ys = series.map((p) => p.y).filter((y) => Number.isFinite(y));
   if (ys.length) {
-    const lo = Math.min(...ys, ...(ref.length ? ref.map((p) => p.y) : []));
-    const hi = Math.max(...ys, ...(ref.length ? ref.map((p) => p.y) : []));
+    const lo = Math.min(...ys, ...referenceYs);
+    const hi = Math.max(...ys, ...referenceYs);
     const pad = Math.max(0.005, (hi - lo) * 0.15);
     options.scales.y.min = Math.max(0, lo - pad);
     options.scales.y.max = Math.min(1, hi + pad);
@@ -5439,7 +5454,8 @@ function renderTrainingLpipsChart(canvas, run) {
   }
   const datasets = [
     { label: `${run.history?.title || run.label || "run"} LPIPS`, data: series, borderColor: colors.lpips, backgroundColor: colors.lpips, pointRadius: 0, pointHitRadius: 6, pointHoverRadius: 4, borderWidth: 2, tension: 0 },
-    { label: "v5 held-out LPIPS ref 0.1666", data: ref, borderColor: colors.gold, backgroundColor: colors.gold, pointRadius: 0, pointHitRadius: 6, borderWidth: 1.5, borderDash: [5, 4], tension: 0 },
+    { label: "v5 held-out LPIPS ref 0.1666", data: v5Ref, borderColor: colors.gold, backgroundColor: colors.gold, pointRadius: 0, pointHitRadius: 6, borderWidth: 1.5, borderDash: [5, 4], tension: 0 },
+    { label: "v6.2 held-out LPIPS ref 0.112", data: v6Ref, borderColor: colors.v62, backgroundColor: colors.v62, pointRadius: 0, pointHitRadius: 6, borderWidth: 1.5, borderDash: [1, 4], tension: 0 },
   ].filter((dataset) => dataset.data.length);
   return bindChartControls(attachEventAnnotations(new Chart(canvas, { type: "line", data: { datasets }, options }), run, canvas), canvas);
 }
@@ -5954,6 +5970,11 @@ function updateCompareRow() {
     button.setAttribute("aria-pressed", Number(button.dataset.vizCompareRow) === compareState.rowIndex ? "true" : "false");
   });
   document.querySelectorAll(".viz-compare-panel-image").forEach((image) => {
+    // Row count is learned asynchronously from the v7 .scenes.json sidecar.
+    // The first modal paint used to keep the legacy 2-row background-size until
+    // a model-column select triggered _renderComparePanelImage(), stretching v7
+    // strips horizontally. Recompute the crop grid any time row state changes.
+    image.style.backgroundSize = `${compareState.columnCount * 100}% ${compareState.rowCount * 100}%`;
     image.style.backgroundPosition = compareBackgroundPosition(Number(image.dataset.columnIndex || 0));
   });
   updateCompareBareStrip();
@@ -8552,6 +8573,7 @@ window.addEventListener("resize", () => {
 if (document.fonts && document.fonts.ready) {
   document.fonts.ready.then(fillTerminalRules);
 }
+
 </script>
 <script type="module">
   // CRT shader overlay — WebGPU primary, WebGL2 fallback. Always on; the
