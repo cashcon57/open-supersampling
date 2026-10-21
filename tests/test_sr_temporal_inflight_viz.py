@@ -7,7 +7,7 @@ import numpy as np
 import torch
 from PIL import Image
 
-from scripts.sr_temporal_inflight_viz import _comparison_panels, main
+from scripts.sr_temporal_inflight_viz import _comparison_panels, _pending_ckpts, main
 
 
 def test_comparison_panels_adds_v6_gaussian_and_two_error_maps() -> None:
@@ -88,6 +88,30 @@ def _write_tartanair_fixture(root: Path) -> Path:
         flow[..., 0] = 0.25
         np.save(flow_dir / f"{idx:06d}_{idx + 1:06d}_flow.npy", flow)
     return traj
+
+
+def test_pending_ckpts_uses_viz_pngs_as_queue_watermark(tmp_path: Path) -> None:
+    output_dir = tmp_path / "run"
+    viz_dir = output_dir / "viz"
+    viz_dir.mkdir(parents=True)
+    for step in (1000, 2000, 3000):
+        (output_dir / f"step-{step:08d}.pt").write_bytes(b"ckpt")
+    (viz_dir / "step-00001000.png").write_bytes(b"png")
+
+    pending = _pending_ckpts(output_dir, last_step=3000, step_stride=1)
+
+    assert [p.name for p in pending] == ["step-00002000.pt", "step-00003000.pt"]
+
+
+def test_pending_ckpts_respects_step_stride(tmp_path: Path) -> None:
+    output_dir = tmp_path / "run"
+    output_dir.mkdir()
+    for step in (1000, 1500, 2000):
+        (output_dir / f"step-{step:08d}.pt").write_bytes(b"ckpt")
+
+    pending = _pending_ckpts(output_dir, last_step=-1, step_stride=1000)
+
+    assert [p.name for p in pending] == ["step-00001000.pt", "step-00002000.pt"]
 
 
 def test_v6_primary_renders_png_with_required_columns(tmp_path: Path) -> None:

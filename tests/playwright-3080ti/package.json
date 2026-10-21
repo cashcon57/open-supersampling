@@ -3,9 +3,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "playwright test --project=3080ti-chromium"
+    "test": "playwright test --project=3080ti-chromium",
+    "test:local": "playwright test --project=local-chrome specs/local-dashboard.spec.ts",
+    "test:live": "OSS_3080TI_BASE_URL=https://opensupersampling.com playwright test --project=local-chrome specs/local-dashboard.spec.ts"
   },
   "devDependencies": {
-    "@playwright/test": "^1.49"
+    "@playwright/test": "^1.49",
+    "@types/node": "^25.9.2"
   }
 }

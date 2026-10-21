@@ -38,11 +38,11 @@ RUN git config --global --add safe.directory '*'
 
 COPY --chmod=755 docker_launch.sh /usr/local/bin/oss-train
 
-# Health: trainer is considered alive iff history.jsonl has been written to
-# in the last 5 minutes. The 20-minute start-period covers dataset enum +
-# checkpoint load + first batch warmup. 3 retries x 2-minute interval means
-# a stuck-but-alive trainer flips to "unhealthy" after ~6 minutes of silence.
+# Health: trainer is considered alive iff the per-step heartbeat has been
+# updated recently. Do not key this to history.jsonl: history is written only
+# at --log-every cadence, and production v7 steps can make a 50-step history
+# interval exceed 5 minutes even while training is healthy.
 HEALTHCHECK --interval=2m --timeout=10s --start-period=20m --retries=3 \
-  CMD test $(($(date +%s) - $(stat -c %Y /checkpoints/srcnn-v7.0-pico-005/history.jsonl 2>/dev/null || echo 0))) -lt 300
+  CMD test $(($(date +%s) - $(stat -c %Y /checkpoints/srcnn-v7.0-pico-005/.trainer_heartbeat.json 2>/dev/null || stat -c %Y /checkpoints/srcnn-v7.0-pico-005/history.jsonl 2>/dev/null || echo 0))) -lt 300
 
 CMD ["oss-train"]

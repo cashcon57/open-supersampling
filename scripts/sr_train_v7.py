@@ -34,6 +34,7 @@ import argparse
 import json
 import os
 import pathlib
+import signal
 import sys
 import time
 from pathlib import Path
@@ -57,6 +58,65 @@ from torch.utils.data import DataLoader
 from oss.sr.v7.model import V7Config, V7Model
 from oss.sr.v7.intermediate_dataset import TartanAirIntermediateTriplets
 from oss.sr.v7.losses import oss_fx_loss
+
+
+def touch_heartbeat(path: Path, step: int, *, event: str = "step-start") -> None:
+    """Write a cheap liveness marker for Docker health checks.
+
+    history.jsonl is intentionally sparse (`--log-every`), and current v7
+    production steps can take >10s each. A 50-step history cadence can exceed
+    the Dockerfile's old 5-minute health window even while training is making
+    normal progress. Keep health independent from metric logging cadence.
+    """
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps({"step": int(step), "event": event, "time": time.time()}) + "\n")
+    os.replace(tmp, path)
+
+
+def save_training_checkpoint(
+    output_dir: Path,
+    step: int,
+    model: torch.nn.Module,
+    optim: torch.optim.Optimizer,
+    cfg: V7Config,
+    args: argparse.Namespace,
+    *,
+    final: bool = False,
+) -> Path:
+    suffix = "-final" if final else ""
+    ckpt_path = output_dir / f"step-{step:08d}{suffix}.pt"
+    tmp_path = ckpt_path.with_name(f".{ckpt_path.name}.tmp")
+    torch.save({
+        "step": step,
+        "model_state": model.state_dict(),
+        "optim_state": optim.state_dict(),
+        "cfg": vars(cfg),
+        "args": vars(args),
+    }, tmp_path)
+    os.replace(tmp_path, ckpt_path)
+    return ckpt_path
+
+
+def _normalize_resume_model_state(model_state: dict) -> dict:
+    """Normalize checkpoint state_dict keys saved from torch.compile wrappers.
+
+    torch.compile stores wrapped module params under `_orig_mod.` (if the
+    compiled module itself was checkpointed) or `.<_orig_mod>.` nested inside a
+    larger module. Current v7 resumes before compiling (and often with
+    --no-compile), so strip that marker while leaving eager checkpoints
+    untouched.
+    """
+    if not any(key.startswith("_orig_mod.") or "._orig_mod." in key for key in model_state):
+        return model_state
+
+    normalized = {}
+    for key, value in model_state.items():
+        if key.startswith("_orig_mod."):
+            key = key.removeprefix("_orig_mod.")
+        else:
+            key = key.replace("._orig_mod.", ".", 1)
+        normalized[key] = value
+    return normalized
 
 
 def _device(arg: str) -> str:
@@ -393,9 +453,23 @@ def main() -> int:
                              "for graduated dashboard visibility.")
     args = parser.parse_args()
 
+    shutdown_requested: dict[str, str | None] = {"signal": None}
+
+    def request_shutdown(signum: int, _frame: object) -> None:
+        signame = signal.Signals(signum).name
+        if shutdown_requested["signal"] is None:
+            print(f"[train] {signame} received; checkpointing after current step", flush=True)
+        shutdown_requested["signal"] = signame
+
+    signal.signal(signal.SIGTERM, request_shutdown)
+    if hasattr(signal, "SIGUSR1"):
+        signal.signal(signal.SIGUSR1, request_shutdown)
+
     device = _device(args.device)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     (args.output_dir / "history.jsonl").touch()
+    heartbeat_path = args.output_dir / ".trainer_heartbeat.json"
+    touch_heartbeat(heartbeat_path, 0, event="startup")
 
     # Throughput baselines. cudnn.benchmark picks the fastest conv algorithm
     # per input shape; our shapes are stable (fixed crop, fixed batch) so the
@@ -456,10 +530,19 @@ def main() -> int:
         # Filter out "*-final.pt" so the regular cadence ones are preferred.
         ckpts = [p for p in ckpts if not p.stem.endswith("-final")]
         if ckpts:
-            latest = ckpts[-1]
-            print(f"[train] resume <- {latest}")
-            state = torch.load(latest, map_location=device, weights_only=False)
-            model.load_state_dict(state["model_state"])
+            state = None
+            latest = None
+            for candidate in reversed(ckpts):
+                print(f"[train] resume <- {candidate}")
+                try:
+                    state = torch.load(candidate, map_location=device, weights_only=False)
+                    latest = candidate
+                    break
+                except Exception as e:
+                    print(f"[train] resume load failed for {candidate} ({e}); trying previous checkpoint")
+            if state is None or latest is None:
+                raise RuntimeError(f"no readable checkpoints in {args.output_dir}")
+            model.load_state_dict(_normalize_resume_model_state(state["model_state"]))
             if "optim_state" in state:
                 try:
                     optim.load_state_dict(state["optim_state"])
@@ -499,7 +582,8 @@ def main() -> int:
             step += 1
             if step > args.steps:
                 break
-            optim.zero_grad()
+            touch_heartbeat(heartbeat_path, step)
+            optim.zero_grad(set_to_none=True)
 
             # OOM-retry guard: if any forward/backward in this batch hits
             # cuda.OutOfMemoryError, we empty the allocator cache and skip
@@ -648,6 +732,10 @@ def main() -> int:
                 print(f"[train] OOM at step {step}: {e}; empty_cache + skip batch")
                 optim.zero_grad(set_to_none=True)
                 torch.cuda.empty_cache()
+                if shutdown_requested["signal"]:
+                    ckpt_path = save_training_checkpoint(args.output_dir, step, model, optim, cfg, args)
+                    print(f"[train] pause checkpoint -> {ckpt_path} ({shutdown_requested['signal']})", flush=True)
+                    return 0
                 continue
 
             if step % args.log_every == 0 or step == 1:
@@ -670,25 +758,16 @@ def main() -> int:
 
             should_ckpt = (step % args.ckpt_every == 0) or (step in warmup_steps)
             if should_ckpt:
-                ckpt_path = args.output_dir / f"step-{step:08d}.pt"
-                torch.save({
-                    "step": step,
-                    "model_state": model.state_dict(),
-                    "optim_state": optim.state_dict(),
-                    "cfg": vars(cfg),
-                    "args": vars(args),
-                }, ckpt_path)
+                ckpt_path = save_training_checkpoint(args.output_dir, step, model, optim, cfg, args)
                 print(f"[train] ckpt -> {ckpt_path}")
 
+            if shutdown_requested["signal"]:
+                ckpt_path = save_training_checkpoint(args.output_dir, step, model, optim, cfg, args)
+                print(f"[train] pause checkpoint -> {ckpt_path} ({shutdown_requested['signal']})", flush=True)
+                return 0
+
     # Final ckpt
-    final_path = args.output_dir / f"step-{step:08d}-final.pt"
-    torch.save({
-        "step": step,
-        "model_state": model.state_dict(),
-        "optim_state": optim.state_dict(),
-        "cfg": vars(cfg),
-        "args": vars(args),
-    }, final_path)
+    final_path = save_training_checkpoint(args.output_dir, step, model, optim, cfg, args, final=True)
     print(f"[train] done -> {final_path}")
     return 0
 

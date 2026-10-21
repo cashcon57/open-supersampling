@@ -10,8 +10,16 @@
 #
 set -e
 cd /workspace/oss-gaussian
-git fetch origin main
-git reset --hard origin/main
+if [[ "${OSS_SKIP_GIT_SYNC:-1}" == "1" ]]; then
+  echo "[entrypoint] OSS_SKIP_GIT_SYNC=1; leaving bind-mounted working tree untouched"
+elif ! git diff --quiet || ! git diff --cached --quiet || [[ -n "$(git ls-files --others --exclude-standard)" ]]; then
+  echo "[entrypoint] Working tree has local changes; refusing to git reset --hard" >&2
+  git status --short >&2
+  exit 2
+else
+  git fetch origin main
+  git reset --hard origin/main
+fi
 echo "[entrypoint] HEAD: $(git log -1 --format='%h %s')"
 exec python -u -X faulthandler scripts/sr_train_v7.py \
   --tartanair-root /datasets/tartanair_extracted \
