@@ -1,8 +1,10 @@
 # FSR 4 Architecture Observations — for OSS v6.2 Student Design
 
 **Date:** 2026-05-08
-**Source:** AMD FidelityFX SDK 2.0.0 at orphan commit `01446e6a` (MIT-licensed; vendored at `oss/third_party/fidelityfx-sdk-2.0.0-mit/`).
-**Purpose:** Identify architectural elements worth borrowing for the v6.2 student model (independent reimplementation, not direct port). MIT terms permit direct port too, but for v6.2 we want OSS architecture to remain visibly distinct — borrow building blocks, not topology.
+**Source:** AMD FidelityFX SDK 2.0.0 at orphan commit `01446e6a`, which AMD withdrew as "published in error".
+
+> **2026-10-21 correction:** this memo originally called that commit MIT-licensed and pointed to a vendored copy in this repo. The licence status is disputed: most files carry "All rights reserved" headers, and every SDK release since v2.1.0 is binary-only. The vendored copy has been removed. Treat the observations below as notes on publicly reported architecture only. See `docs/legal/fsr4-status.md`.
+**Purpose:** Identify architectural elements worth borrowing for the v6.2 student model (independent reimplementation, not direct port). Porting AMD code is off the table (see the correction above); in any case we want OSS architecture to remain visibly distinct — borrow building blocks, not topology.
 
 ---
 
@@ -229,10 +231,8 @@ Net: FSR 4 informs the **student backbone choice** (FasterNet + SqrSwish + INT8 
 
 ## References
 
-- AMD FidelityFX SDK 2.0.0 source: `oss/third_party/fidelityfx-sdk-2.0.0-mit/Kits/FidelityFX/upscalers/fsr4/`
-- AMD FSR 4 documentation: `oss/third_party/fidelityfx-sdk-2.0.0-mit/docs/techniques/super-resolution-ml.md`
-- Provenance + license: `oss/third_party/fidelityfx-sdk-2.0.0-mit/MIT-PROVENANCE.md`
-- Archive mirror: <https://github.com/cashcon57/fidelityfx-sdk-mit-archive> (tag `fsr4-mit-original`)
+- Upstream: <https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK> (commit `01446e6a`, withdrawn by AMD)
+- Licence status and repo policy: `docs/legal/fsr4-status.md`
 - FasterNet paper: Chen et al., "Run, Don't Walk: Chasing Higher FLOPS for Faster Neural Networks", CVPR 2023
 - v6.2 architecture spec: `docs/architecture/2026-05-08-v62-arch-v4-spec.md`
 - v4 priority stack: `docs/research/2026-05-08-phase4-priority-stack-v4.md`

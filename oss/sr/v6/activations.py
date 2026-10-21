@@ -1,15 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 """Activation functions used by v6.2 architecture.
 
-SqrSwish is a softsign-based Swish variant from AMD's FSR 4 (MIT-licensed at
-``oss/third_party/fidelityfx-sdk-2.0.0-mit/Kits/FidelityFX/upscalers/fsr4/dx12/
-ml2code_runtime/scalar_functions.hlsli`` line 27). Cheaper than
-``x * sigmoid(x)`` on FP16 hardware: needs only mul, add, sqrt, div -- no exp.
+SqrSwish is a softsign-based Swish variant. We first saw it in AMD's FSR 4
+shader source from the FidelityFX SDK 2.0.0 push of 2025-08-18, which AMD
+withdrew as "published in error". Cheaper than ``x * sigmoid(x)`` on FP16
+hardware: needs only mul, add, sqrt, div -- no exp.
 
     SqrSwish(v) = 0.5 * v * (1 + v / sqrt(v^2 + 1))
 
-Independent reimplementation under Apache 2.0; see
-``fsr4-architecture-observations.md`` for full attribution and analysis.
+This module implements the one-line formula independently under Apache 2.0.
+No AMD code is included or required. See ``docs/legal/fsr4-status.md``.
 """
 from __future__ import annotations
 

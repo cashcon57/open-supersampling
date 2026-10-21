@@ -6,6 +6,8 @@
 **Companion:** `docs/research/2026-05-08-fsr4-architecture-observations.md`
 **Tracking issue:** GitHub #7
 
+> **2026-10-21 correction:** this plan assumed FSR 4 was MIT-licensed and could be run from a vendored copy. That assumption does not hold up (see `docs/legal/fsr4-status.md`), so the vendored copy is gone. A teacher is still possible in two ways. The clean route is AMD's official FSR 4.1 DLL on RDNA 3/4 hardware. The other is the community OptiScaler INT8 path on NVIDIA, which is fine for private experiments but legally gray for published weights. The licence reasoning in the sections below is superseded.
+
 ---
 
 ## TL;DR

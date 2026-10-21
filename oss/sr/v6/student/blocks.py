@@ -1,8 +1,8 @@
 """FasterNet block for the v6.2 student backbone.
 
 Per Chen et al. "Run, Don't Walk: Chasing Higher FLOPS for Faster Neural
-Networks", CVPR 2023. Validated by AMD's FSR 4 (FasterNet48_NoGroup variant)
-as a production-tested block for ML upscaling.
+Networks", CVPR 2023. AMD's FSR 4 reportedly uses a FasterNet48_NoGroup
+variant, which suggests the block holds up in production ML upscaling.
 
 Independent reimplementation; pattern is well-published.
 """
