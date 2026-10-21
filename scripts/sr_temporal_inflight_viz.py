@@ -107,7 +107,13 @@ def _viz_path_for_ckpt(ckpt_path: Path) -> Path:
     return ckpt_path.parent / "viz" / f"{ckpt_path.stem}.png"
 
 
-def _pending_ckpts(output_dir: Path, *, last_step: int, step_stride: int) -> list[Path]:
+def _pending_ckpts(
+    output_dir: Path,
+    *,
+    last_step: int,
+    step_stride: int,
+    skip_steps: frozenset[int] | set[int] = frozenset(),
+) -> list[Path]:
     """Return checkpoint files that still need a viz render, oldest first.
 
     The daemon used to render only the latest checkpoint visible at poll time.
@@ -115,6 +121,12 @@ def _pending_ckpts(output_dir: Path, *, last_step: int, step_stride: int) -> lis
     the older one was skipped forever. Backfill all checkpoint files whose
     matching ``viz/step-NNNNNNNN.png`` is absent so checkpoint cadence, polling
     cadence, and render time are decoupled.
+
+    The viz PNG is the watermark, so ``last_step`` does not filter: a daemon
+    restart or an out-of-order checkpoint still gets rendered. ``last_step``
+    stays in the signature for callers. ``skip_steps`` holds checkpoints the
+    daemon already gave up on (NaN weights, nothing to render), so one bad
+    checkpoint can't block the queue.
     """
     if not output_dir.is_dir():
         return []
@@ -122,7 +134,7 @@ def _pending_ckpts(output_dir: Path, *, last_step: int, step_stride: int) -> lis
     pending: list[Path] = []
     for ckpt in sorted(output_dir.glob("step-*.pt"), key=_step_from_ckpt_name):
         step = _step_from_ckpt_name(ckpt)
-        if step < 0 or step <= last_step:
+        if step < 0 or step in skip_steps:
             continue
         if stride > 1 and step % stride != 0:
             continue
@@ -1059,6 +1071,7 @@ def main(argv: list[str] | None = None) -> int:
           flush=True)
 
     last_step = -1
+    skipped_steps: set[int] = set()
     iters = 0
     while True:
         step_stride = max(1, int(args.step_stride or 1))
@@ -1069,6 +1082,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.output_dir,
                 last_step=last_step,
                 step_stride=step_stride,
+                skip_steps=skipped_steps,
             )
             ckpt = pending[0] if pending else None
         if ckpt is None:
@@ -1148,14 +1162,19 @@ def main(argv: list[str] | None = None) -> int:
                     elapsed = time.monotonic() - t0
                     if out is None:
                         print(f"  step {step}: no new viz", flush=True)
+                        skipped_steps.add(step)
                     else:
                         print(f"  step {step}: rendered {out} in {elapsed:.1f}s", flush=True)
                     last_step = step
                 except NonFiniteCheckpointError as e:
                     print(f"  step {step}: checkpoint has NaN/Inf weights; skipping: {e}", flush=True)
+                    skipped_steps.add(step)
                     last_step = step
                 except Exception as e:
                     print(f"  step {step}: render failed: {e}", flush=True)
+                    # Don't let one failing checkpoint block newer ones; a
+                    # daemon restart retries it.
+                    skipped_steps.add(step)
             else:
                 print(f"  step {step}: unchanged, skipping", flush=True)
         iters += 1
