@@ -204,6 +204,9 @@ def write_session_config(
         session_payload["consent"] = merged_consent
     payload.update(session_payload)
     payload["install_token"] = str(existing_install_token or uuid.uuid4().hex)
+    # Separate, non-secret id for capture metadata. The DLL must never copy
+    # install_token (the upload credential) into capture files.
+    payload["consent_id"] = str(existing.get("consent_id") or uuid.uuid4().hex)
     for key in (
         "proxy_dll_name",
         "installer_version",

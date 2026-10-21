@@ -208,6 +208,7 @@ bool AssignField(DllConfig& cfg, const std::string& key, Cursor& c) {
         else if (key == "capture_mode")     cfg.capture_mode     = s;
         else if (key == "capture_storage_mode") cfg.capture_storage_mode = s;
         else if (key == "install_token")    cfg.install_token    = s;
+        else if (key == "consent_id")       cfg.consent_id       = s;
         else if (key == "capture_api_base") cfg.capture_api_base = s;
         else if (key == "session_uuid")     cfg.session_uuid     = s;
         else if (key == "pending_dir")      cfg.pending_dir      = s;

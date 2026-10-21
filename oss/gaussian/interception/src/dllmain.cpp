@@ -139,7 +139,12 @@ void ConfigureNativeCapture(const DllConfig& dll_cfg) {
     const std::string game_id = dll_cfg.game_id.empty() ? "unknown-game" : dll_cfg.game_id;
     strncpy_s(cfg.game_id, game_id.c_str(), _TRUNCATE);
     strncpy_s(cfg.game_version, "unknown", _TRUNCATE);
-    strncpy_s(cfg.user_consent_token, dll_cfg.install_token.c_str(), _TRUNCATE);
+    // Capture metadata gets the per-install consent_id, never install_token:
+    // install_token is the upload bearer credential and capture files can be
+    // shared or left on disk.
+    const std::string consent_id =
+        dll_cfg.consent_id.empty() ? "unspecified" : dll_cfg.consent_id;
+    strncpy_s(cfg.user_consent_token, consent_id.c_str(), _TRUNCATE);
     const std::string storage_mode =
         dll_cfg.capture_storage_mode.empty() ? "local" : dll_cfg.capture_storage_mode;
     strncpy_s(cfg.capture_storage_mode, storage_mode.c_str(), _TRUNCATE);

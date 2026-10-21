@@ -35,7 +35,8 @@ struct DllConfig {
     std::string game_id;            // e.g. "cyberpunk2077"
     std::string capture_mode;       // "trickle" | "lite" | "regular" | "INSANE"
     std::string capture_storage_mode; // "local" | "upload"
-    std::string install_token;
+    std::string install_token;      // upload bearer credential; never written to capture artifacts
+    std::string consent_id;         // random per-install id recorded in capture metadata
     std::string capture_api_base;   // https://capture-ingest.opensupersampling.com
     std::string session_uuid;
     std::string pending_dir;

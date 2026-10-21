@@ -144,8 +144,9 @@ def build_config(
 ) -> Dict[str, Any]:
     """Return the install-time ``config.json`` dict.
 
-    Pure function — no I/O, no UUID side-effect unless ``install_token``
-    is None. Useful for unit tests and for scripted batch builds.
+    No I/O. Mints a fresh non-secret ``consent_id`` with uuid4 on every
+    call, and an ``install_token`` too when none is passed. Useful for unit
+    tests and for scripted batch builds.
     """
     if not _GAME_ID_RE.match(game_id):
         raise ValueError(
@@ -181,6 +182,8 @@ def build_config(
         "proxy_dll_name": proxy_dll_name,
         "ngx_proxy_dll_name": NGX_PROXY_DLL_NAME,
         "install_token": install_token,
+        # Non-secret per-install id the DLL records in capture metadata.
+        "consent_id": uuid.uuid4().hex,
         "installer_version": installer_version,
         "capture_mode": capture_mode,
         "capture_storage_mode": capture_storage_mode,
