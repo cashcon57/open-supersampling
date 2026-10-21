@@ -211,5 +211,16 @@ def test_v7_build_run_surfaces_score_log_and_arch_version(tmp_path: Path) -> Non
     assert run["score_log_v7"]
     assert run["score_log_v7"][0]["delta_oss_fx_over_bicubic_psnr_db"] == 1.3
     # v7 history fields land in latest_metrics so headlineValue can render them.
+    assert run["latest_metrics"].get("total") == 0.12
     assert run["latest_metrics"].get("sr_charbonnier") == 0.04
     assert run["latest_metrics"].get("canvas_count") == 4800
+
+
+def test_dashboard_template_uses_v7_total_for_loss_fallback() -> None:
+    """The generated dashboard JS must render v7 loss from latest.total.
+
+    v7 history rows use `total` rather than legacy `loss_total` / `loss`.
+    If the embedded template misses this fallback, the built site regresses to
+    `loss --` even though data.json is valid.
+    """
+    assert "latest.loss_total ?? latest.loss ?? latest.total" in dashboard.HTML_TEMPLATE

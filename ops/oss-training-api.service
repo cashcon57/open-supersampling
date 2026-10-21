@@ -1,0 +1,23 @@
+[Unit]
+Description=OSS Tailnet Training Control API
+After=network-online.target docker.service tailscaled.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=cashc
+Group=cashc
+WorkingDirectory=/home/cashc/OpenSuperSampling
+Environment=HOME=/home/cashc
+Environment=LISTEN_HOST=100.126.238.73
+Environment=LISTEN_PORT=8765
+Environment=COMPOSE_DIR=/home/cashc/OpenSuperSampling/docker/trainer
+Environment=CONTAINER_NAME=oss-trainer
+Environment=ALLOWED_ORIGINS=https://opensupersampling.org,http://100.126.238.73:8765,http://homelab-desktop.taild5a730.ts.net:8765
+ExecStart=/usr/bin/python /home/cashc/OpenSuperSampling/scripts/training_api.py
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

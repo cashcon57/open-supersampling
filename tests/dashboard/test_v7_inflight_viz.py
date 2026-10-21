@@ -75,6 +75,30 @@ def test_is_v7_checkpoint_detects_backbone_kind(tmp_path):
     assert _is_v7_checkpoint(v6_ckpt) is False
 
 
+def test_pending_ckpts_backfills_unrendered_steps(tmp_path):
+    """The daemon must not only render the latest ckpt at poll time.
+
+    CPU viz can take longer than checkpoint cadence; when that happens, all
+    unrendered eligible checkpoint files should be queued oldest-first so no
+    strips are skipped permanently.
+    """
+    from scripts.sr_temporal_inflight_viz import _pending_ckpts
+
+    for step in (1000, 2000, 3000, 4000):
+        (tmp_path / f"step-{step:08d}.pt").write_bytes(b"ckpt")
+    viz_dir = tmp_path / "viz"
+    viz_dir.mkdir()
+    (viz_dir / "step-00002000.png").write_bytes(b"png")
+
+    pending = _pending_ckpts(tmp_path, last_step=-1, step_stride=1000)
+
+    assert [p.name for p in pending] == [
+        "step-00001000.pt",
+        "step-00003000.pt",
+        "step-00004000.pt",
+    ]
+
+
 def test_v7_predictions_returns_expected_keys_and_shapes():
     """Build a V7Model with the placeholder backbone (fast, no HAT
     dependency), run _v7_predictions, and verify both heads return

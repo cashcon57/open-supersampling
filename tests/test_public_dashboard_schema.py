@@ -71,6 +71,29 @@ def test_gpu_mem_log_rolls_30_min_window() -> None:
     assert log[-1] == [2880, 7561]
 
 
+def test_public_dashboard_schema_rejects_latest_metrics_without_loss_key(tmp_path: Path) -> None:
+    data_json = _build_fixture(tmp_path)
+    data = json.loads(data_json.read_text(encoding="utf-8"))
+
+    run = next(run for run in data["runs"] if run.get("latest_metrics"))
+    for key in ("loss_total", "loss", "total"):
+        run["latest_metrics"].pop(key, None)
+    run["latest_metrics"]["sr_charbonnier"] = 0.123
+
+    broken = tmp_path / "missing-latest-metrics-loss.json"
+    broken.write_text(json.dumps(data), encoding="utf-8")
+
+    proc = subprocess.run(
+        [sys.executable, str(ROOT / "tools" / "check_data_schema.py"), str(broken)],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+    )
+
+    assert proc.returncode == 1
+    assert "latest_metrics: expected one of ['loss_total', 'loss', 'total']" in proc.stderr
+
+
 def test_public_dashboard_schema_rejects_missing_models(tmp_path: Path) -> None:
     data_json = _build_fixture(tmp_path)
     data = json.loads(data_json.read_text(encoding="utf-8"))

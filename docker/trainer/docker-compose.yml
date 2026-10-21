@@ -56,10 +56,15 @@ services:
       # disable bf16 or compile via the trainer's CLI flags instead.
       PYTHONUNBUFFERED: "1"
       PYTHONFAULTHANDLER: "1"
+      OSS_SKIP_GIT_SYNC: "1"
+      # Reduce CUDA allocator fragmentation; recommended by the OOM error
+      # message itself. Mitigates the ~50MB-headroom OOM loops on the 3080 Ti.
+      PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
 
     volumes:
-      # Code: bind-mount the repo so commits land without an image rebuild.
-      # The entrypoint does `git fetch + reset --hard origin/main` at start.
+      # Code: bind-mount the repo so local patches land without an image rebuild.
+      # The entrypoint skips git sync by default (OSS_SKIP_GIT_SYNC=1) so
+      # dashboard/API patches cannot be clobbered by container restarts.
       - ${OSS_REPO:-${HOME}/OpenSuperSampling}:/workspace/oss-gaussian:rw
 
       # Dataset: read-only to prevent accidental writes from inside the
@@ -74,7 +79,22 @@ services:
       # restart. About 528 MB of model weights live here.
       - ${HOME}/.cache/torch:/root/.cache/torch:rw
 
-    # Health: the Dockerfile defines a healthcheck on history.jsonl mtime.
+    # Health: define this in compose (not only Dockerfile) so health logic can
+    # change without an image rebuild. Prefer the per-step heartbeat; fall back
+    # to history.jsonl for pre-heartbeat containers. History rows are sparse
+    # (`--log-every 50`) and can exceed 5 minutes, so they must not be the
+    # primary liveness signal.
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "test $$(($$(date +%s) - $$(stat -c %Y /checkpoints/srcnn-v7.0-pico-005/.trainer_heartbeat.json 2>/dev/null || stat -c %Y /checkpoints/srcnn-v7.0-pico-005/history.jsonl 2>/dev/null || echo 0))) -lt 300",
+        ]
+      interval: 2m
+      timeout: 10s
+      start_period: 20m
+      retries: 3
+
     # Compose will mark the container "healthy"/"unhealthy" automatically and
     # `docker compose ps` reflects it.
 

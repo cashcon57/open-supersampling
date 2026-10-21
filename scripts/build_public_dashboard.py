@@ -1286,25 +1286,16 @@ HTML_TEMPLATE = r"""<!doctype html>
       </article>
     </section>
 
-    <section id="training-controls" class="hidden rounded-md border border-cyan-700 bg-cyan-950/15 p-4" data-surface aria-label="Training controls">
+    <section id="training-controls" class="rounded-md border border-cyan-700 bg-cyan-950/15 p-4" data-surface aria-label="Training controls">
       <div class="flex items-center justify-between gap-3 mb-3">
         <div>
           <h2 class="text-lg font-semibold text-cyan-200" data-text>Training controls</h2>
-          <p class="text-xs text-zinc-400" data-subtext>Only visible on your Tailscale tailnet</p>
+          <p class="text-xs text-zinc-400" data-subtext>Tailscale-only — opens the control surface served by homelab-desktop</p>
         </div>
-        <span id="train-status-badge" class="rounded border border-zinc-700 px-2 py-0.5 text-xs text-zinc-300">checking</span>
+        <span class="rounded border border-zinc-700 px-2 py-0.5 text-xs text-zinc-300">tailnet</span>
       </div>
-      <div id="train-secret-prompt" class="mb-3 flex items-center gap-2">
-        <input id="train-secret-input" type="password" placeholder="API secret" class="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm text-zinc-200 w-64" />
-        <button id="train-secret-save" class="rounded border border-cyan-600 px-3 py-1 text-sm text-cyan-200 hover:bg-cyan-900/50">Unlock</button>
-        <span id="train-secret-msg" class="text-xs text-zinc-500"></span>
-      </div>
-      <div class="flex flex-wrap items-center gap-2">
-        <button id="train-btn-start" disabled class="rounded border border-emerald-700 px-4 py-2 text-sm font-medium text-emerald-300 hover:bg-emerald-950/50 disabled:opacity-40 disabled:cursor-not-allowed">Start training</button>
-        <button id="train-btn-stop" disabled class="rounded border border-red-700 px-4 py-2 text-sm font-medium text-red-300 hover:bg-red-950/50 disabled:opacity-40 disabled:cursor-not-allowed">Stop training</button>
-        <button id="train-btn-restart" disabled class="rounded border border-amber-700 px-4 py-2 text-sm font-medium text-amber-300 hover:bg-amber-950/50 disabled:opacity-40 disabled:cursor-not-allowed">Restart</button>
-      </div>
-      <pre id="train-api-output" class="mt-3 hidden max-h-40 overflow-auto rounded border border-zinc-800 bg-zinc-950/60 p-2 text-xs text-zinc-400 font-mono"></pre>
+      <a href="http://100.126.238.73:8765/control" target="_blank" rel="noreferrer" class="inline-flex rounded border border-emerald-700 px-4 py-2 text-sm font-medium text-emerald-300 hover:bg-emerald-950/50">Open training controls</a>
+      <p class="mt-3 text-xs text-zinc-500">If it does not load, connect this browser to the Tailscale tailnet.</p>
     </section>
 
     <section class="flex flex-col gap-3" aria-labelledby="run-history-title">
@@ -1393,7 +1384,7 @@ function headlineValue(run, item) {
   if (item.value_from === "latest_step") return Number(run.latest_step || 0).toLocaleString();
   if (item.value_from === "loss_total") {
     const latest = run.latest_metrics || {};
-    return fmtNumber(latest.loss_total ?? latest.loss, 5);
+    return fmtNumber(latest.loss_total ?? latest.loss ?? latest.total, 5);
   }
   if (item.value_from === "v7_sr_loss") {
     const latest = run.latest_metrics || {};
@@ -1634,7 +1625,7 @@ function renderHero(data) {
   document.getElementById("hero-active-status").textContent = active.history?.status || "active run";
   document.getElementById("hero-active-title").textContent = active.label || active.name;
   const latest = active.latest_metrics || {};
-  document.getElementById("hero-active-meta").textContent = `step ${Number(active.latest_step || 0).toLocaleString()} / loss ${fmtNumber(latest.loss_total ?? latest.loss, 5)}`;
+  document.getElementById("hero-active-meta").textContent = `step ${Number(active.latest_step || 0).toLocaleString()} / loss ${fmtNumber(latest.loss_total ?? latest.loss ?? latest.total, 5)}`;
   document.getElementById("hero-gpu").innerHTML = gpuPanelHtml(active).replace("rounded-md border ", "");
 }
 
@@ -1780,88 +1771,6 @@ document.addEventListener("DOMContentLoaded", () => {
   initTrainingControls();
 });
 
-// ── Training control panel (tailnet-gated) ──────────────────────────
-async function initTrainingControls() {
-  const API = 'http://100.126.238.73:8765';
-  const SECRET_KEY='***';
-  const panel = document.getElementById('training-controls');
-  const badge = document.getElementById('train-status-badge');
-  const secretInput = document.getElementById('train-secret-input');
-  const secretSave = document.getElementById('train-secret-save');
-  const secretMsg = document.getElementById('train-secret-msg');
-  const startBtn = document.getElementById('train-btn-start');
-  const stopBtn = document.getElementById('train-btn-stop');
-  const restartBtn = document.getElementById('train-btn-restart');
-  const output = document.getElementById('train-api-output');
-
-  let secret = localStorage.getItem(SECRET_KEY) || '';
-
-  // Check if we're on the tailnet
-  try {
-    const resp = await fetch(`${API}/health`, { mode: 'cors', signal: AbortSignal.timeout(3000) });
-    if (!resp.ok) return;
-    panel.classList.remove('hidden');
-  } catch { return; /* not on tailnet */ }
-
-  function authHeaders() { return { 'Authorization': `Bearer ${secret}` }; }
-
-  function showOutput(text) {
-    output.textContent = text;
-    output.classList.remove('hidden');
-  }
-
-  async function refreshStatus() {
-    if (!secret) { badge.textContent = 'locked'; badge.className = 'rounded border border-zinc-700 px-2 py-0.5 text-xs text-zinc-300'; return; }
-    try {
-      const resp = await fetch(`${API}/status`, { headers: authHeaders(), signal: AbortSignal.timeout(5000) });
-      if (!resp.ok) { badge.textContent = 'auth failed'; return; }
-      const data = await resp.json();
-      if (data.running) {
-        badge.textContent = 'running';
-        badge.className = 'rounded border border-emerald-700 px-2 py-0.5 text-xs text-emerald-300';
-        startBtn.disabled = true;
-        stopBtn.disabled = false;
-        restartBtn.disabled = false;
-      } else {
-        badge.textContent = data.state || 'stopped';
-        badge.className = 'rounded border border-red-700 px-2 py-0.5 text-xs text-red-300';
-        startBtn.disabled = false;
-        stopBtn.disabled = true;
-        restartBtn.disabled = true;
-      }
-    } catch { badge.textContent = 'unreachable'; }
-  }
-
-  async function apiAction(action) {
-    if (!secret) return;
-    try {
-      const resp = await fetch(`${API}/${action}`, { method: 'POST', headers: authHeaders(), signal: AbortSignal.timeout(120000) });
-      const data = await resp.json();
-      showOutput(`${action}: ${data.result}\n${data.stdout || ''}${data.stderr ? '\nSTDERR:\n' + data.stderr : ''}`);
-      setTimeout(refreshStatus, 2000);
-    } catch (err) { showOutput(`Error: ${err.message}`); }
-  }
-
-  secretSave.addEventListener('click', () => {
-    const val = secretInput.value.trim();
-    if (!val) { secretMsg.textContent = 'enter a secret'; return; }
-    secret = val;
-    localStorage.setItem(SECRET_KEY, secret);
-    secretMsg.textContent = 'saved';
-    secretMsg.className = 'text-xs text-emerald-400';
-    refreshStatus();
-  });
-
-  // Pre-fill from localStorage
-  if (secret) { secretInput.value = secret; secretMsg.textContent = 'loaded'; refreshStatus(); }
-
-  startBtn.addEventListener('click', () => apiAction('start'));
-  stopBtn.addEventListener('click', () => apiAction('stop'));
-  restartBtn.addEventListener('click', () => apiAction('restart'));
-
-  // Enable buttons once secret is set
-  if (secret) { startBtn.disabled = false; stopBtn.disabled = false; restartBtn.disabled = false; }
-}
 </script>
 </body>
 </html>

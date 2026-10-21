@@ -58,6 +58,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="Number of pairs from the manifest to render per iteration.")
     p.add_argument("--interval", type=int, default=300,
                    help="Seconds between viz iterations (default 300 = 5 min).")
+    p.add_argument("--step-stride", type=int, default=1,
+                   help="Only render checkpoints whose step is a multiple of this value. "
+                        "Default 1 renders every new checkpoint.")
     p.add_argument("--device", default="cpu",
                    help="Inference device. Default cpu (avoids contention with training GPU).")
     p.add_argument("--ckpt", type=Path, default=None,
@@ -96,8 +99,37 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def _latest_ckpt(output_dir: Path) -> Path | None:
     if not output_dir.is_dir():
         return None
-    ckpts = sorted(output_dir.glob("step-*.pt"))
+    ckpts = sorted(output_dir.glob("step-*.pt"), key=_step_from_ckpt_name)
     return ckpts[-1] if ckpts else None
+
+
+def _viz_path_for_ckpt(ckpt_path: Path) -> Path:
+    return ckpt_path.parent / "viz" / f"{ckpt_path.stem}.png"
+
+
+def _pending_ckpts(output_dir: Path, *, last_step: int, step_stride: int) -> list[Path]:
+    """Return checkpoint files that still need a viz render, oldest first.
+
+    The daemon used to render only the latest checkpoint visible at poll time.
+    If training produced two checkpoints while CPU viz was rendering/sleeping,
+    the older one was skipped forever. Backfill all checkpoint files whose
+    matching ``viz/step-NNNNNNNN.png`` is absent so checkpoint cadence, polling
+    cadence, and render time are decoupled.
+    """
+    if not output_dir.is_dir():
+        return []
+    stride = max(1, int(step_stride or 1))
+    pending: list[Path] = []
+    for ckpt in sorted(output_dir.glob("step-*.pt"), key=_step_from_ckpt_name):
+        step = _step_from_ckpt_name(ckpt)
+        if step < 0 or step <= last_step:
+            continue
+        if stride > 1 and step % stride != 0:
+            continue
+        if _viz_path_for_ckpt(ckpt).is_file():
+            continue
+        pending.append(ckpt)
+    return pending
 
 
 class NonFiniteCheckpointError(RuntimeError):
@@ -1029,9 +1061,22 @@ def main(argv: list[str] | None = None) -> int:
     last_step = -1
     iters = 0
     while True:
-        ckpt = args.ckpt if args.ckpt is not None else _latest_ckpt(args.output_dir)
+        step_stride = max(1, int(args.step_stride or 1))
+        if args.ckpt is not None:
+            ckpt = args.ckpt
+        else:
+            pending = _pending_ckpts(
+                args.output_dir,
+                last_step=last_step,
+                step_stride=step_stride,
+            )
+            ckpt = pending[0] if pending else None
         if ckpt is None:
-            print(f"  no checkpoints yet at {args.output_dir}", flush=True)
+            latest = _latest_ckpt(args.output_dir)
+            if latest is None:
+                print(f"  no checkpoints yet at {args.output_dir}", flush=True)
+            else:
+                print(f"  no new renderable checkpoints at {args.output_dir}", flush=True)
         elif not ckpt.is_file():
             print(f"  checkpoint not found: {ckpt}", file=sys.stderr, flush=True)
             if args.once:
@@ -1039,6 +1084,14 @@ def main(argv: list[str] | None = None) -> int:
         else:
             step = _step_from_ckpt_name(ckpt)
             if step != last_step:
+                if step_stride > 1 and step % step_stride != 0:
+                    print(f"  step {step}: not on --step-stride {step_stride}, skipping", flush=True)
+                    last_step = step
+                    iters += 1
+                    if args.once:
+                        return 0
+                    time.sleep(args.interval)
+                    continue
                 t0 = time.monotonic()
                 try:
                     # v7 uses its own triplet dataset (no manifest) and a
