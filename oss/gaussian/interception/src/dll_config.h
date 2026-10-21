@@ -34,8 +34,12 @@ struct DllConfig {
     // Identity
     std::string game_id;            // e.g. "cyberpunk2077"
     std::string capture_mode;       // "trickle" | "lite" | "regular" | "INSANE"
+    std::string capture_storage_mode; // "local" | "upload"
     std::string install_token;
     std::string capture_api_base;   // https://capture-ingest.opensupersampling.com
+    std::string session_uuid;
+    std::string pending_dir;
+    std::string output_dir;
     int         schema_version = 0;
 
     // Runtime knobs
@@ -44,6 +48,7 @@ struct DllConfig {
     uint64_t    max_frame_bytes                = 16ULL * 1024 * 1024;
     int         uploader_retry_attempts        = 5;
     int         uploader_retry_max_seconds     = 30 * 60;
+    bool        d3d12_hooks_enabled            = false;
 
     // Source of the loaded config (for logging). Empty if defaults.
     std::string loaded_from;

@@ -9,6 +9,7 @@ expected key in the moto-backed bucket.
 from __future__ import annotations
 
 import json
+import xml.etree.ElementTree as ET
 import uuid
 from datetime import datetime, timezone
 
@@ -48,6 +49,22 @@ def test_frame_key_rejects_bad_suffix():
 
     with pytest.raises(ValueError):
         frame_key("g", 0.0, "s", "f", suffix=".png")
+
+
+def test_r2_config_can_derive_endpoint_from_cloudflare_account_id():
+    from server.oss_capture_ingest.r2 import R2Config
+
+    cfg = R2Config.from_env(
+        env={
+            "R2_ACCESS_KEY_ID": "access",
+            "R2_SECRET_ACCESS_KEY": "secret",
+            "CF_ACCOUNT_ID": "abc123",
+            "R2_BUCKET": "captures",
+        }
+    )
+
+    assert cfg.endpoint_url == "https://abc123.r2.cloudflarestorage.com"
+    assert cfg.bucket == "captures"
 
 
 # ---- mode-stratified path layout (post-C23) --------------------------------
@@ -188,10 +205,13 @@ def test_build_installer_config_pure_function():
     assert cfg["schema_version"] == 1
     assert cfg["game_id"] == "cyberpunk-2077"
     assert cfg["proxy_dll_name"] == "dxgi.dll"
+    assert cfg["ngx_proxy_dll_name"] == "nvngx_dlss.dll"
     assert cfg["capture_mode"] == "lite"
+    assert cfg["capture_storage_mode"] == "local"
     assert len(cfg["install_token"]) == 32  # uuid4 hex
     assert cfg["endpoints"]["ingest"].endswith("/ingest")
     assert cfg["consent"]["mode"] == "lite"
+    assert cfg["consent"]["storage_mode"] == "local"
     assert cfg["consent"]["insane_supersample_gt_disclosure"] == ""
 
 
@@ -231,6 +251,63 @@ def test_build_installer_config_rejects_unknown_mode():
             installer_version="1.0.0",
             capture_api_base="https://capture.oss-supersampling.dev",
             capture_mode="FOO",
+        )
+
+
+def test_build_installer_config_accepts_local_storage_mode():
+    from scripts.build_capture_installer import build_config
+
+    cfg = build_config(
+        game_id="cyberpunk-2077",
+        game_exe_name="Cyberpunk2077.exe",
+        proxy_dll_name="dxgi.dll",
+        installer_version="1.0.0",
+        capture_api_base="https://capture.oss-supersampling.dev",
+        capture_storage_mode="local",
+    )
+
+    assert cfg["capture_storage_mode"] == "local"
+    assert cfg["consent"]["storage_mode"] == "local"
+    assert "local" in cfg["consent"]["standard_disclosure"].lower()
+
+
+def test_build_installer_config_upload_requires_minted_token():
+    from scripts.build_capture_installer import build_config
+
+    with pytest.raises(ValueError, match="install-token"):
+        build_config(
+            game_id="cyberpunk-2077",
+            game_exe_name="Cyberpunk2077.exe",
+            proxy_dll_name="dxgi.dll",
+            installer_version="1.0.0",
+            capture_api_base="https://capture.oss-supersampling.dev",
+            capture_storage_mode="upload",
+        )
+
+    cfg = build_config(
+        game_id="cyberpunk-2077",
+        game_exe_name="Cyberpunk2077.exe",
+        proxy_dll_name="dxgi.dll",
+        installer_version="1.0.0",
+        capture_api_base="https://capture.oss-supersampling.dev",
+        capture_storage_mode="upload",
+        install_token="0" * 32,
+    )
+    assert cfg["capture_storage_mode"] == "upload"
+    assert cfg["install_token"] == "0" * 32
+
+
+def test_build_installer_config_rejects_unknown_storage_mode():
+    from scripts.build_capture_installer import build_config
+
+    with pytest.raises(ValueError, match="unknown capture_storage_mode"):
+        build_config(
+            game_id="cyberpunk-2077",
+            game_exe_name="Cyberpunk2077.exe",
+            proxy_dll_name="dxgi.dll",
+            installer_version="1.0.0",
+            capture_api_base="https://capture.oss-supersampling.dev",
+            capture_storage_mode="internet",
         )
 
 
@@ -283,6 +360,8 @@ def test_build_installer_writes_files(tmp_path):
             "Cyberpunk2077.exe",
             "--proxy-dll-name",
             "dxgi.dll",
+            "--storage-mode",
+            "local",
             "--output",
             str(out),
         ]
@@ -292,10 +371,19 @@ def test_build_installer_writes_files(tmp_path):
     manifest = json.loads((out / "installer_manifest.json").read_text())
     assert cfg["game_id"] == "cyberpunk-2077"
     assert cfg["install_token"]
+    assert cfg["ingest_url"] == "https://capture.oss-supersampling.dev/ingest"
     assert manifest["scheduled_task"]["name"] == "OSS-Capture-Uploader-cyberpunk-2077"
     assert any(
-        f["src"] == "oss_capture.dll" for f in manifest["files"]
+        f["src"] == "dxgi.dll" and f["dst_name"] == "dxgi.dll"
+        for f in manifest["files"]
     )
+    assert any(
+        f["src"] == "nvngx_dlss.dll" and f["dst_name"] == "nvngx_dlss.dll"
+        for f in manifest["files"]
+    )
+    assert (out / "scheduled_task.xml").is_file()
+    assert (out / "oss_capture_installer.wxs").is_file()
+    ET.parse(out / "oss_capture_installer.wxs")
 
 
 def test_build_installer_writes_files_with_explicit_mode(tmp_path):
@@ -312,6 +400,8 @@ def test_build_installer_writes_files_with_explicit_mode(tmp_path):
             "dxgi.dll",
             "--mode",
             "trickle",
+            "--storage-mode",
+            "local",
             "--output",
             str(out),
         ]
@@ -321,5 +411,105 @@ def test_build_installer_writes_files_with_explicit_mode(tmp_path):
     cfg = json.loads((out / "config.json").read_text())
     manifest = json.loads((out / "installer_manifest.json").read_text())
     assert cfg["capture_mode"] == "trickle"
+    assert cfg["capture_storage_mode"] == "local"
     assert cfg["consent"]["mode"] == "trickle"
     assert manifest["consent"]["mode"] == "trickle"
+
+
+def test_build_installer_manifest_validation_requires_capture_artifacts(tmp_path):
+    from scripts.build_capture_installer import (
+        REQUIRED_ARTIFACTS,
+        build_config,
+        build_installer_manifest,
+        validate_installer_manifest,
+    )
+
+    cfg = build_config(
+        game_id="cyberpunk-2077",
+        game_exe_name="Cyberpunk2077.exe",
+        proxy_dll_name="dxgi.dll",
+        installer_version="1.0.0",
+        capture_api_base="https://capture.oss-supersampling.dev",
+        install_token="0" * 32,
+    )
+    manifest = build_installer_manifest(cfg, output_dir=str(tmp_path), artifact_dir=str(tmp_path))
+
+    assert validate_installer_manifest(manifest) == []
+    missing = validate_installer_manifest(manifest, require_artifacts=True)
+    assert any("dxgi.dll" in err for err in missing)
+    assert any("nvngx_dlss.dll" in err for err in missing)
+    assert any("oss_capture_uploader.exe" in err for err in missing)
+
+    for name in REQUIRED_ARTIFACTS:
+        (tmp_path / name).write_text("stub", encoding="utf-8")
+    assert validate_installer_manifest(manifest, require_artifacts=True) == []
+
+
+def test_build_installer_rendered_wix_names_cyberpunk_targets(tmp_path):
+    from scripts.build_capture_installer import (
+        build_config,
+        build_installer_manifest,
+        render_wix_source,
+    )
+
+    cfg = build_config(
+        game_id="cyberpunk-2077",
+        game_exe_name="Cyberpunk2077.exe",
+        proxy_dll_name="dxgi.dll",
+        installer_version="1.2.3",
+        capture_api_base="https://capture.oss-supersampling.dev",
+        install_token="0" * 32,
+    )
+    manifest = build_installer_manifest(cfg, output_dir=str(tmp_path), artifact_dir=str(tmp_path))
+    wxs = render_wix_source(manifest)
+
+    assert "OSS Capture - cyberpunk-2077" in wxs
+    assert 'Directory Id="GAME_BIN_X64_DIR"' in wxs
+    assert 'Name="dxgi.dll"' in wxs
+    assert 'Name="nvngx_dlss.dll"' in wxs
+    assert "oss_capture_uploader.exe" in wxs
+    assert "scheduled_task.xml" in wxs
+    assert "BackupExistingProxyDll" in wxs
+    assert "RestoreExistingProxyDll" in wxs
+    assert "dxgi.dll.oss-backup" in wxs
+    assert "nvngx_dlss.dll.oss-backup" in wxs
+    ET.fromstring(wxs)
+
+
+def test_fake_cyberpunk_installer_smoke_skips_without_windows(tmp_path, monkeypatch):
+    from scripts import build_capture_installer as installer
+
+    cfg = installer.build_config(
+        game_id="cyberpunk-2077",
+        game_exe_name="Cyberpunk2077.exe",
+        proxy_dll_name="dxgi.dll",
+        installer_version="1.2.3",
+        capture_api_base="https://capture.oss-supersampling.dev",
+        install_token="0" * 32,
+    )
+    manifest = installer.build_installer_manifest(cfg, output_dir=str(tmp_path), artifact_dir=str(tmp_path))
+    (tmp_path / "oss_capture_installer.wxs").write_text(installer.render_wix_source(manifest), encoding="utf-8")
+
+    monkeypatch.setattr(installer.platform, "system", lambda: "Darwin")
+
+    result = installer.run_fake_cyberpunk_installer_smoke(manifest, work_dir=tmp_path)
+
+    assert result["status"] == "skipped"
+    assert "Windows" in result["reason"]
+
+
+def test_build_config_normalizes_ingest_endpoint_base() -> None:
+    from scripts.build_capture_installer import build_config
+
+    cfg = build_config(
+        game_id="cyberpunk-2077",
+        game_exe_name="Cyberpunk2077.exe",
+        proxy_dll_name="dxgi.dll",
+        installer_version="1.2.3",
+        capture_api_base="http://127.0.0.1:8080/ingest",
+        install_token="0" * 32,
+    )
+
+    assert cfg["capture_api_base"] == "http://127.0.0.1:8080"
+    assert cfg["ingest_url"] == "http://127.0.0.1:8080/ingest"
+    assert cfg["endpoints"]["ingest"] == "http://127.0.0.1:8080/ingest"

@@ -20,6 +20,7 @@
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace oss_gaussian {
@@ -57,6 +58,63 @@ struct FfxResourceAbi {
     void* resource;
     FfxResourceDescriptionAbi description;
     uint32_t state;
+};
+
+struct FfxConstantBufferAbi {
+    uint32_t num32_bit_entries;
+    uint32_t* data;
+};
+
+struct FfxInterfaceAbi;
+
+using FfxRegisterResourceFn = FfxErrorCode (*)(
+    FfxInterfaceAbi* backend_interface,
+    const FfxResourceAbi* in_resource,
+    uint32_t effect_context_id,
+    int32_t* out_resource);
+using FfxGetResourceFn = FfxResourceAbi (*)(
+    FfxInterfaceAbi* backend_interface,
+    int32_t resource);
+using FfxStageConstantBufferDataFn = FfxErrorCode (*)(
+    FfxInterfaceAbi* backend_interface,
+    void* data,
+    uint32_t size,
+    FfxConstantBufferAbi* constant_buffer);
+
+struct FfxInterfaceAbi {
+    void* fp_get_sdk_version;
+    void* fp_get_effect_gpu_memory_usage;
+    void* fp_create_backend_context;
+    void* fp_get_device_capabilities;
+    void* fp_destroy_backend_context;
+    void* fp_create_resource;
+    FfxRegisterResourceFn fp_register_resource;
+    FfxGetResourceFn fp_get_resource;
+    void* fp_unregister_resources;
+    void* fp_register_static_resource;
+    void* fp_get_resource_description;
+    void* fp_destroy_resource;
+    void* fp_map_resource;
+    void* fp_unmap_resource;
+    FfxStageConstantBufferDataFn fp_stage_constant_buffer_data;
+    void* fp_create_pipeline;
+    void* fp_destroy_pipeline;
+    void* fp_legacy17;
+    void* fp_legacy18;
+};
+
+struct FfxInterfaceCallbacks {
+    FfxRegisterResourceFn register_resource = nullptr;
+    FfxGetResourceFn get_resource = nullptr;
+    FfxStageConstantBufferDataFn stage_constant_buffer_data = nullptr;
+};
+
+struct FfxFsr3UpscalerContextDescriptionAbi {
+    uint32_t flags;
+    FfxDimensions2DAbi max_render_size;
+    FfxDimensions2DAbi max_upscale_size;
+    void* fp_message;
+    FfxInterfaceAbi backend_interface;
 };
 
 struct FfxFsr3DispatchUpscaleDescriptionAbi {
@@ -107,6 +165,10 @@ constexpr wchar_t kBackupFsr3UpscalerDllName[] = L"ffx_fsr3upscaler_x64.dll.oss-
 
 std::once_flag g_load_once;
 std::atomic<uint64_t> g_dispatch_frame_index{1};
+std::mutex g_embedded_interface_mutex;
+std::unordered_map<FfxInterfaceAbi*, FfxInterfaceCallbacks> g_embedded_interface_callbacks;
+FfxInterfaceCallbacks g_last_embedded_interface_callbacks;
+bool g_has_last_embedded_interface_callbacks = false;
 
 enum class RealFsr3Kind {
     kFsr3,
@@ -310,6 +372,162 @@ bool SafeCopyReactive(const FfxFsr3GenerateReactiveDescriptionAbi* src,
     }
 }
 
+bool SafeCopyUpscalerContextDescription(
+    const void* src,
+    FfxFsr3UpscalerContextDescriptionAbi* dst) {
+    if (!src || !dst) return false;
+    __try {
+        *dst = *static_cast<const FfxFsr3UpscalerContextDescriptionAbi*>(src);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+bool LoadEmbeddedCallbacks(FfxInterfaceAbi* backend_interface, FfxInterfaceCallbacks* out) {
+    if (!out) return false;
+    std::lock_guard<std::mutex> lock(g_embedded_interface_mutex);
+    const auto it = g_embedded_interface_callbacks.find(backend_interface);
+    if (it != g_embedded_interface_callbacks.end()) {
+        *out = it->second;
+        return true;
+    }
+    if (g_has_last_embedded_interface_callbacks) {
+        *out = g_last_embedded_interface_callbacks;
+        return true;
+    }
+    return false;
+}
+
+FfxErrorCode WrappedEmbeddedRegisterResource(
+    FfxInterfaceAbi* backend_interface,
+    const FfxResourceAbi* in_resource,
+    uint32_t effect_context_id,
+    int32_t* out_resource) {
+    LogInit();
+    if (in_resource) {
+        OSSG_LOG_INFO("ffx_fsr3",
+                      "embedded fpRegisterResource iface=%p effect=%u resource=%p state=%u",
+                      backend_interface,
+                      effect_context_id,
+                      in_resource->resource,
+                      in_resource->state);
+        LogResourceSummary("embedded fpRegisterResource", *in_resource);
+    } else {
+        OSSG_LOG_INFO("ffx_fsr3",
+                      "embedded fpRegisterResource iface=%p effect=%u resource=<null>",
+                      backend_interface,
+                      effect_context_id);
+    }
+    FfxInterfaceCallbacks callbacks;
+    if (!LoadEmbeddedCallbacks(backend_interface, &callbacks) || !callbacks.register_resource) {
+        return kFfxErrorInvalidPointer;
+    }
+    return callbacks.register_resource(
+        backend_interface, in_resource, effect_context_id, out_resource);
+}
+
+FfxResourceAbi WrappedEmbeddedGetResource(FfxInterfaceAbi* backend_interface, int32_t resource) {
+    LogInit();
+    OSSG_LOG_INFO("ffx_fsr3",
+                  "embedded fpGetResource iface=%p internal=%d",
+                  backend_interface,
+                  resource);
+    FfxInterfaceCallbacks callbacks;
+    if (!LoadEmbeddedCallbacks(backend_interface, &callbacks) || !callbacks.get_resource) {
+        return {};
+    }
+    const FfxResourceAbi out = callbacks.get_resource(backend_interface, resource);
+    LogResourceSummary("embedded fpGetResource result", out);
+    return out;
+}
+
+FfxErrorCode WrappedEmbeddedStageConstantBufferData(
+    FfxInterfaceAbi* backend_interface,
+    void* data,
+    uint32_t size,
+    FfxConstantBufferAbi* constant_buffer) {
+    LogInit();
+    float first_values[8] = {};
+    uint32_t copied_floats = 0;
+    if (data && size >= sizeof(float)) {
+        __try {
+            copied_floats = min<uint32_t>(8u, size / static_cast<uint32_t>(sizeof(float)));
+            std::memcpy(first_values, data, copied_floats * sizeof(float));
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            copied_floats = 0;
+        }
+    }
+    OSSG_LOG_INFO("ffx_fsr3",
+                  "embedded fpStageConstantBufferData iface=%p data=%p size=%u first_floats=%u [%.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f]",
+                  backend_interface,
+                  data,
+                  size,
+                  copied_floats,
+                  first_values[0],
+                  first_values[1],
+                  first_values[2],
+                  first_values[3],
+                  first_values[4],
+                  first_values[5],
+                  first_values[6],
+                  first_values[7]);
+    FfxInterfaceCallbacks callbacks;
+    if (!LoadEmbeddedCallbacks(backend_interface, &callbacks) ||
+        !callbacks.stage_constant_buffer_data) {
+        return kFfxErrorInvalidPointer;
+    }
+    return callbacks.stage_constant_buffer_data(
+        backend_interface, data, size, constant_buffer);
+}
+
+bool WrapEmbeddedInterface(FfxFsr3UpscalerContextDescriptionAbi* desc) {
+    if (!desc) return false;
+
+    FfxInterfaceCallbacks callbacks;
+    callbacks.register_resource = desc->backend_interface.fp_register_resource;
+    callbacks.get_resource = desc->backend_interface.fp_get_resource;
+    callbacks.stage_constant_buffer_data =
+        desc->backend_interface.fp_stage_constant_buffer_data;
+
+    LogInit();
+    OSSG_LOG_INFO("ffx_fsr3",
+                  "Fsr3UpscalerContextDescription flags=0x%x max_render=%ux%u max_upscale=%ux%u device=%p scratch=%p scratch_size_or_legacy=%p register=%p get=%p stage_cb=%p legacy17=%p legacy18=%p",
+                  desc->flags,
+                  desc->max_render_size.width,
+                  desc->max_render_size.height,
+                  desc->max_upscale_size.width,
+                  desc->max_upscale_size.height,
+                  desc->backend_interface.fp_legacy18,
+                  desc->backend_interface.fp_legacy17,
+                  desc->backend_interface.fp_legacy18,
+                  reinterpret_cast<void*>(callbacks.register_resource),
+                  reinterpret_cast<void*>(callbacks.get_resource),
+                  reinterpret_cast<void*>(callbacks.stage_constant_buffer_data),
+                  desc->backend_interface.fp_legacy17,
+                  desc->backend_interface.fp_legacy18);
+
+    {
+        std::lock_guard<std::mutex> lock(g_embedded_interface_mutex);
+        g_embedded_interface_callbacks[&desc->backend_interface] = callbacks;
+        g_last_embedded_interface_callbacks = callbacks;
+        g_has_last_embedded_interface_callbacks = true;
+    }
+
+    if (callbacks.register_resource) {
+        desc->backend_interface.fp_register_resource = WrappedEmbeddedRegisterResource;
+    }
+    if (callbacks.get_resource) {
+        desc->backend_interface.fp_get_resource = WrappedEmbeddedGetResource;
+    }
+    if (callbacks.stage_constant_buffer_data) {
+        desc->backend_interface.fp_stage_constant_buffer_data =
+            WrappedEmbeddedStageConstantBufferData;
+    }
+    return callbacks.register_resource || callbacks.get_resource ||
+           callbacks.stage_constant_buffer_data;
+}
+
 void LogResourceSummary(const char* name, const FfxResourceAbi& resource) {
     OSSG_LOG_INFO("ffx_fsr3",
                   "%s resource=%p type=%u format=%u size=%ux%u depth=%u mips=%u flags=%u usage=%u state=%u",
@@ -386,6 +604,16 @@ void EnsureNativeInit() {
     oss_gaussian::OssGaussianEnsureInitializedFromProxyExport();
 }
 
+uint32_t ResourceStateMask(const FfxFsr3DispatchUpscaleDescriptionAbi& desc) {
+    uint32_t mask = 0u;
+    if (desc.color.resource) mask |= 1u;
+    if (desc.upscale_output.resource) mask |= 2u;
+    if (desc.depth.resource) mask |= 4u;
+    if (desc.motion_vectors.resource) mask |= 8u;
+    if (desc.exposure.resource) mask |= 16u;
+    return mask;
+}
+
 OssGaussianFrame MakeCaptureFrame(const FfxFsr3DispatchUpscaleDescriptionAbi& desc) {
     OssGaussianFrame frame{};
     frame.color = desc.color.resource;
@@ -405,7 +633,7 @@ OssGaussianFrame MakeCaptureFrame(const FfxFsr3DispatchUpscaleDescriptionAbi& de
     frame.reset = desc.reset ? 1u : 0u;
     frame.feature_create_flags = desc.flags;
     frame.frame_index = g_dispatch_frame_index.fetch_add(1, std::memory_order_relaxed);
-    frame.resource_states_valid = 1u;
+    frame.resource_states_valid = ResourceStateMask(desc);
     frame.color_state = desc.color.state;
     frame.output_state = desc.upscale_output.state;
     frame.depth_state = desc.depth.state;

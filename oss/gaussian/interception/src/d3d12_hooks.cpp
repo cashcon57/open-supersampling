@@ -31,6 +31,7 @@
 namespace oss_gaussian {
 
 bool InstallD3D12Hooks() { return false; }
+void NotifyDxgiFactoryCreatedForCapture(void*) {}
 void ConfigureCaptureSampler(const char*) {}
 void UninstallD3D12Hooks() {}
 bool AreD3D12HooksActive() { return false; }
@@ -95,6 +96,7 @@ namespace {
 constexpr UINT kPresentSlot = 8;
 constexpr UINT kPresent1Slot = 22;
 constexpr UINT kExecuteCommandListsSlot = 10;
+constexpr UINT kCreateCommandQueueSlot = 8;
 constexpr UINT kCreateSwapChainSlot = 10;
 constexpr UINT kCreateSwapChainForHwndSlot = 15;
 constexpr UINT kCreateSwapChainForCoreWindowSlot = 16;
@@ -103,6 +105,8 @@ constexpr bool kReadbackDegraded = false;
 
 std::mutex g_install_mu;
 std::mutex g_present_attach_mu;
+std::mutex g_execute_attach_mu;
+std::mutex g_factory_attach_mu;
 std::atomic<bool> g_hooks_installed{false};
 std::atomic<uint32_t> g_install_state{
     static_cast<uint32_t>(D3D12HookInstallState::NotInstalled)};
@@ -110,6 +114,8 @@ std::atomic<uint32_t> g_install_state{
 std::atomic<bool> g_present_hooked{false};
 std::atomic<bool> g_present1_hooked{false};
 std::atomic<bool> g_execute_hooked{false};
+std::atomic<bool> g_create_device_hooked{false};
+std::atomic<bool> g_create_command_queue_hooked{false};
 std::atomic<bool> g_swapchain_creation_hooked{false};
 
 std::atomic<long> g_last_detour_error{NO_ERROR};
@@ -119,9 +125,13 @@ std::atomic<unsigned long long> g_frame_counter{0};
 std::atomic<unsigned long long> g_present_count{0};
 std::atomic<unsigned long long> g_present1_count{0};
 std::atomic<unsigned long long> g_execute_count{0};
+std::atomic<unsigned long long> g_create_device_count{0};
+std::atomic<unsigned long long> g_create_command_queue_count{0};
+std::atomic<unsigned long long> g_execute_target_probe_count{0};
 std::atomic<unsigned long long> g_swapchain_create_count{0};
 std::atomic<unsigned long long> g_capture_keep_count{0};
 std::atomic<unsigned long long> g_degraded_capture_count{0};
+std::atomic<unsigned long long> g_factory_notify_count{0};
 
 std::mutex g_queue_mu;
 ComPtr<ID3D12CommandQueue> g_last_queue;
@@ -156,6 +166,10 @@ typedef HRESULT (STDMETHODCALLTYPE *PFN_Present1)(
     IDXGISwapChain1*, UINT, UINT, const DXGI_PRESENT_PARAMETERS*);
 typedef void (STDMETHODCALLTYPE *PFN_ExecuteCommandLists)(
     ID3D12CommandQueue*, UINT, ID3D12CommandList* const*);
+typedef HRESULT (WINAPI *PFN_D3D12CreateDevice)(
+    IUnknown*, D3D_FEATURE_LEVEL, REFIID, void**);
+typedef HRESULT (STDMETHODCALLTYPE *PFN_CreateCommandQueue)(
+    ID3D12Device*, const D3D12_COMMAND_QUEUE_DESC*, REFIID, void**);
 typedef HRESULT (STDMETHODCALLTYPE *PFN_CreateSwapChain)(
     IDXGIFactory*, IUnknown*, DXGI_SWAP_CHAIN_DESC*, IDXGISwapChain**);
 typedef HRESULT (STDMETHODCALLTYPE *PFN_CreateSwapChainForHwnd)(
@@ -183,10 +197,17 @@ typedef HRESULT (STDMETHODCALLTYPE *PFN_CreateSwapChainForComposition)(
 PFN_Present g_orig_Present = nullptr;
 PFN_Present1 g_orig_Present1 = nullptr;
 PFN_ExecuteCommandLists g_orig_ExecuteCommandLists = nullptr;
+PFN_D3D12CreateDevice g_orig_D3D12CreateDevice = nullptr;
+PFN_CreateCommandQueue g_orig_CreateCommandQueue = nullptr;
 PFN_CreateSwapChain g_orig_CreateSwapChain = nullptr;
 PFN_CreateSwapChainForHwnd g_orig_CreateSwapChainForHwnd = nullptr;
 PFN_CreateSwapChainForCoreWindow g_orig_CreateSwapChainForCoreWindow = nullptr;
 PFN_CreateSwapChainForComposition g_orig_CreateSwapChainForComposition = nullptr;
+void* g_hooked_ExecuteCommandLists_target = nullptr;
+void* g_hooked_CreateSwapChain_target = nullptr;
+void* g_hooked_CreateSwapChainForHwnd_target = nullptr;
+void* g_hooked_CreateSwapChainForCoreWindow_target = nullptr;
+void* g_hooked_CreateSwapChainForComposition_target = nullptr;
 
 HRESULT STDMETHODCALLTYPE Hooked_Present(IDXGISwapChain* This, UINT SyncInterval, UINT Flags);
 HRESULT STDMETHODCALLTYPE Hooked_Present1(
@@ -194,6 +215,20 @@ HRESULT STDMETHODCALLTYPE Hooked_Present1(
     UINT SyncInterval,
     UINT PresentFlags,
     const DXGI_PRESENT_PARAMETERS* pPresentParameters);
+HRESULT WINAPI Hooked_D3D12CreateDevice(
+    IUnknown* adapter,
+    D3D_FEATURE_LEVEL minimum_feature_level,
+    REFIID riid,
+    void** device);
+HRESULT STDMETHODCALLTYPE Hooked_CreateCommandQueue(
+    ID3D12Device* This,
+    const D3D12_COMMAND_QUEUE_DESC* pDesc,
+    REFIID riid,
+    void** ppCommandQueue);
+void STDMETHODCALLTYPE Hooked_ExecuteCommandLists(
+    ID3D12CommandQueue* This,
+    UINT NumCommandLists,
+    ID3D12CommandList* const* ppCommandLists);
 
 D3D12HookInstallState LoadInstallState() {
     return static_cast<D3D12HookInstallState>(
@@ -386,6 +421,126 @@ bool AttachPresentHookFromRealSwapChain(IDXGISwapChain* swap_chain, const char* 
         }
     }
 
+    return true;
+}
+
+bool AttachExecuteHookFromQueue(ID3D12CommandQueue* queue, const char* source) {
+    if (!queue) {
+        return false;
+    }
+
+    auto queue_vt = *reinterpret_cast<void***>(queue);
+    if (!queue_vt || !queue_vt[kExecuteCommandListsSlot]) {
+        OSSG_LOG_WARN("hooks", "%s: cannot attach ExecuteCommandLists; vtable slot missing", source);
+        return false;
+    }
+
+    void* execute_target = queue_vt[kExecuteCommandListsSlot];
+    {
+        std::lock_guard<std::mutex> lk(g_execute_attach_mu);
+        if (g_execute_hooked.load(std::memory_order_acquire)) {
+            const unsigned long long count =
+                g_execute_target_probe_count.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (count <= 8 || count % 64 == 0 || execute_target != g_hooked_ExecuteCommandLists_target) {
+                OSSG_LOG_INFO(
+                    "hooks",
+                    "%s: queue ExecuteCommandLists target=%p hooked_target=%p queue=%p match=%d",
+                    source,
+                    execute_target,
+                    g_hooked_ExecuteCommandLists_target,
+                    queue,
+                    execute_target == g_hooked_ExecuteCommandLists_target ? 1 : 0);
+            }
+            if (execute_target != g_hooked_ExecuteCommandLists_target) {
+                OSSG_LOG_WARN(
+                    "hooks",
+                    "%s: real queue uses unhooked ExecuteCommandLists target=%p "
+                    "(hooked target=%p); capture may miss command execution",
+                    source,
+                    execute_target,
+                    g_hooked_ExecuteCommandLists_target);
+            }
+            return true;
+        }
+    }
+
+    std::lock_guard<std::mutex> lk(g_execute_attach_mu);
+    if (g_execute_hooked.load(std::memory_order_acquire)) {
+        return execute_target == g_hooked_ExecuteCommandLists_target;
+    }
+
+    LONG err = DetourTransactionBegin();
+    if (err == NO_ERROR) err = DetourUpdateThread(GetCurrentThread());
+    if (err == NO_ERROR) {
+        g_orig_ExecuteCommandLists =
+            reinterpret_cast<PFN_ExecuteCommandLists>(execute_target);
+        err = DetourAttach(
+            reinterpret_cast<PVOID*>(&g_orig_ExecuteCommandLists),
+            reinterpret_cast<PVOID>(Hooked_ExecuteCommandLists));
+    }
+    if (err != NO_ERROR) {
+        g_last_detour_error.store(err, std::memory_order_release);
+        DetourTransactionAbort();
+        OSSG_LOG_WARN("hooks", "%s: ExecuteCommandLists DetourAttach failed err=%ld", source, err);
+        return false;
+    }
+    err = DetourTransactionCommit();
+    g_last_detour_error.store(err, std::memory_order_release);
+    if (err != NO_ERROR) {
+        OSSG_LOG_WARN("hooks", "%s: ExecuteCommandLists DetourCommit failed err=%ld", source, err);
+        return false;
+    }
+
+    g_hooked_ExecuteCommandLists_target = execute_target;
+    g_execute_hooked.store(true, std::memory_order_release);
+    OSSG_LOG_INFO(
+        "hooks",
+        "%s: attached ID3D12CommandQueue::ExecuteCommandLists target=%p from real queue %p",
+        source,
+        execute_target,
+        queue);
+    return true;
+}
+
+bool AttachCreateCommandQueueHookFromDevice(ID3D12Device* device, const char* source) {
+    if (!device || g_create_command_queue_hooked.load(std::memory_order_acquire)) {
+        return g_create_command_queue_hooked.load(std::memory_order_acquire);
+    }
+
+    auto device_vt = *reinterpret_cast<void***>(device);
+    if (!device_vt || !device_vt[kCreateCommandQueueSlot]) {
+        OSSG_LOG_WARN("hooks", "%s: cannot attach CreateCommandQueue; vtable slot missing", source);
+        return false;
+    }
+
+    LONG err = DetourTransactionBegin();
+    if (err == NO_ERROR) err = DetourUpdateThread(GetCurrentThread());
+    if (err == NO_ERROR) {
+        g_orig_CreateCommandQueue =
+            reinterpret_cast<PFN_CreateCommandQueue>(device_vt[kCreateCommandQueueSlot]);
+        err = DetourAttach(
+            reinterpret_cast<PVOID*>(&g_orig_CreateCommandQueue),
+            reinterpret_cast<PVOID>(Hooked_CreateCommandQueue));
+    }
+    if (err != NO_ERROR) {
+        g_last_detour_error.store(err, std::memory_order_release);
+        DetourTransactionAbort();
+        OSSG_LOG_WARN("hooks", "%s: CreateCommandQueue DetourAttach failed err=%ld", source, err);
+        return false;
+    }
+    err = DetourTransactionCommit();
+    g_last_detour_error.store(err, std::memory_order_release);
+    if (err != NO_ERROR) {
+        OSSG_LOG_WARN("hooks", "%s: CreateCommandQueue DetourCommit failed err=%ld", source, err);
+        return false;
+    }
+
+    g_create_command_queue_hooked.store(true, std::memory_order_release);
+    OSSG_LOG_INFO(
+        "hooks",
+        "%s: attached ID3D12Device::CreateCommandQueue from real device %p",
+        source,
+        device);
     return true;
 }
 
@@ -595,7 +750,6 @@ void LogSwapChainCreated(
     const char* api,
     IUnknown* device_or_queue,
     IDXGISwapChain* swap_chain) {
-    g_swapchain_create_count.fetch_add(1, std::memory_order_relaxed);
     TryRetainQueueFromUnknown(device_or_queue, api);
     AttachPresentHookFromRealSwapChain(swap_chain, api);
 
@@ -673,6 +827,16 @@ void ProcessPresent(IDXGISwapChain* swap_chain, const char* api_name) {
     }
 
     if (!decision.capture) {
+        if (frame_index <= 32ull || (frame_index % 300ull) == 0ull) {
+            OSSG_LOG_INFO(
+                "hooks",
+                "%s: frame %llu SKIP size=%ux%u fmt=%d",
+                api_name,
+                frame_index,
+                width,
+                height,
+                static_cast<int>(format));
+        }
         return;
     }
 
@@ -842,7 +1006,17 @@ HRESULT STDMETHODCALLTYPE Hooked_Present(
     IDXGISwapChain* This,
     UINT SyncInterval,
     UINT Flags) {
-    g_present_count.fetch_add(1, std::memory_order_relaxed);
+    const unsigned long long call =
+        g_present_count.fetch_add(1, std::memory_order_relaxed) + 1ull;
+    if (call <= 32ull || (call % 300ull) == 0ull) {
+        OSSG_LOG_INFO(
+            "hooks",
+            "Present hook call=%llu swap_chain=%p sync=%u flags=0x%08x",
+            call,
+            This,
+            SyncInterval,
+            Flags);
+    }
     SafeProcessPresent(This, "Present");
     return g_orig_Present(This, SyncInterval, Flags);
 }
@@ -852,7 +1026,18 @@ HRESULT STDMETHODCALLTYPE Hooked_Present1(
     UINT SyncInterval,
     UINT PresentFlags,
     const DXGI_PRESENT_PARAMETERS* pPresentParameters) {
-    g_present1_count.fetch_add(1, std::memory_order_relaxed);
+    const unsigned long long call =
+        g_present1_count.fetch_add(1, std::memory_order_relaxed) + 1ull;
+    if (call <= 32ull || (call % 300ull) == 0ull) {
+        OSSG_LOG_INFO(
+            "hooks",
+            "Present1 hook call=%llu swap_chain=%p sync=%u flags=0x%08x params=%p",
+            call,
+            This,
+            SyncInterval,
+            PresentFlags,
+            pPresentParameters);
+    }
     SafeProcessPresent(This, "Present1");
     return g_orig_Present1(This, SyncInterval, PresentFlags, pPresentParameters);
 }
@@ -861,7 +1046,17 @@ void STDMETHODCALLTYPE Hooked_ExecuteCommandLists(
     ID3D12CommandQueue* This,
     UINT NumCommandLists,
     ID3D12CommandList* const* ppCommandLists) {
-    g_execute_count.fetch_add(1, std::memory_order_relaxed);
+    const unsigned long long call =
+        g_execute_count.fetch_add(1, std::memory_order_relaxed) + 1ull;
+    if (call <= 32ull || (call % 300ull) == 0ull) {
+        OSSG_LOG_INFO(
+            "hooks",
+            "ExecuteCommandLists hook call=%llu queue=%p lists=%u first=%p",
+            call,
+            This,
+            NumCommandLists,
+            (NumCommandLists > 0 && ppCommandLists) ? ppCommandLists[0] : nullptr);
+    }
     SafeTrackExecuteCommandLists(This);
     g_orig_ExecuteCommandLists(This, NumCommandLists, ppCommandLists);
     oss_capture_on_execute_command_lists_executed(
@@ -870,12 +1065,85 @@ void STDMETHODCALLTYPE Hooked_ExecuteCommandLists(
         reinterpret_cast<void* const*>(ppCommandLists));
 }
 
+HRESULT WINAPI Hooked_D3D12CreateDevice(
+    IUnknown* adapter,
+    D3D_FEATURE_LEVEL minimum_feature_level,
+    REFIID riid,
+    void** device) {
+    const unsigned long long call =
+        g_create_device_count.fetch_add(1, std::memory_order_relaxed) + 1ull;
+    HRESULT hr = g_orig_D3D12CreateDevice
+        ? g_orig_D3D12CreateDevice(adapter, minimum_feature_level, riid, device)
+        : E_FAIL;
+    if (call <= 32ull || (call % 120ull) == 0ull) {
+        OSSG_LOG_INFO(
+            "hooks",
+            "D3D12CreateDevice hook call=%llu adapter=%p feature=0x%x hr=0x%08lx device=%p",
+            call,
+            adapter,
+            static_cast<unsigned int>(minimum_feature_level),
+            hr,
+            (SUCCEEDED(hr) && device) ? *device : nullptr);
+    }
+    if (SUCCEEDED(hr) && device && *device) {
+        ComPtr<ID3D12Device> d3d12_device;
+        if (SUCCEEDED(reinterpret_cast<IUnknown*>(*device)->QueryInterface(
+                IID_PPV_ARGS(&d3d12_device)))) {
+            AttachCreateCommandQueueHookFromDevice(d3d12_device.Get(), "D3D12CreateDevice");
+        }
+    }
+    return hr;
+}
+
+HRESULT STDMETHODCALLTYPE Hooked_CreateCommandQueue(
+    ID3D12Device* This,
+    const D3D12_COMMAND_QUEUE_DESC* pDesc,
+    REFIID riid,
+    void** ppCommandQueue) {
+    const unsigned long long call =
+        g_create_command_queue_count.fetch_add(1, std::memory_order_relaxed) + 1ull;
+    HRESULT hr = g_orig_CreateCommandQueue
+        ? g_orig_CreateCommandQueue(This, pDesc, riid, ppCommandQueue)
+        : E_FAIL;
+    if (call <= 32ull || (call % 120ull) == 0ull) {
+        OSSG_LOG_INFO(
+            "hooks",
+            "CreateCommandQueue hook call=%llu device=%p type=%d flags=0x%x hr=0x%08lx queue=%p",
+            call,
+            This,
+            pDesc ? static_cast<int>(pDesc->Type) : -1,
+            pDesc ? static_cast<unsigned int>(pDesc->Flags) : 0u,
+            hr,
+            (SUCCEEDED(hr) && ppCommandQueue) ? *ppCommandQueue : nullptr);
+    }
+    if (SUCCEEDED(hr) && ppCommandQueue && *ppCommandQueue) {
+        ComPtr<ID3D12CommandQueue> queue;
+        if (SUCCEEDED(reinterpret_cast<IUnknown*>(*ppCommandQueue)->QueryInterface(
+                IID_PPV_ARGS(&queue)))) {
+            RetainQueue(queue.Get(), "CreateCommandQueue");
+            AttachExecuteHookFromQueue(queue.Get(), "CreateCommandQueue");
+        }
+    }
+    return hr;
+}
+
 HRESULT STDMETHODCALLTYPE Hooked_CreateSwapChain(
     IDXGIFactory* This,
     IUnknown* pDevice,
     DXGI_SWAP_CHAIN_DESC* pDesc,
     IDXGISwapChain** ppSwapChain) {
+    const unsigned long long call =
+        g_swapchain_create_count.fetch_add(1, std::memory_order_relaxed) + 1ull;
     HRESULT hr = g_orig_CreateSwapChain(This, pDevice, pDesc, ppSwapChain);
+    OSSG_LOG_INFO(
+        "hooks",
+        "CreateSwapChain hook call=%llu factory=%p device=%p desc=%p hr=0x%08lx swap_chain=%p",
+        call,
+        This,
+        pDevice,
+        pDesc,
+        hr,
+        (SUCCEEDED(hr) && ppSwapChain) ? *ppSwapChain : nullptr);
     if (SUCCEEDED(hr) && ppSwapChain && *ppSwapChain) {
         SafeLogSwapChainCreated("CreateSwapChain", pDevice, *ppSwapChain);
     }
@@ -890,8 +1158,20 @@ HRESULT STDMETHODCALLTYPE Hooked_CreateSwapChainForHwnd(
     const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* pFullscreenDesc,
     IDXGIOutput* pRestrictToOutput,
     IDXGISwapChain1** ppSwapChain) {
+    const unsigned long long call =
+        g_swapchain_create_count.fetch_add(1, std::memory_order_relaxed) + 1ull;
     HRESULT hr = g_orig_CreateSwapChainForHwnd(
         This, pDevice, hWnd, pDesc, pFullscreenDesc, pRestrictToOutput, ppSwapChain);
+    OSSG_LOG_INFO(
+        "hooks",
+        "CreateSwapChainForHwnd hook call=%llu factory=%p device=%p hwnd=%p desc=%p hr=0x%08lx swap_chain=%p",
+        call,
+        This,
+        pDevice,
+        hWnd,
+        pDesc,
+        hr,
+        (SUCCEEDED(hr) && ppSwapChain) ? *ppSwapChain : nullptr);
     if (SUCCEEDED(hr) && ppSwapChain && *ppSwapChain) {
         SafeLogSwapChainCreated("CreateSwapChainForHwnd", pDevice, *ppSwapChain);
     }
@@ -905,8 +1185,20 @@ HRESULT STDMETHODCALLTYPE Hooked_CreateSwapChainForCoreWindow(
     const DXGI_SWAP_CHAIN_DESC1* pDesc,
     IDXGIOutput* pRestrictToOutput,
     IDXGISwapChain1** ppSwapChain) {
+    const unsigned long long call =
+        g_swapchain_create_count.fetch_add(1, std::memory_order_relaxed) + 1ull;
     HRESULT hr = g_orig_CreateSwapChainForCoreWindow(
         This, pDevice, pWindow, pDesc, pRestrictToOutput, ppSwapChain);
+    OSSG_LOG_INFO(
+        "hooks",
+        "CreateSwapChainForCoreWindow hook call=%llu factory=%p device=%p window=%p desc=%p hr=0x%08lx swap_chain=%p",
+        call,
+        This,
+        pDevice,
+        pWindow,
+        pDesc,
+        hr,
+        (SUCCEEDED(hr) && ppSwapChain) ? *ppSwapChain : nullptr);
     if (SUCCEEDED(hr) && ppSwapChain && *ppSwapChain) {
         SafeLogSwapChainCreated("CreateSwapChainForCoreWindow", pDevice, *ppSwapChain);
     }
@@ -919,8 +1211,19 @@ HRESULT STDMETHODCALLTYPE Hooked_CreateSwapChainForComposition(
     const DXGI_SWAP_CHAIN_DESC1* pDesc,
     IDXGIOutput* pRestrictToOutput,
     IDXGISwapChain1** ppSwapChain) {
+    const unsigned long long call =
+        g_swapchain_create_count.fetch_add(1, std::memory_order_relaxed) + 1ull;
     HRESULT hr = g_orig_CreateSwapChainForComposition(
         This, pDevice, pDesc, pRestrictToOutput, ppSwapChain);
+    OSSG_LOG_INFO(
+        "hooks",
+        "CreateSwapChainForComposition hook call=%llu factory=%p device=%p desc=%p hr=0x%08lx swap_chain=%p",
+        call,
+        This,
+        pDevice,
+        pDesc,
+        hr,
+        (SUCCEEDED(hr) && ppSwapChain) ? *ppSwapChain : nullptr);
     if (SUCCEEDED(hr) && ppSwapChain && *ppSwapChain) {
         SafeLogSwapChainCreated("CreateSwapChainForComposition", pDevice, *ppSwapChain);
     }
@@ -975,14 +1278,14 @@ void DestroyProbeWindow(HWND hwnd, ATOM atom) {
 }
 
 bool AttachRequiredHooks() {
+    const bool attach_execute =
+        g_orig_ExecuteCommandLists &&
+        !g_execute_hooked.load(std::memory_order_acquire);
+    void* execute_target = reinterpret_cast<void*>(g_orig_ExecuteCommandLists);
+
     LONG err = DetourTransactionBegin();
     if (err == NO_ERROR) err = DetourUpdateThread(GetCurrentThread());
-    if (err == NO_ERROR && g_orig_Present) {
-        err = DetourAttach(
-            reinterpret_cast<PVOID*>(&g_orig_Present),
-            reinterpret_cast<PVOID>(Hooked_Present));
-    }
-    if (err == NO_ERROR && g_orig_ExecuteCommandLists) {
+    if (err == NO_ERROR && attach_execute) {
         err = DetourAttach(
             reinterpret_cast<PVOID*>(&g_orig_ExecuteCommandLists),
             reinterpret_cast<PVOID>(Hooked_ExecuteCommandLists));
@@ -1002,12 +1305,69 @@ bool AttachRequiredHooks() {
         return false;
     }
 
-    g_present_hooked.store(g_orig_Present != nullptr, std::memory_order_release);
-    g_execute_hooked.store(g_orig_ExecuteCommandLists != nullptr, std::memory_order_release);
+    if (attach_execute) {
+        std::lock_guard<std::mutex> lk(g_execute_attach_mu);
+        g_hooked_ExecuteCommandLists_target = execute_target;
+        g_execute_hooked.store(true, std::memory_order_release);
+        OSSG_LOG_INFO(
+            "hooks",
+            "attached ID3D12CommandQueue::ExecuteCommandLists target=%p from probe queue",
+            execute_target);
+    } else {
+        g_execute_hooked.store(
+            g_execute_hooked.load(std::memory_order_acquire) ||
+                g_orig_ExecuteCommandLists != nullptr,
+            std::memory_order_release);
+    }
+    return true;
+}
+
+bool AttachD3D12CreateDeviceExportHook(HMODULE system_d3d12) {
+    if (!system_d3d12 || g_create_device_hooked.load(std::memory_order_acquire)) {
+        return g_create_device_hooked.load(std::memory_order_acquire);
+    }
+
+    auto create_d3d12_device =
+        reinterpret_cast<PFN_D3D12CreateDevice>(
+            GetProcAddress(system_d3d12, "D3D12CreateDevice"));
+    if (!create_d3d12_device) {
+        OSSG_LOG_WARN(
+            "hooks",
+            "GetProcAddress(D3D12CreateDevice) unavailable for lazy hook err=%lu",
+            GetLastError());
+        return false;
+    }
+
+    g_orig_D3D12CreateDevice = create_d3d12_device;
+    LONG err = DetourTransactionBegin();
+    if (err == NO_ERROR) err = DetourUpdateThread(GetCurrentThread());
+    if (err == NO_ERROR) {
+        err = DetourAttach(
+            reinterpret_cast<PVOID*>(&g_orig_D3D12CreateDevice),
+            reinterpret_cast<PVOID>(Hooked_D3D12CreateDevice));
+    }
+    if (err != NO_ERROR) {
+        g_last_detour_error.store(err, std::memory_order_release);
+        DetourTransactionAbort();
+        OSSG_LOG_WARN("hooks", "D3D12CreateDevice DetourAttach failed err=%ld", err);
+        return false;
+    }
+
+    err = DetourTransactionCommit();
+    g_last_detour_error.store(err, std::memory_order_release);
+    if (err != NO_ERROR) {
+        OSSG_LOG_WARN("hooks", "D3D12CreateDevice DetourCommit failed err=%ld", err);
+        return false;
+    }
+
+    g_create_device_hooked.store(true, std::memory_order_release);
+    OSSG_LOG_INFO("hooks", "attached d3d12!D3D12CreateDevice lazy hook");
     return true;
 }
 
 bool AttachOptionalHooks() {
+    const bool creation_already_hooked =
+        g_swapchain_creation_hooked.load(std::memory_order_acquire);
     LONG err = DetourTransactionBegin();
     if (err == NO_ERROR) err = DetourUpdateThread(GetCurrentThread());
     if (err == NO_ERROR && g_orig_Present1) {
@@ -1015,22 +1375,22 @@ bool AttachOptionalHooks() {
             reinterpret_cast<PVOID*>(&g_orig_Present1),
             reinterpret_cast<PVOID>(Hooked_Present1));
     }
-    if (err == NO_ERROR && g_orig_CreateSwapChain) {
+    if (err == NO_ERROR && !creation_already_hooked && g_orig_CreateSwapChain) {
         err = DetourAttach(
             reinterpret_cast<PVOID*>(&g_orig_CreateSwapChain),
             reinterpret_cast<PVOID>(Hooked_CreateSwapChain));
     }
-    if (err == NO_ERROR && g_orig_CreateSwapChainForHwnd) {
+    if (err == NO_ERROR && !creation_already_hooked && g_orig_CreateSwapChainForHwnd) {
         err = DetourAttach(
             reinterpret_cast<PVOID*>(&g_orig_CreateSwapChainForHwnd),
             reinterpret_cast<PVOID>(Hooked_CreateSwapChainForHwnd));
     }
-    if (err == NO_ERROR && g_orig_CreateSwapChainForCoreWindow) {
+    if (err == NO_ERROR && !creation_already_hooked && g_orig_CreateSwapChainForCoreWindow) {
         err = DetourAttach(
             reinterpret_cast<PVOID*>(&g_orig_CreateSwapChainForCoreWindow),
             reinterpret_cast<PVOID>(Hooked_CreateSwapChainForCoreWindow));
     }
-    if (err == NO_ERROR && g_orig_CreateSwapChainForComposition) {
+    if (err == NO_ERROR && !creation_already_hooked && g_orig_CreateSwapChainForComposition) {
         err = DetourAttach(
             reinterpret_cast<PVOID*>(&g_orig_CreateSwapChainForComposition),
             reinterpret_cast<PVOID>(Hooked_CreateSwapChainForComposition));
@@ -1054,12 +1414,152 @@ bool AttachOptionalHooks() {
     }
 
     g_present1_hooked.store(g_orig_Present1 != nullptr, std::memory_order_release);
-    g_swapchain_creation_hooked.store(
-        g_orig_CreateSwapChain != nullptr ||
-            g_orig_CreateSwapChainForHwnd != nullptr ||
-            g_orig_CreateSwapChainForCoreWindow != nullptr ||
-            g_orig_CreateSwapChainForComposition != nullptr,
-        std::memory_order_release);
+    if (!creation_already_hooked) {
+        g_swapchain_creation_hooked.store(
+            g_orig_CreateSwapChain != nullptr ||
+                g_orig_CreateSwapChainForHwnd != nullptr ||
+                g_orig_CreateSwapChainForCoreWindow != nullptr ||
+                g_orig_CreateSwapChainForComposition != nullptr,
+            std::memory_order_release);
+    }
+    return true;
+}
+
+bool AttachFactoryCreationHooksFromFactory(void* factory_void, const char* source) {
+    if (!factory_void) return false;
+    std::lock_guard<std::mutex> lk(g_factory_attach_mu);
+
+    auto* unknown = reinterpret_cast<IUnknown*>(factory_void);
+    ComPtr<IDXGIFactory> factory;
+    HRESULT hr = unknown->QueryInterface(IID_PPV_ARGS(&factory));
+    if (FAILED(hr) || !factory) {
+        OSSG_LOG_WARN("hooks", "%s: IDXGIFactory QI failed hr=0x%08lx", source, hr);
+        return false;
+    }
+
+    auto factory_vt = *reinterpret_cast<void***>(factory.Get());
+    void* create_swap_chain_target =
+        factory_vt ? factory_vt[kCreateSwapChainSlot] : nullptr;
+
+    ComPtr<IDXGIFactory2> factory2;
+    void* create_for_hwnd_target = nullptr;
+    void* create_for_core_window_target = nullptr;
+    void* create_for_composition_target = nullptr;
+    hr = unknown->QueryInterface(IID_PPV_ARGS(&factory2));
+    if (SUCCEEDED(hr) && factory2) {
+        auto factory2_vt = *reinterpret_cast<void***>(factory2.Get());
+        if (factory2_vt) {
+            create_for_hwnd_target = factory2_vt[kCreateSwapChainForHwndSlot];
+            create_for_core_window_target = factory2_vt[kCreateSwapChainForCoreWindowSlot];
+            create_for_composition_target = factory2_vt[kCreateSwapChainForCompositionSlot];
+        }
+    }
+
+    const unsigned long long notify =
+        g_factory_notify_count.fetch_add(1, std::memory_order_relaxed) + 1ull;
+    if (notify <= 32ull || (notify % 120ull) == 0ull) {
+        OSSG_LOG_INFO(
+            "hooks",
+            "%s: factory notify=%llu factory=%p targets CreateSwapChain=%p Hwnd=%p Core=%p Composition=%p",
+            source,
+            notify,
+            factory_void,
+            create_swap_chain_target,
+            create_for_hwnd_target,
+            create_for_core_window_target,
+            create_for_composition_target);
+    }
+
+    if (g_swapchain_creation_hooked.load(std::memory_order_acquire)) {
+        const bool same_targets =
+            (!create_swap_chain_target ||
+             create_swap_chain_target == g_hooked_CreateSwapChain_target) &&
+            (!create_for_hwnd_target ||
+             create_for_hwnd_target == g_hooked_CreateSwapChainForHwnd_target) &&
+            (!create_for_core_window_target ||
+             create_for_core_window_target == g_hooked_CreateSwapChainForCoreWindow_target) &&
+            (!create_for_composition_target ||
+             create_for_composition_target == g_hooked_CreateSwapChainForComposition_target);
+        if (!same_targets) {
+            OSSG_LOG_WARN(
+                "hooks",
+                "%s: factory uses unhooked swapchain targets CreateSwapChain=%p/%p Hwnd=%p/%p Core=%p/%p Composition=%p/%p",
+                source,
+                create_swap_chain_target,
+                g_hooked_CreateSwapChain_target,
+                create_for_hwnd_target,
+                g_hooked_CreateSwapChainForHwnd_target,
+                create_for_core_window_target,
+                g_hooked_CreateSwapChainForCoreWindow_target,
+                create_for_composition_target,
+                g_hooked_CreateSwapChainForComposition_target);
+        }
+        return same_targets;
+    }
+
+    g_orig_CreateSwapChain =
+        reinterpret_cast<PFN_CreateSwapChain>(create_swap_chain_target);
+    g_orig_CreateSwapChainForHwnd =
+        reinterpret_cast<PFN_CreateSwapChainForHwnd>(create_for_hwnd_target);
+    g_orig_CreateSwapChainForCoreWindow =
+        reinterpret_cast<PFN_CreateSwapChainForCoreWindow>(create_for_core_window_target);
+    g_orig_CreateSwapChainForComposition =
+        reinterpret_cast<PFN_CreateSwapChainForComposition>(create_for_composition_target);
+
+    LONG err = DetourTransactionBegin();
+    if (err == NO_ERROR) err = DetourUpdateThread(GetCurrentThread());
+    if (err == NO_ERROR && g_orig_CreateSwapChain) {
+        err = DetourAttach(
+            reinterpret_cast<PVOID*>(&g_orig_CreateSwapChain),
+            reinterpret_cast<PVOID>(Hooked_CreateSwapChain));
+    }
+    if (err == NO_ERROR && g_orig_CreateSwapChainForHwnd) {
+        err = DetourAttach(
+            reinterpret_cast<PVOID*>(&g_orig_CreateSwapChainForHwnd),
+            reinterpret_cast<PVOID>(Hooked_CreateSwapChainForHwnd));
+    }
+    if (err == NO_ERROR && g_orig_CreateSwapChainForCoreWindow) {
+        err = DetourAttach(
+            reinterpret_cast<PVOID*>(&g_orig_CreateSwapChainForCoreWindow),
+            reinterpret_cast<PVOID>(Hooked_CreateSwapChainForCoreWindow));
+    }
+    if (err == NO_ERROR && g_orig_CreateSwapChainForComposition) {
+        err = DetourAttach(
+            reinterpret_cast<PVOID*>(&g_orig_CreateSwapChainForComposition),
+            reinterpret_cast<PVOID>(Hooked_CreateSwapChainForComposition));
+    }
+
+    if (err != NO_ERROR) {
+        g_last_detour_error.store(err, std::memory_order_release);
+        OSSG_LOG_WARN("hooks", "%s: early factory DetourAttach failed err=%ld", source, err);
+        DetourTransactionAbort();
+        return false;
+    }
+
+    err = DetourTransactionCommit();
+    g_last_detour_error.store(err, std::memory_order_release);
+    if (err != NO_ERROR) {
+        OSSG_LOG_WARN(
+            "hooks", "%s: early factory DetourTransactionCommit failed err=%ld", source, err);
+        return false;
+    }
+
+    g_swapchain_creation_hooked.store(true, std::memory_order_release);
+    g_hooked_CreateSwapChain_target = create_swap_chain_target;
+    g_hooked_CreateSwapChainForHwnd_target = create_for_hwnd_target;
+    g_hooked_CreateSwapChainForCoreWindow_target = create_for_core_window_target;
+    g_hooked_CreateSwapChainForComposition_target = create_for_composition_target;
+    if (LoadInstallState() == D3D12HookInstallState::NotInstalled) {
+        StoreInstallState(D3D12HookInstallState::Degraded);
+    }
+    OSSG_LOG_INFO(
+        "hooks",
+        "%s: early-attached factory swapchain hooks CreateSwapChain=%d Hwnd=%d Core=%d Composition=%d",
+        source,
+        g_orig_CreateSwapChain ? 1 : 0,
+        g_orig_CreateSwapChainForHwnd ? 1 : 0,
+        g_orig_CreateSwapChainForCoreWindow ? 1 : 0,
+        g_orig_CreateSwapChainForComposition ? 1 : 0);
     return true;
 }
 
@@ -1074,9 +1574,9 @@ bool ProbeAndHook() {
             GetLastError());
         return false;
     }
-    using D3D12CreateDeviceFn = HRESULT(WINAPI*)(IUnknown*, D3D_FEATURE_LEVEL, REFIID, void**);
-    auto create_d3d12_device =
-        reinterpret_cast<D3D12CreateDeviceFn>(GetProcAddress(system_d3d12, "D3D12CreateDevice"));
+    PFN_D3D12CreateDevice create_d3d12_device =
+        reinterpret_cast<PFN_D3D12CreateDevice>(
+            GetProcAddress(system_d3d12, "D3D12CreateDevice"));
     if (!create_d3d12_device) {
         OSSG_LOG_ERROR("hooks", "GetProcAddress(D3D12CreateDevice) failed (err=%lu)",
                        GetLastError());
@@ -1104,109 +1604,10 @@ bool ProbeAndHook() {
         return false;
     }
 
-    HWND hwnd = nullptr;
-    ATOM atom = 0;
-    if (!CreateProbeWindow(&hwnd, &atom)) {
-        return false;
-    }
-
-    HMODULE system_dxgi = LoadLibraryW(L"C:\\Windows\\System32\\dxgi.dll");
-    if (!system_dxgi) {
-        OSSG_LOG_ERROR(
-            "hooks",
-            "LoadLibraryW(System32\\dxgi.dll) failed (err=%lu)",
-            GetLastError());
-        DestroyProbeWindow(hwnd, atom);
-        return false;
-    }
-    using CreateDXGIFactory1Fn = HRESULT(WINAPI*)(REFIID, void**);
-    auto create_dxgi_factory1 =
-        reinterpret_cast<CreateDXGIFactory1Fn>(GetProcAddress(system_dxgi, "CreateDXGIFactory1"));
-    if (!create_dxgi_factory1) {
-        OSSG_LOG_ERROR("hooks", "GetProcAddress(CreateDXGIFactory1) failed (err=%lu)",
-                       GetLastError());
-        FreeLibrary(system_dxgi);
-        DestroyProbeWindow(hwnd, atom);
-        return false;
-    }
-
-    ComPtr<IDXGIFactory4> factory;
-    hr = create_dxgi_factory1(IID_PPV_ARGS(&factory));
-    g_last_probe_hresult.store(hr, std::memory_order_release);
-    if (FAILED(hr)) {
-        OSSG_LOG_ERROR("hooks", "CreateDXGIFactory1 failed (0x%08lx)", hr);
-        DestroyProbeWindow(hwnd, atom);
-        return false;
-    }
-
-    DXGI_SWAP_CHAIN_DESC1 sc{};
-    sc.Width = 16;
-    sc.Height = 16;
-    sc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-    sc.BufferCount = 2;
-    sc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-    sc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
-    sc.SampleDesc.Count = 1;
-
-    ComPtr<IDXGISwapChain1> swap_chain1;
-    hr = factory->CreateSwapChainForHwnd(queue.Get(), hwnd, &sc, nullptr, nullptr, &swap_chain1);
-    g_last_probe_hresult.store(hr, std::memory_order_release);
-    if (FAILED(hr)) {
-        OSSG_LOG_WARN("hooks",
-                      "CreateSwapChainForHwnd probe failed (0x%08lx); installing "
-                      "ExecuteCommandLists/factory hooks without Present",
-                      hr);
-        auto queue_vt = *reinterpret_cast<void***>(queue.Get());
-        auto factory_vt = *reinterpret_cast<void***>(factory.Get());
-        if (queue_vt) {
-            g_orig_ExecuteCommandLists =
-                reinterpret_cast<PFN_ExecuteCommandLists>(queue_vt[kExecuteCommandListsSlot]);
-        }
-        if (factory_vt) {
-            g_orig_CreateSwapChain =
-                reinterpret_cast<PFN_CreateSwapChain>(factory_vt[kCreateSwapChainSlot]);
-            g_orig_CreateSwapChainForHwnd =
-                reinterpret_cast<PFN_CreateSwapChainForHwnd>(
-                    factory_vt[kCreateSwapChainForHwndSlot]);
-            g_orig_CreateSwapChainForCoreWindow =
-                reinterpret_cast<PFN_CreateSwapChainForCoreWindow>(
-                    factory_vt[kCreateSwapChainForCoreWindowSlot]);
-            g_orig_CreateSwapChainForComposition =
-                reinterpret_cast<PFN_CreateSwapChainForComposition>(
-                    factory_vt[kCreateSwapChainForCompositionSlot]);
-        }
-        DestroyProbeWindow(hwnd, atom);
-        if (!g_orig_ExecuteCommandLists) {
-            OSSG_LOG_ERROR("hooks", "ExecuteCommandLists vtable slot missing");
-            return false;
-        }
-    } else {
-        D3D12HookVTableProbe probe{};
-        if (!InspectD3D12HookVTablesForTesting(
-                swap_chain1.Get(),
-                queue.Get(),
-                factory.Get(),
-                &probe)) {
-            OSSG_LOG_ERROR("hooks", "vtable inspection failed");
-            DestroyProbeWindow(hwnd, atom);
-            return false;
-        }
-
-        g_orig_Present = reinterpret_cast<PFN_Present>(probe.present);
-        g_orig_Present1 = reinterpret_cast<PFN_Present1>(probe.present1);
+    auto queue_vt = *reinterpret_cast<void***>(queue.Get());
+    if (queue_vt) {
         g_orig_ExecuteCommandLists =
-            reinterpret_cast<PFN_ExecuteCommandLists>(probe.execute_command_lists);
-        g_orig_CreateSwapChain = reinterpret_cast<PFN_CreateSwapChain>(probe.create_swap_chain);
-        g_orig_CreateSwapChainForHwnd =
-            reinterpret_cast<PFN_CreateSwapChainForHwnd>(probe.create_swap_chain_for_hwnd);
-        g_orig_CreateSwapChainForCoreWindow =
-            reinterpret_cast<PFN_CreateSwapChainForCoreWindow>(
-                probe.create_swap_chain_for_core_window);
-        g_orig_CreateSwapChainForComposition =
-            reinterpret_cast<PFN_CreateSwapChainForComposition>(
-                probe.create_swap_chain_for_composition);
-
-        DestroyProbeWindow(hwnd, atom);
+            reinterpret_cast<PFN_ExecuteCommandLists>(queue_vt[kExecuteCommandListsSlot]);
     }
 
     if (!g_orig_ExecuteCommandLists) {
@@ -1223,18 +1624,16 @@ bool ProbeAndHook() {
         return false;
     }
 
-    const bool optional_ok = AttachOptionalHooks();
-    StoreInstallState(optional_ok && !kReadbackDegraded
+    AttachD3D12CreateDeviceExportHook(system_d3d12);
+    AttachCreateCommandQueueHookFromDevice(device.Get(), "D3D12 probe");
+    StoreInstallState(!kReadbackDegraded
                           ? D3D12HookInstallState::Installed
                           : D3D12HookInstallState::Degraded);
 
     OSSG_LOG_INFO(
         "hooks",
-        "D3D12 hooks %s (Present=%d Present1=%d ExecuteCommandLists=%d "
-        "SwapChainCreate=%d)",
-        optional_ok
-            ? "installed with degraded readback"
-            : "installed with degraded optional DXGI coverage and readback",
+        "D3D12 queue hooks installed; DXGI/Present hooks remain owned by dxgi_proxy "
+        "(Present=%d Present1=%d ExecuteCommandLists=%d SwapChainCreate=%d)",
         g_present_hooked.load(std::memory_order_acquire) ? 1 : 0,
         g_present1_hooked.load(std::memory_order_acquire) ? 1 : 0,
         g_execute_hooked.load(std::memory_order_acquire) ? 1 : 0,
@@ -1274,6 +1673,11 @@ bool InstallD3D12Hooks() {
     return ok;
 }
 
+void NotifyDxgiFactoryCreatedForCapture(void* factory) {
+    if (!factory) return;
+    AttachFactoryCreationHooksFromFactory(factory, "dxgi_proxy");
+}
+
 void UninstallD3D12Hooks() {
     std::lock_guard<std::mutex> lk(g_install_mu);
     if (!g_hooks_installed.load(std::memory_order_acquire)) {
@@ -1296,6 +1700,16 @@ void UninstallD3D12Hooks() {
         err = DetourDetach(
             reinterpret_cast<PVOID*>(&g_orig_ExecuteCommandLists),
             reinterpret_cast<PVOID>(Hooked_ExecuteCommandLists));
+    }
+    if (err == NO_ERROR && g_create_command_queue_hooked.load(std::memory_order_acquire)) {
+        err = DetourDetach(
+            reinterpret_cast<PVOID*>(&g_orig_CreateCommandQueue),
+            reinterpret_cast<PVOID>(Hooked_CreateCommandQueue));
+    }
+    if (err == NO_ERROR && g_create_device_hooked.load(std::memory_order_acquire)) {
+        err = DetourDetach(
+            reinterpret_cast<PVOID*>(&g_orig_D3D12CreateDevice),
+            reinterpret_cast<PVOID>(Hooked_D3D12CreateDevice));
     }
     if (err == NO_ERROR && g_swapchain_creation_hooked.load(std::memory_order_acquire)) {
         if (g_orig_CreateSwapChain) {
@@ -1338,6 +1752,12 @@ void UninstallD3D12Hooks() {
     g_present_hooked.store(false, std::memory_order_release);
     g_present1_hooked.store(false, std::memory_order_release);
     g_execute_hooked.store(false, std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> execute_lk(g_execute_attach_mu);
+        g_hooked_ExecuteCommandLists_target = nullptr;
+    }
+    g_create_command_queue_hooked.store(false, std::memory_order_release);
+    g_create_device_hooked.store(false, std::memory_order_release);
     g_swapchain_creation_hooked.store(false, std::memory_order_release);
     g_hooks_installed.store(false, std::memory_order_release);
     StoreInstallState(D3D12HookInstallState::NotInstalled);
@@ -1357,6 +1777,9 @@ D3D12HookStatus GetD3D12HookStatus() {
     status.present_hooked = g_present_hooked.load(std::memory_order_acquire);
     status.present1_hooked = g_present1_hooked.load(std::memory_order_acquire);
     status.execute_command_lists_hooked = g_execute_hooked.load(std::memory_order_acquire);
+    status.create_device_hooked = g_create_device_hooked.load(std::memory_order_acquire);
+    status.create_command_queue_hooked =
+        g_create_command_queue_hooked.load(std::memory_order_acquire);
     status.swap_chain_creation_hooked =
         g_swapchain_creation_hooked.load(std::memory_order_acquire);
     status.readback_degraded = kReadbackDegraded;
@@ -1365,6 +1788,9 @@ D3D12HookStatus GetD3D12HookStatus() {
     status.frame_count = g_frame_counter.load(std::memory_order_relaxed);
     status.present_count = g_present_count.load(std::memory_order_relaxed);
     status.present1_count = g_present1_count.load(std::memory_order_relaxed);
+    status.create_device_count = g_create_device_count.load(std::memory_order_relaxed);
+    status.create_command_queue_count =
+        g_create_command_queue_count.load(std::memory_order_relaxed);
     status.execute_command_lists_count = g_execute_count.load(std::memory_order_relaxed);
     status.swap_chain_creation_count = g_swapchain_create_count.load(std::memory_order_relaxed);
     status.capture_keep_count = g_capture_keep_count.load(std::memory_order_relaxed);

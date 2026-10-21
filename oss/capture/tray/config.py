@@ -7,8 +7,11 @@ machine).
 
 The config holds:
   - active capture mode (trickle / lite / regular / INSANE)
+  - capture storage mode (local only vs upload to ingest/R2)
+  - capture API base URL used in the per-session DLL/uploader config
   - output drive override (None = auto-pick the drive with more free space)
   - paused flag (tray "Pause captures" toggle)
+  - dry-run launch flag (write session config but do not inject)
   - per-game enable list (dict[str game_id, bool enabled])
   - disk-cap bytes for the oldest-first janitor
 
@@ -27,6 +30,8 @@ from pathlib import Path
 from typing import Dict, Optional
 
 CAPTURE_MODES = ("trickle", "lite", "regular", "INSANE")
+CAPTURE_STORAGE_MODES = ("local", "upload")
+DEFAULT_CAPTURE_API_BASE = "https://capture.oss-supersampling.dev"
 
 # 200 GB default soft-cap on captured-frame footprint per output drive.
 # When the janitor sees the captures dir cross this, it deletes oldest
@@ -82,13 +87,35 @@ class TrayConfig:
     """Soft cap on total captures footprint per output drive. The janitor
     deletes oldest frames first when over."""
 
+    capture_api_base: str = DEFAULT_CAPTURE_API_BASE
+    """Base URL for capture ingest/session endpoints written into each
+    per-session config. Kept in tray config so programmatic capture runs can
+    point at staging/local endpoints without rebuilding installer artifacts."""
+
+    dry_run_launch: bool = False
+    """If True, launch handling writes the same per-session config but skips
+    DLL injection. Used for smoke tests and scripted validation on non-game
+    hosts."""
+
     schema_version: int = 1
+
+    capture_storage_mode: str = "local"
+    """'local' captures data only to disk and disables uploader draining.
+    'upload' enables the uploader path to ingest/R2."""
 
     def __post_init__(self) -> None:
         if self.capture_mode not in CAPTURE_MODES:
             raise ValueError(
                 f"capture_mode must be one of {CAPTURE_MODES}; got {self.capture_mode!r}"
             )
+        if self.capture_storage_mode not in CAPTURE_STORAGE_MODES:
+            raise ValueError(
+                "capture_storage_mode must be one of "
+                f"{CAPTURE_STORAGE_MODES}; got {self.capture_storage_mode!r}"
+            )
+        if not isinstance(self.capture_api_base, str) or not self.capture_api_base:
+            raise ValueError("capture_api_base must be non-empty")
+        self.capture_api_base = self.capture_api_base.rstrip("/")
         if self.disk_cap_bytes < 1024 * 1024 * 1024:
             raise ValueError(
                 f"disk_cap_bytes must be >= 1 GiB; got {self.disk_cap_bytes}"
@@ -111,7 +138,10 @@ def load() -> TrayConfig:
     # time via schema_version.
     known = {f.name for f in TrayConfig.__dataclass_fields__.values()}
     raw = {k: v for k, v in raw.items() if k in known}
-    return TrayConfig(**raw)
+    try:
+        return TrayConfig(**raw)
+    except (TypeError, ValueError):
+        return TrayConfig()
 
 
 def save(cfg: TrayConfig) -> None:

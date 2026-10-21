@@ -30,7 +30,7 @@ enum class LogLevel : int {
 /// (we never want logging to crash the game).
 bool LogInit();
 
-/// Flush + close. Called from DllMain DETACH.
+/// Flush + close. Do not call from DllMain; file I/O is not loader-lock safe.
 void LogShutdown();
 
 /// Set runtime minimum level. Default is Info.

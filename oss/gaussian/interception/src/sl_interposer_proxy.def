@@ -7,36 +7,39 @@
 ; =============================================================================
 LIBRARY sl.interposer
 EXPORTS
-  CreateDXGIFactory                 = OssgSlCreateDXGIFactory
-  CreateDXGIFactory1                = OssgSlCreateDXGIFactory1
-  CreateDXGIFactory2                = OssgSlCreateDXGIFactory2
-  D3D11CreateDevice                 = OssgSlD3D11CreateDevice
-  D3D11CreateDeviceAndSwapChain     = OssgSlD3D11CreateDeviceAndSwapChain
-  D3D12CreateDevice                 = OssgSlD3D12CreateDevice
-  D3D12CreateRootSignatureDeserializer = OssgSlD3D12CreateRootSignatureDeserializer
-  D3D12CreateVersionedRootSignatureDeserializer = OssgSlD3D12CreateVersionedRootSignatureDeserializer
-  D3D12EnableExperimentalFeatures   = OssgSlD3D12EnableExperimentalFeatures
-  D3D12GetDebugInterface            = OssgSlD3D12GetDebugInterface
-  D3D12GetInterface                 = OssgSlD3D12GetInterface
-  D3D12SerializeRootSignature       = OssgSlD3D12SerializeRootSignature
-  D3D12SerializeVersionedRootSignature = OssgSlD3D12SerializeVersionedRootSignature
-  DXGIGetDebugInterface1            = OssgSlDXGIGetDebugInterface1
-  slAllocateResources               = OssgSlAllocateResources
-  slEvaluateFeature                 = OssgSlEvaluateFeature
-  slFreeResources                   = OssgSlFreeResources
-  slGetFeatureFunction              = OssgSlGetFeatureFunction
-  slGetFeatureRequirements          = OssgSlGetFeatureRequirements
-  slGetFeatureVersion               = OssgSlGetFeatureVersion
-  slGetNativeInterface              = OssgSlGetNativeInterface
-  slGetNewFrameToken                = OssgSlGetNewFrameToken
-  slInit                            = OssgSlInit
-  slIsFeatureLoaded                 = OssgSlIsFeatureLoaded
-  slIsFeatureSupported              = OssgSlIsFeatureSupported
-  slSetConstants                    = OssgSlSetConstants
-  slSetD3DDevice                    = OssgSlSetD3DDevice
-  slSetFeatureLoaded                = OssgSlSetFeatureLoaded
-  slSetTag                          = OssgSlSetTag
+  CreateDXGIFactory                 = OssgSlCreateDXGIFactory @1
+  CreateDXGIFactory1                = OssgSlCreateDXGIFactory1 @2
+  CreateDXGIFactory2                = OssgSlCreateDXGIFactory2 @3
+  D3D11CreateDevice                 = OssgSlD3D11CreateDevice @4
+  D3D11CreateDeviceAndSwapChain     = OssgSlD3D11CreateDeviceAndSwapChain @5
+  D3D12CreateDevice                 = OssgSlD3D12CreateDevice @6
+  D3D12CreateRootSignatureDeserializer = OssgSlD3D12CreateRootSignatureDeserializer @7
+  D3D12CreateVersionedRootSignatureDeserializer = OssgSlD3D12CreateVersionedRootSignatureDeserializer @8
+  D3D12EnableExperimentalFeatures   = OssgSlD3D12EnableExperimentalFeatures @9
+  D3D12GetDebugInterface            = OssgSlD3D12GetDebugInterface @10
+  D3D12GetInterface                 = OssgSlD3D12GetInterface @11
+  D3D12SerializeRootSignature       = OssgSlD3D12SerializeRootSignature @12
+  D3D12SerializeVersionedRootSignature = OssgSlD3D12SerializeVersionedRootSignature @13
+  DXGIGetDebugInterface1            = OssgSlDXGIGetDebugInterface1 @14
+  slAllocateResources               = OssgSlAllocateResources @15
+  slEvaluateFeature                 = OssgSlEvaluateFeature @16
+  slFreeResources                   = OssgSlFreeResources @17
+  slGetFeatureFunction              = OssgSlGetFeatureFunction @18
+  slGetFeatureRequirements          = OssgSlGetFeatureRequirements @19
+  slGetFeatureVersion               = OssgSlGetFeatureVersion @20
+  slGetNativeInterface              = OssgSlGetNativeInterface @21
+  slGetNewFrameToken                = OssgSlGetNewFrameToken @22
+  slInit                            = OssgSlInit @23
+  slIsFeatureLoaded                 = OssgSlIsFeatureLoaded @24
+  slIsFeatureSupported              = OssgSlIsFeatureSupported @25
+  slSetConstants                    = OssgSlSetConstants @26
+  slSetD3DDevice                    = OssgSlSetD3DDevice @27
+  slSetFeatureLoaded                = OssgSlSetFeatureLoaded @28
+  slSetTag                          = OssgSlSetTag @29
+  ; Compatibility export for newer Streamline SDKs. Cyberpunk's bundled
+  ; interposer currently keeps slSetVulkanInfo/slShutdown/slUpgradeInterface
+  ; at ordinals 30-32, so this must remain a by-name-only export.
   slSetTagForFrame                  = OssgSlSetTagForFrame
-  slSetVulkanInfo                   = OssgSlSetVulkanInfo
-  slShutdown                        = OssgSlShutdown
-  slUpgradeInterface                = OssgSlUpgradeInterface
+  slSetVulkanInfo                   = OssgSlSetVulkanInfo @30
+  slShutdown                        = OssgSlShutdown @31
+  slUpgradeInterface                = OssgSlUpgradeInterface @32

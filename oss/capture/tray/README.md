@@ -1,29 +1,24 @@
-# OSS Capture tray app — local-only POC
+# OSS Capture Tray App
+
+Current tray status: operator/dev flow with Steam allowlist scan, process watcher, session config writer, and Win32 `LoadLibraryW` injection path. It is not a public safety boundary and has not been proven with real training payloads.
 
 System-tray application that runs on a single Windows machine, captures
 gameplay frames + G-buffers to a local drive (<train-host-data>\ or G:\, whichever has
 more free space), and lets the user switch capture modes (trickle / lite
-/ regular / INSANE) at runtime.
+/ regular / INSANE) and storage mode (`local` vs `upload`) for future sessions.
 
-This is the v0 single-machine POC. The shipping multi-user version reuses
-the same DLL hook with the upload pathway re-enabled and a server / token
-system layered on. For now, captures stay local.
-
-## What this v0 contains
+## What this contains
 
 - `app.py` — pystray-based system-tray icon + menu (mode switcher, pause toggle, drive status, captures-folder shortcut, quit).
 - `config.py` — persistent JSON config (`%LOCALAPPDATA%\oss-capture\tray-config.json`).
 - `storage.py` — drive picker (auto-picks the larger of the configured candidates) and the disk-cap janitor.
+- `steam_library.py` — Steam library and app manifest discovery.
+- `process_watcher.py` — game process polling.
+- `dll_inject.py` — bounded Win32 remote-thread DLL injection.
+- `allowlist.py` — supported-game and anti-cheat guardrail metadata.
+- `session_config.py` — per-launch config writer for DLL/uploader handoff.
 
-## What this v0 does NOT yet contain
-
-- Steam library scanner (parsing `libraryfolders.vdf` + `appmanifest_*.acf`)
-- Game-process watcher (Win32 `CreateToolhelp32Snapshot` polling)
-- DLL injection (`LoadLibrary` via `CreateRemoteThread`)
-- Anti-cheat allowlist enforcement before injection
-- Live mode-switching while a game is running (current behavior: mode change takes effect on next game launch)
-
-These ship in a follow-up commit.
+Mode and storage-mode changes apply to the next launch/session. `local` mode keeps captures on disk and disables uploader draining; `upload` mode lets the scheduled uploader send captures to ingest/R2. The production path still needs one chosen load strategy: game-local proxy DLL or tray injection, not both.
 
 ## Install (Windows)
 
@@ -36,10 +31,8 @@ The icon appears in the Windows system tray (the carrot menu in the bottom-right
 
 ## Tests
 
-Platform-independent tests covering config round-trip, drive picker, and janitor cleanup:
+Platform-independent tests cover config round-trip, drive picker, janitor cleanup, Steam discovery, launch flow, session config, and the mocked Win32 injection path:
 
 ```bash
-pytest tests/capture/test_tray_config.py -v
+pytest tests/capture/test_tray_config.py tests/capture/test_tray_launch_flow.py -v
 ```
-
-The Windows-specific bits (Win32 process watcher, DLL injector, Steam library scanner) get their own tests when those modules land.

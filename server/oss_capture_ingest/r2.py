@@ -5,7 +5,7 @@ Credentials are read from environment variables — never hardcoded:
 
 - ``R2_ACCESS_KEY_ID``
 - ``R2_SECRET_ACCESS_KEY``
-- ``R2_ENDPOINT``
+- ``R2_ENDPOINT`` (or ``CF_ACCOUNT_ID`` to derive Cloudflare's endpoint)
 - ``R2_BUCKET``  (optional; defaults to ``ors-captures``)
 
 In production the env is populated from ``.secrets/r2-credentials.env``
@@ -48,11 +48,14 @@ class R2Config:
         access = e.get("R2_ACCESS_KEY_ID", "")
         secret = e.get("R2_SECRET_ACCESS_KEY", "")
         endpoint = e.get("R2_ENDPOINT", "")
+        if not endpoint and e.get("CF_ACCOUNT_ID"):
+            endpoint = f"https://{e['CF_ACCOUNT_ID']}.r2.cloudflarestorage.com"
         bucket = e.get("R2_BUCKET") or DEFAULT_R2_BUCKET
         if not (access and secret and endpoint):
             raise RuntimeError(
                 "R2 credentials missing — set R2_ACCESS_KEY_ID, "
-                "R2_SECRET_ACCESS_KEY, R2_ENDPOINT (and optionally R2_BUCKET)"
+                "R2_SECRET_ACCESS_KEY, R2_ENDPOINT or CF_ACCOUNT_ID "
+                "(and optionally R2_BUCKET)"
             )
         return cls(
             access_key_id=access,

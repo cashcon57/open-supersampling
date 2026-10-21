@@ -11,9 +11,11 @@
 
 #include <Windows.h>
 
+#include <atomic>
 #include <cstdint>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace oss_gaussian::ffx_backend_dx12 {
@@ -38,6 +40,60 @@ struct FfxResourceAbi {
     uint32_t state;
 };
 
+struct FfxConstantBufferAbi {
+    uint32_t num32_bit_entries;
+    uint32_t* data;
+};
+
+struct FfxInterfaceAbi;
+
+using FfxRegisterResourceFn = FfxErrorCode (*)(
+    FfxInterfaceAbi* backend_interface,
+    const FfxResourceAbi* in_resource,
+    uint32_t effect_context_id,
+    int32_t* out_resource);
+using FfxGetResourceFn = FfxResourceAbi (*)(
+    FfxInterfaceAbi* backend_interface,
+    int32_t resource);
+using FfxStageConstantBufferDataFn = FfxErrorCode (*)(
+    FfxInterfaceAbi* backend_interface,
+    void* data,
+    uint32_t size,
+    FfxConstantBufferAbi* constant_buffer);
+
+struct FfxInterfaceAbi {
+    void* fp_get_sdk_version;
+    void* fp_get_effect_gpu_memory_usage;
+    void* fp_create_backend_context;
+    void* fp_get_device_capabilities;
+    void* fp_destroy_backend_context;
+    void* fp_create_resource;
+    FfxRegisterResourceFn fp_register_resource;
+    FfxGetResourceFn fp_get_resource;
+    void* fp_unregister_resources;
+    void* fp_register_static_resource;
+    void* fp_get_resource_description;
+    void* fp_destroy_resource;
+    void* fp_map_resource;
+    void* fp_unmap_resource;
+    FfxStageConstantBufferDataFn fp_stage_constant_buffer_data;
+    void* fp_create_pipeline;
+    void* fp_destroy_pipeline;
+    void* fp_schedule_gpu_job_or_legacy_field;
+    void* fp_execute_gpu_jobs_or_legacy_field;
+    void* fp_swap_chain_configure_frame_generation;
+    void* fp_register_constant_buffer_allocator;
+    void* scratch_buffer;
+    size_t scratch_buffer_size;
+    void* device;
+};
+
+struct FfxInterfaceCallbacks {
+    FfxRegisterResourceFn register_resource = nullptr;
+    FfxGetResourceFn get_resource = nullptr;
+    FfxStageConstantBufferDataFn stage_constant_buffer_data = nullptr;
+};
+
 namespace {
 
 constexpr wchar_t kRealDllName[] = L"oss_ffx_backend_dx12_real.dll";
@@ -46,6 +102,9 @@ constexpr wchar_t kOriginalDllName[] = L"ffx_backend_dx12_x64.dll";
 
 std::once_flag g_load_once;
 HMODULE g_real_backend = nullptr;
+std::atomic<size_t> g_last_scratch_max_contexts{0};
+std::mutex g_interface_callbacks_mutex;
+std::unordered_map<FfxInterfaceAbi*, FfxInterfaceCallbacks> g_interface_callbacks;
 
 std::wstring DirectoryOf(const std::wstring& path) {
     const size_t slash = path.find_last_of(L"\\/");
@@ -187,6 +246,129 @@ void LogResourceDescription(const char* fn, const FfxResourceDescriptionAbi& des
                   desc.usage);
 }
 
+const FfxInterfaceCallbacks* FindCallbacks(FfxInterfaceAbi* backend_interface) {
+    std::lock_guard<std::mutex> lock(g_interface_callbacks_mutex);
+    const auto it = g_interface_callbacks.find(backend_interface);
+    if (it == g_interface_callbacks.end()) return nullptr;
+    return &it->second;
+}
+
+FfxErrorCode WrappedRegisterResource(
+    FfxInterfaceAbi* backend_interface,
+    const FfxResourceAbi* in_resource,
+    uint32_t effect_context_id,
+    int32_t* out_resource) {
+    LogInit();
+    if (in_resource) {
+        OSSG_LOG_INFO("ffx_backend",
+                      "fpRegisterResource iface=%p effect=%u resource=%p state=%u",
+                      backend_interface,
+                      effect_context_id,
+                      in_resource->resource,
+                      in_resource->state);
+        LogResourceDescription("fpRegisterResource", in_resource->description);
+    } else {
+        OSSG_LOG_INFO("ffx_backend",
+                      "fpRegisterResource iface=%p effect=%u resource=<null>",
+                      backend_interface,
+                      effect_context_id);
+    }
+    const FfxInterfaceCallbacks* callbacks = FindCallbacks(backend_interface);
+    if (!callbacks || !callbacks->register_resource) return kFfxErrorInvalidPointer;
+    return callbacks->register_resource(
+        backend_interface, in_resource, effect_context_id, out_resource);
+}
+
+FfxResourceAbi WrappedGetResource(FfxInterfaceAbi* backend_interface, int32_t resource) {
+    LogInit();
+    OSSG_LOG_INFO("ffx_backend",
+                  "fpGetResource iface=%p internal=%d",
+                  backend_interface,
+                  resource);
+    const FfxInterfaceCallbacks* callbacks = FindCallbacks(backend_interface);
+    if (!callbacks || !callbacks->get_resource) return {};
+    const FfxResourceAbi out = callbacks->get_resource(backend_interface, resource);
+    OSSG_LOG_INFO("ffx_backend",
+                  "fpGetResource result resource=%p state=%u",
+                  out.resource,
+                  out.state);
+    LogResourceDescription("fpGetResource", out.description);
+    return out;
+}
+
+FfxErrorCode WrappedStageConstantBufferData(
+    FfxInterfaceAbi* backend_interface,
+    void* data,
+    uint32_t size,
+    FfxConstantBufferAbi* constant_buffer) {
+    LogInit();
+    OSSG_LOG_INFO("ffx_backend",
+                  "fpStageConstantBufferData iface=%p data=%p size=%u",
+                  backend_interface,
+                  data,
+                  size);
+    const FfxInterfaceCallbacks* callbacks = FindCallbacks(backend_interface);
+    if (!callbacks || !callbacks->stage_constant_buffer_data) return kFfxErrorInvalidPointer;
+    return callbacks->stage_constant_buffer_data(
+        backend_interface, data, size, constant_buffer);
+}
+
+void WrapInterfaceCallbacks(void* backend_interface_ptr) {
+    auto* backend_interface = static_cast<FfxInterfaceAbi*>(backend_interface_ptr);
+    if (!backend_interface) return;
+
+    std::lock_guard<std::mutex> lock(g_interface_callbacks_mutex);
+    if (g_interface_callbacks.find(backend_interface) != g_interface_callbacks.end()) {
+        return;
+    }
+
+    FfxInterfaceCallbacks callbacks;
+    callbacks.register_resource = backend_interface->fp_register_resource;
+    callbacks.get_resource = backend_interface->fp_get_resource;
+    callbacks.stage_constant_buffer_data = backend_interface->fp_stage_constant_buffer_data;
+    g_interface_callbacks.emplace(backend_interface, callbacks);
+
+    if (callbacks.register_resource) {
+        backend_interface->fp_register_resource = WrappedRegisterResource;
+    }
+    if (callbacks.get_resource) {
+        backend_interface->fp_get_resource = WrappedGetResource;
+    }
+    if (callbacks.stage_constant_buffer_data) {
+        backend_interface->fp_stage_constant_buffer_data = WrappedStageConstantBufferData;
+    }
+
+    OSSG_LOG_INFO("ffx_backend",
+                  "wrapped FfxInterface callbacks iface=%p register=%p get=%p stage_cb=%p legacy17=%p legacy18=%p",
+                  backend_interface,
+                  reinterpret_cast<void*>(callbacks.register_resource),
+                  reinterpret_cast<void*>(callbacks.get_resource),
+                  reinterpret_cast<void*>(callbacks.stage_constant_buffer_data),
+                  backend_interface->fp_schedule_gpu_job_or_legacy_field,
+                  backend_interface->fp_execute_gpu_jobs_or_legacy_field);
+}
+
+size_t NormalizeInterfaceMaxContexts(size_t max_contexts) {
+    constexpr size_t kReasonableContextLimit = 1024;
+    if (max_contexts > 0 && max_contexts <= kReasonableContextLimit) {
+        return max_contexts;
+    }
+
+    const size_t last_scratch_contexts = g_last_scratch_max_contexts.load(std::memory_order_relaxed);
+    if (last_scratch_contexts > 0 && last_scratch_contexts <= kReasonableContextLimit) {
+        OSSG_LOG_WARN("ffx_backend",
+                      "ffxGetInterfaceDX12 received implausible max_contexts=%zu; using prior scratch max_contexts=%zu",
+                      max_contexts,
+                      last_scratch_contexts);
+        return last_scratch_contexts;
+    }
+
+    OSSG_LOG_WARN("ffx_backend",
+                  "ffxGetInterfaceDX12 received implausible max_contexts=%zu; using fallback max_contexts=1",
+                  max_contexts);
+    return 1;
+}
+
 } // namespace
 
 void* ResolveExport(const char* name) {
@@ -239,6 +421,10 @@ size_t OssgBackendGetScratchMemorySizeDX12(size_t max_contexts) {
     oss_gaussian::LogInit();
     OSSG_LOG_INFO("ffx_backend", "ffxGetScratchMemorySizeDX12 max_contexts=%zu",
                   max_contexts);
+    if (max_contexts > 0 && max_contexts <= 1024) {
+        oss_gaussian::ffx_backend_dx12::g_last_scratch_max_contexts.store(
+            max_contexts, std::memory_order_relaxed);
+    }
     using Fn = size_t (*)(size_t);
     auto real = oss_gaussian::ffx_backend_dx12::ResolveTyped<Fn>("ffxGetScratchMemorySizeDX12");
     if (!real) return 0;
@@ -261,20 +447,28 @@ OssgBackendGetInterfaceDX12(void* backend_interface,
                             size_t scratch_buffer_size,
                             size_t max_contexts) {
     oss_gaussian::LogInit();
+    const size_t effective_max_contexts =
+        oss_gaussian::ffx_backend_dx12::NormalizeInterfaceMaxContexts(max_contexts);
     OSSG_LOG_INFO("ffx_backend",
-                  "ffxGetInterfaceDX12 iface=%p device=%p scratch=%p scratch_size=%zu max_contexts=%zu",
+                  "ffxGetInterfaceDX12 iface=%p device=%p scratch=%p scratch_size=%zu max_contexts=%zu effective_max_contexts=%zu",
                   backend_interface,
                   device,
                   scratch_buffer,
                   scratch_buffer_size,
-                  max_contexts);
+                  max_contexts,
+                  effective_max_contexts);
     using Fn = oss_gaussian::ffx_backend_dx12::FfxErrorCode (*)(
         void*, void*, void*, size_t, size_t);
     auto real = oss_gaussian::ffx_backend_dx12::ResolveTyped<Fn>("ffxGetInterfaceDX12");
     if (!real) {
         return oss_gaussian::ffx_backend_dx12::MissingReal("ffxGetInterfaceDX12");
     }
-    return real(backend_interface, device, scratch_buffer, scratch_buffer_size, max_contexts);
+    const auto result = real(
+        backend_interface, device, scratch_buffer, scratch_buffer_size, effective_max_contexts);
+    if (result == 0) {
+        oss_gaussian::ffx_backend_dx12::WrapInterfaceCallbacks(backend_interface);
+    }
+    return result;
 }
 
 void* OssgBackendGetCommandListDX12(void* command_list) {

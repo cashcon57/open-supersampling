@@ -51,6 +51,8 @@ def _single_capture_config(pending: Path, ingest_url: str, *, max_attempts: int 
         install_token="test-token",
         max_attempts=max_attempts,
         backoff_seconds=(0.0, 0.0, 0.0),
+        incomplete_grace_seconds=0.0,
+        capture_storage_mode="upload",
     )
 
 
@@ -100,6 +102,7 @@ def test_uploader_keeps_429_pending_after_attempts_then_retries_next_pass(tmp_pa
             install_token="test-token",
             max_attempts=2,
             backoff_seconds=(0.25, 0.5),
+            capture_storage_mode="upload",
         )
         assert drain_once(config, sleep=sleeps.append) == 1
         assert capture.frame_path.exists()
@@ -119,7 +122,7 @@ def test_uploader_keeps_429_pending_after_attempts_then_retries_next_pass(tmp_pa
     assert len(ScriptedIngestHandler.requests_seen) == 1
 
 
-def test_uploader_drops_5xx_after_exhausted_retries(tmp_path: Path) -> None:
+def test_uploader_keeps_5xx_pending_after_exhausted_retries(tmp_path: Path) -> None:
     pending = tmp_path / "pending"
     capture = make_synthetic_capture(pending, frame_uuid="server-error")
     sleeps: list[float] = []
@@ -131,13 +134,13 @@ def test_uploader_drops_5xx_after_exhausted_retries(tmp_path: Path) -> None:
         server.shutdown()
         server.server_close()
 
-    assert not capture.frame_path.exists()
-    assert not capture.meta_path.exists()
+    assert capture.frame_path.exists()
+    assert capture.meta_path.exists()
     assert len(ScriptedIngestHandler.requests_seen) == 3
     assert sleeps == [0.0, 0.0]
 
 
-def test_uploader_drops_connection_error_after_exhausted_retries(tmp_path: Path) -> None:
+def test_uploader_keeps_connection_error_pending_after_exhausted_retries(tmp_path: Path) -> None:
     pending = tmp_path / "pending"
     capture = make_synthetic_capture(pending, frame_uuid="connection-error")
     sleeps: list[float] = []
@@ -145,12 +148,12 @@ def test_uploader_drops_connection_error_after_exhausted_retries(tmp_path: Path)
 
     assert drain_once(config, sleep=sleeps.append) == 1
 
-    assert not capture.frame_path.exists()
-    assert not capture.meta_path.exists()
+    assert capture.frame_path.exists()
+    assert capture.meta_path.exists()
     assert sleeps == [0.0]
 
 
-def test_uploader_fake_server_roundtrip_deletes_terminal_and_exhausted_frames(tmp_path: Path) -> None:
+def test_uploader_fake_server_roundtrip_deletes_terminal_and_keeps_retryable_frames(tmp_path: Path) -> None:
     pending = tmp_path / "pending"
     burst_uuid = "11111111-1111-4111-8111-111111111111"
     ok = make_synthetic_capture(pending, session_uuid="session", frame_uuid="000-0-ok", burst_uuid=burst_uuid, burst_index=0)
@@ -190,15 +193,19 @@ def test_uploader_fake_server_roundtrip_deletes_terminal_and_exhausted_frames(tm
             install_token="test-token",
             max_attempts=2,
             backoff_seconds=(0.0, 0.0),
+            incomplete_grace_seconds=0.0,
+            capture_storage_mode="upload",
         )
         assert drain_once(config, sleep=lambda _: None) == 8
     finally:
         server.shutdown()
         server.server_close()
 
-    for capture in (ok, trickle_static, trickle_pair_tplus, long, regular, insane, rejected, exhausted):
+    for capture in (ok, trickle_static, trickle_pair_tplus, long, regular, insane, rejected):
         assert not capture.frame_path.exists()
         assert not capture.meta_path.exists()
+    assert exhausted.frame_path.exists()
+    assert exhausted.meta_path.exists()
 
     assert len(ScriptedIngestHandler.requests_seen) == 9
     first_body = ScriptedIngestHandler.requests_seen[0]
@@ -231,8 +238,8 @@ def test_uploader_fake_server_roundtrip_deletes_terminal_and_exhausted_frames(tm
 
 def test_pending_cap_evicts_oldest_pairs_before_upload(tmp_path: Path) -> None:
     pending = tmp_path / "pending"
-    oldest = make_synthetic_capture(pending, frame_uuid="000-oldest", payload_bytes=220, captured_at_unix=1)
-    newest = make_synthetic_capture(pending, frame_uuid="001-newest", payload_bytes=220, captured_at_unix=2)
+    oldest = make_synthetic_capture(pending, frame_uuid="000-oldest", captured_at_unix=1)
+    newest = make_synthetic_capture(pending, frame_uuid="001-newest", captured_at_unix=2)
     os.utime(oldest.frame_path, (1, 1))
     os.utime(oldest.meta_path, (1, 1))
     os.utime(newest.frame_path, (2, 2))
@@ -247,6 +254,7 @@ def test_pending_cap_evicts_oldest_pairs_before_upload(tmp_path: Path) -> None:
             max_pending_bytes=newest_total + 1,
             max_attempts=1,
             backoff_seconds=(0.0,),
+            capture_storage_mode="upload",
         )
         assert drain_once(config, sleep=lambda _: None) == 1
     finally:

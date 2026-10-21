@@ -49,6 +49,10 @@ OssGaussianStatus ReadFromNgxParameters(
 /// TRACE thereafter. Cheap; safe to call every EvaluateFeature.
 void LogFrameSummary(const GBufferFrame& frame);
 
+/// Forward one parsed frame to the public interception callback, if installed.
+/// Implemented in dllmain.cpp where the callback state lives.
+void InvokeFrameCallback(const OssGaussianFrame& frame);
+
 } // namespace oss_gaussian
 
 #endif // OSS_GAUSSIAN_GBUFFER_EXTRACTOR_H

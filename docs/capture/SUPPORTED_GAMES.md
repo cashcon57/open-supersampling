@@ -8,15 +8,15 @@ Parent design: [OSS Capture Tool design](../superpowers/specs/2026-05-04-oss-cap
 
 | Status | Meaning |
 |---|---|
-| `Known to work` | Cash has smoke-tested the per-game installer, launch path, capture hook, uploader, uninstall/rollback, and version notes on the listed game build. |
+| `Known to work` | Cash has smoke-tested the per-game installer, launch path, capture hook, uploader, uninstall/rollback, version notes, real capture artifact, upload, index row, and training-loader smoke on the listed game build. |
 | `Experimental` | Editorially approved as a target, but the hook, installer, or uploader path is still being validated. Use only for trusted testing. |
 | `Unsupported` | Do not install the capture tool for this game. This includes anti-cheat-protected titles, games with unsuitable overlays/UIs, or games that have not passed review. |
 
 ## Supported Games
 
-| Game | Game ID | Anti-cheat status | DLSS version detected | Tested DLL version | Status | Notes |
+| Game | Game ID | Anti-cheat status | Upscaler/API detected | Tested DLL version | Status | Notes |
 |---|---|---|---|---|---|---|
-| Cyberpunk 2077 | `cyberpunk-2077` | `NONE` | DLSS SR present; exact version pending first smoke test | Pending first Windows D3D12 smoke test | `Experimental` | Initial validation target. Single-player/offline target with no EAC, BattlEye, VAC, Vanguard, or Ricochet dependency documented in the capture specs. |
+| Cyberpunk 2077 | `cyberpunk-2077` | `NONE` | DLSS selected in settings; Streamline, FSR3, FSR backend, and XeSS DLLs present/mapped; live dispatch path still unresolved | Windows native build/test smoke passed; real capture smoke pending | `Experimental` | Initial validation target. Single-player/offline target with no EAC, BattlEye, VAC, Vanguard, or Ricochet dependency documented in the capture specs. |
 
 ## Anti-Cheat Policy
 
@@ -24,7 +24,18 @@ The capture DLL uses game-local DLL loading and D3D12/NGX hooks. That is expecte
 
 Do not install the capture tool into games protected by kernel-level or competitive anti-cheat systems. Titles using systems such as `EAC`, `BattlEye`, `Vanguard`, or `Ricochet` are off the supported list permanently under this policy. `VAC` or other non-kernel anti-cheat labels still require review before support; the default status is `Unsupported`.
 
-The tool does not try to detect anti-cheat at runtime and should not be treated as a safety mechanism. If a game adds anti-cheat in a patch, its support status should be downgraded until Cash re-reviews it.
+The tray may block on known resident kernel anti-cheat processes as a guardrail, but this is not a complete detector and is not a safety guarantee. If a game adds anti-cheat in a patch, its support status should be downgraded until Cash re-reviews it.
+
+## Promotion Gates
+
+`Known to work` requires:
+
+- Clean install/uninstall on the target game build.
+- Hook status captured from DLL logs.
+- At least one accepted real capture burst uploaded to ingest.
+- R2 EXR + JSON sidecar verified.
+- Parquet index row generated and loadable by the training pipeline.
+- Sample rejected from production training if any required channel is missing, zeroed, NaN, wrong resolution, wrong color space, or mislabeled HR source.
 
 ## Editorial Process
 

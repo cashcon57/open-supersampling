@@ -10,6 +10,10 @@ param(
   [switch]$FsrBackendProxy,
   [switch]$FfxApiProxy,
   [switch]$TemporarilyDisableMods,
+  [switch]$TemporarilyDisableLoaderProxy,
+  [switch]$TemporarilyDisableAsiLoader,
+  [switch]$EnableD3D12Hooks,
+  [switch]$DisableD3D12Hooks,
   [switch]$EnableInitMarker,
   [switch]$InitInDllMain,
   [switch]$LaunchViaSteam,
@@ -19,6 +23,8 @@ param(
   [ValidateSet("", "DLSS", "FSR2", "FSR3", "FSR4", "XeSS")]
   [string]$ForceResolutionScaling = "",
   [string]$ForceUpscalerQuality = "Quality",
+  [string]$ForceWindowMode = "",
+  [string]$ForceDisplayResolution = "",
   [int]$WaitSeconds = 75,
   [switch]$SkipCaptureValidation,
   [string]$PythonExe = "python",
@@ -60,7 +66,7 @@ function Get-FileState([string]$Path) {
   }
 }
 
-function Read-LogTail([string]$Path, [int]$Lines = 80) {
+function Read-LogTail([string]$Path, [int]$Lines = 500) {
   if (-not (Test-Path -LiteralPath $Path)) {
     return @()
   }
@@ -69,6 +75,144 @@ function Read-LogTail([string]$Path, [int]$Lines = 80) {
   } catch {
     return @("<read-failed: $($_.Exception.Message)>")
   }
+}
+
+function Read-LogEvidenceLines([string]$Path) {
+  if (-not (Test-Path -LiteralPath $Path)) {
+    return @()
+  }
+  $pattern = "D3D12CreateDevice hook call=|CreateCommandQueue hook call=|ExecuteCommandLists hook call=|queue ExecuteCommandLists target=|Present hook call=|Present1 hook call=|CreateSwapChain.* hook call=|D3D12 hooks |NVSDK_NGX_D3D12_EvaluateFeature|slInit |slSetD3DDevice|slGetFeatureFunction feature=|slSetConstants|slSetTag|slEvaluateFeature feature=|Streamline DLSS frame candidate|ffxDispatch call=|ffxCreateContext|ffxFsr3ContextDispatchUpscale|ffxFsr3UpscalerContextDispatch|Begin.*FrameCapture|capture candidate|wrote degraded|wrote .*exr|capture keep"
+  try {
+    return @(Select-String -LiteralPath $Path -Pattern $pattern | ForEach-Object { $_.Line })
+  } catch {
+    return @("<evidence-read-failed: $($_.Exception.Message)>")
+  }
+}
+
+function Count-Matches([string[]]$Lines, [string]$Pattern) {
+  return @($Lines | Where-Object { $_ -match $Pattern }).Count
+}
+
+function Last-Match([string[]]$Lines, [string]$Pattern) {
+  $matches = @($Lines | Where-Object { $_ -match $Pattern })
+  if ($matches.Count -eq 0) {
+    return $null
+  }
+  return $matches[-1]
+}
+
+function Build-NativeHookEvidence([string[]]$Lines) {
+  return [ordered]@{
+    create_device_seen = (Count-Matches $Lines "D3D12CreateDevice hook call=") -gt 0
+    create_device_count = Count-Matches $Lines "D3D12CreateDevice hook call="
+    create_device_last = Last-Match $Lines "D3D12CreateDevice hook call="
+    create_queue_seen = (Count-Matches $Lines "CreateCommandQueue hook call=") -gt 0
+    create_queue_count = Count-Matches $Lines "CreateCommandQueue hook call="
+    create_queue_last = Last-Match $Lines "CreateCommandQueue hook call="
+    execute_seen = (Count-Matches $Lines "ExecuteCommandLists hook call=") -gt 0
+    execute_count = Count-Matches $Lines "ExecuteCommandLists hook call="
+    execute_target_seen = (Count-Matches $Lines "queue ExecuteCommandLists target=") -gt 0
+    execute_target_count = Count-Matches $Lines "queue ExecuteCommandLists target="
+    execute_target_last = Last-Match $Lines "queue ExecuteCommandLists target="
+    present_seen = (Count-Matches $Lines "Present hook call=") -gt 0
+    present_count = Count-Matches $Lines "Present hook call="
+    present1_seen = (Count-Matches $Lines "Present1 hook call=") -gt 0
+    present1_count = Count-Matches $Lines "Present1 hook call="
+    swapchain_create_seen = (Count-Matches $Lines "CreateSwapChain.* hook call=") -gt 0
+    swapchain_create_count = Count-Matches $Lines "CreateSwapChain.* hook call="
+    hook_install_last = Last-Match $Lines "D3D12 hooks "
+  }
+}
+
+function Build-ProviderEvidence([string[]]$Lines) {
+  return [ordered]@{
+    ngx_evaluate_seen = (Count-Matches $Lines "NVSDK_NGX_D3D12_EvaluateFeature") -gt 0
+    ngx_evaluate_count = Count-Matches $Lines "NVSDK_NGX_D3D12_EvaluateFeature"
+    streamline_init_seen = (Count-Matches $Lines "slInit ") -gt 0
+    streamline_init_count = Count-Matches $Lines "slInit "
+    streamline_init_last = Last-Match $Lines "slInit "
+    streamline_set_device_seen = (Count-Matches $Lines "slSetD3DDevice") -gt 0
+    streamline_set_device_count = Count-Matches $Lines "slSetD3DDevice"
+    streamline_set_device_last = Last-Match $Lines "slSetD3DDevice"
+    streamline_feature_function_seen = (Count-Matches $Lines "slGetFeatureFunction feature=") -gt 0
+    streamline_feature_function_count = Count-Matches $Lines "slGetFeatureFunction feature="
+    streamline_feature_function_last = Last-Match $Lines "slGetFeatureFunction feature="
+    streamline_set_constants_seen = (Count-Matches $Lines "slSetConstants") -gt 0
+    streamline_set_tag_seen = (Count-Matches $Lines "slSetTag") -gt 0
+    streamline_evaluate_seen = (Count-Matches $Lines "slEvaluateFeature feature=") -gt 0
+    streamline_evaluate_count = Count-Matches $Lines "slEvaluateFeature feature="
+    streamline_frame_candidate_seen = (Count-Matches $Lines "Streamline DLSS frame candidate") -gt 0
+    streamline_frame_candidate_last = Last-Match $Lines "Streamline DLSS frame candidate"
+    ffx_api_dispatch_seen = (Count-Matches $Lines "ffxDispatch call=") -gt 0
+    ffx_api_dispatch_count = Count-Matches $Lines "ffxDispatch call="
+    ffx_api_create_context_seen = (Count-Matches $Lines "ffxCreateContext") -gt 0
+    fsr3_dispatch_seen = (Count-Matches $Lines "ffxFsr3ContextDispatchUpscale|ffxFsr3UpscalerContextDispatch") -gt 0
+    fsr3_dispatch_count = Count-Matches $Lines "ffxFsr3ContextDispatchUpscale|ffxFsr3UpscalerContextDispatch"
+    capture_begin_seen = (Count-Matches $Lines "Begin.*FrameCapture|capture candidate") -gt 0
+    capture_write_seen = (Count-Matches $Lines "wrote degraded|wrote .*exr|capture keep") -gt 0
+  }
+}
+
+function Resolve-SmokeStatus(
+  [object]$NativeEvidence,
+  [object]$ProviderEvidence,
+  [bool]$HookLoaded,
+  [int]$CaptureFilesDelta,
+  [object]$CaptureValidation,
+  [string]$LaunchError,
+  [object]$Proc,
+  [bool]$LaunchedStillRunning
+) {
+  if (-not [string]::IsNullOrEmpty($LaunchError)) {
+    return "launch_error"
+  }
+  if ($CaptureFilesDelta -gt 0 -and
+      $CaptureValidation.ContainsKey("valid") -and
+      $CaptureValidation.valid -eq $false) {
+    return "captured_invalid"
+  }
+  if ($CaptureFilesDelta -gt 0) {
+    return "captured"
+  }
+  if ($ProviderEvidence.streamline_evaluate_seen -or
+      $ProviderEvidence.ngx_evaluate_seen -or
+      $ProviderEvidence.ffx_api_dispatch_seen -or
+      $ProviderEvidence.fsr3_dispatch_seen) {
+    return "provider_no_capture"
+  }
+  if ($NativeEvidence.create_queue_seen -and
+      -not $NativeEvidence.execute_seen -and
+      -not $NativeEvidence.present_seen -and
+      -not $NativeEvidence.present1_seen) {
+    return "queue_no_render_submission"
+  }
+  if ($ProviderEvidence.streamline_init_seen -or
+      $ProviderEvidence.streamline_set_device_seen -or
+      $ProviderEvidence.streamline_set_tag_seen) {
+    return "provider_loaded_no_evaluate"
+  }
+  if ($NativeEvidence.present_seen) {
+    return "present_no_provider"
+  }
+  if ($NativeEvidence.execute_seen) {
+    return "execute_no_present"
+  }
+  if ($NativeEvidence.create_queue_seen) {
+    return "queue_no_execute"
+  }
+  if ($NativeEvidence.create_device_seen) {
+    return "device_no_queue"
+  }
+  if ($HookLoaded) {
+    if ($Proc -ne $null -and -not $LaunchedStillRunning) {
+      return "launched_exited_no_capture"
+    }
+    return "hook_loaded_no_capture"
+  }
+  if ($Proc -ne $null) {
+    return "launched_no_hook_evidence"
+  }
+  return "not_launched"
 }
 
 function Invoke-CaptureValidation([string]$PendingRoot) {
@@ -85,7 +229,7 @@ function Invoke-CaptureValidation([string]$PendingRoot) {
   $output = @()
   $exitCode = $null
   try {
-    $output = @(& $PythonExe $validator $PendingRoot --json 2>&1 | ForEach-Object { [string]$_ })
+    $output = @(& $PythonExe $validator $PendingRoot --json --latest-session-count 1 2>&1 | ForEach-Object { [string]$_ })
     $exitCode = $LASTEXITCODE
   } catch {
     return @{
@@ -250,6 +394,32 @@ function Disable-ModFileForSmoke([string]$Path, [string]$Stamp) {
   }
 }
 
+function Restore-StaleDisabledModFile([string]$Path) {
+  if (Test-Path -LiteralPath $Path) {
+    return $null
+  }
+  $parent = Split-Path -Parent $Path
+  $leaf = Split-Path -Leaf $Path
+  if ($parent -eq "" -or -not (Test-Path -LiteralPath $parent)) {
+    return $null
+  }
+  $backups = @(Get-ChildItem -LiteralPath $parent -Filter "$leaf.oss-disabled-*" -File -ErrorAction SilentlyContinue |
+    Sort-Object LastWriteTimeUtc -Descending)
+  if ($backups.Count -eq 0) {
+    return $null
+  }
+  if ($backups.Count -gt 1) {
+    throw "Refusing to restore stale disabled mod file because multiple backups exist for $Path"
+  }
+  $backup = $backups[0].FullName
+  Move-Item -LiteralPath $backup -Destination $Path -Force
+  return [ordered]@{
+    path = $Path
+    backup = $backup
+    restored = Get-FileState $Path
+  }
+}
+
 function Clear-Or-Refuse-StaleBackup([string]$SourcePath, [string]$BackupPath) {
   if (-not (Test-Path -LiteralPath $BackupPath)) {
     return $false
@@ -264,6 +434,18 @@ function Clear-Or-Refuse-StaleBackup([string]$SourcePath, [string]$BackupPath) {
   }
   Remove-Item -LiteralPath $BackupPath -Force
   return $true
+}
+
+function Assert-SourceIsNotArtifact([string]$SourcePath, [string]$ArtifactPath, [string]$Label) {
+  if (-not (Test-Path -LiteralPath $SourcePath) -or
+      -not (Test-Path -LiteralPath $ArtifactPath)) {
+    return
+  }
+  $sourceHash = (Get-FileHash -LiteralPath $SourcePath -Algorithm SHA256).Hash
+  $artifactHash = (Get-FileHash -LiteralPath $ArtifactPath -Algorithm SHA256).Hash
+  if ($sourceHash -eq $artifactHash) {
+    throw "Refusing to run smoke: $Label source already matches the staged OSS proxy and no vendor backup is available. Restore/verify the game file first. source=$SourcePath artifact=$ArtifactPath"
+  }
 }
 
 function Get-CyberpunkUserSettingIndex([string]$Name, [object]$Value) {
@@ -303,6 +485,16 @@ function Get-CyberpunkUserSettingIndex([string]$Name, [object]$Value) {
       "Off" = 0
       "Auto" = 1
       "On" = 2
+    }
+    if ($map.ContainsKey($text)) {
+      return $map[$text]
+    }
+  }
+  if ($Name -eq "WindowMode") {
+    $map = @{
+      "Windowed" = 0
+      "BorderlessWindow" = 1
+      "Fullscreen" = 2
     }
     if ($map.ContainsKey($text)) {
       return $map[$text]
@@ -376,8 +568,14 @@ function Set-CyberpunkUserSettingValue([object]$Node, [string]$Name, [object]$Va
   return $changed
 }
 
-function Apply-CyberpunkCaptureSettings([string]$SettingsPath, [string]$Scaling, [string]$Quality) {
-  if ($Scaling -eq "") {
+function Apply-CyberpunkCaptureSettings(
+  [string]$SettingsPath,
+  [string]$Scaling,
+  [string]$Quality,
+  [string]$WindowMode,
+  [string]$DisplayResolution
+) {
+  if ($Scaling -eq "" -and $WindowMode -eq "" -and $DisplayResolution -eq "") {
     return @{ skipped = $true }
   }
   if (-not (Test-Path -LiteralPath $SettingsPath)) {
@@ -385,6 +583,8 @@ function Apply-CyberpunkCaptureSettings([string]$SettingsPath, [string]$Scaling,
   }
   $json = Get-Content -LiteralPath $SettingsPath -Raw | ConvertFrom-Json
   $trackedNames = @(
+    "WindowMode",
+    "Resolution",
     "ResolutionScaling",
     "DLSS",
     "FSR2",
@@ -400,23 +600,31 @@ function Apply-CyberpunkCaptureSettings([string]$SettingsPath, [string]$Scaling,
   $before = @{}
   Get-CyberpunkUserSettingSnapshot $json $trackedNames $before
   $changes = @{}
-  $changes["ResolutionScaling"] = Set-CyberpunkUserSettingValue $json "ResolutionScaling" $Scaling
-  $changes["DynamicResolutionScaling"] = Set-CyberpunkUserSettingValue $json "DynamicResolutionScaling" $false
-  $changes["FrameGeneration"] = Set-CyberpunkUserSettingValue $json "FrameGeneration" "Off"
-  $changes["DLSSFrameGen"] = Set-CyberpunkUserSettingValue $json "DLSSFrameGen" $false
-  $changes["FSR3_FrameGeneration"] = Set-CyberpunkUserSettingValue $json "FSR3_FrameGeneration" $false
-  $changes["XESS_FrameGeneration"] = Set-CyberpunkUserSettingValue $json "XESS_FrameGeneration" $false
-  if ($Scaling -eq "DLSS") {
-    $changes["DLSS_BackendPreset"] = Set-CyberpunkUserSettingValue $json "DLSS_BackendPreset" "Transformer"
-    $changes["DLSS"] = Set-CyberpunkUserSettingValue $json "DLSS" $Quality
-  } elseif ($Scaling -eq "FSR2") {
-    $changes["FSR2"] = Set-CyberpunkUserSettingValue $json "FSR2" $Quality
-  } elseif ($Scaling -eq "FSR3") {
-    $changes["FSR3"] = Set-CyberpunkUserSettingValue $json "FSR3" $Quality
-  } elseif ($Scaling -eq "FSR4") {
-    $changes["FSR4"] = Set-CyberpunkUserSettingValue $json "FSR4" $Quality
-  } elseif ($Scaling -eq "XeSS") {
-    $changes["XESS"] = Set-CyberpunkUserSettingValue $json "XESS" $Quality
+  if ($WindowMode -ne "") {
+    $changes["WindowMode"] = Set-CyberpunkUserSettingValue $json "WindowMode" $WindowMode
+  }
+  if ($DisplayResolution -ne "") {
+    $changes["Resolution"] = Set-CyberpunkUserSettingValue $json "Resolution" $DisplayResolution
+  }
+  if ($Scaling -ne "") {
+    $changes["ResolutionScaling"] = Set-CyberpunkUserSettingValue $json "ResolutionScaling" $Scaling
+    $changes["DynamicResolutionScaling"] = Set-CyberpunkUserSettingValue $json "DynamicResolutionScaling" $false
+    $changes["FrameGeneration"] = Set-CyberpunkUserSettingValue $json "FrameGeneration" "Off"
+    $changes["DLSSFrameGen"] = Set-CyberpunkUserSettingValue $json "DLSSFrameGen" $false
+    $changes["FSR3_FrameGeneration"] = Set-CyberpunkUserSettingValue $json "FSR3_FrameGeneration" $false
+    $changes["XESS_FrameGeneration"] = Set-CyberpunkUserSettingValue $json "XESS_FrameGeneration" $false
+    if ($Scaling -eq "DLSS") {
+      $changes["DLSS_BackendPreset"] = Set-CyberpunkUserSettingValue $json "DLSS_BackendPreset" "Transformer"
+      $changes["DLSS"] = Set-CyberpunkUserSettingValue $json "DLSS" $Quality
+    } elseif ($Scaling -eq "FSR2") {
+      $changes["FSR2"] = Set-CyberpunkUserSettingValue $json "FSR2" $Quality
+    } elseif ($Scaling -eq "FSR3") {
+      $changes["FSR3"] = Set-CyberpunkUserSettingValue $json "FSR3" $Quality
+    } elseif ($Scaling -eq "FSR4") {
+      $changes["FSR4"] = Set-CyberpunkUserSettingValue $json "FSR4" $Quality
+    } elseif ($Scaling -eq "XeSS") {
+      $changes["XESS"] = Set-CyberpunkUserSettingValue $json "XESS" $Quality
+    }
   }
   $after = @{}
   Get-CyberpunkUserSettingSnapshot $json $trackedNames $after
@@ -425,6 +633,8 @@ function Apply-CyberpunkCaptureSettings([string]$SettingsPath, [string]$Scaling,
     skipped = $false
     scaling = $Scaling
     quality = $Quality
+    window_mode = $WindowMode
+    display_resolution = $DisplayResolution
     changed = $changes
     before = $before
     after = $after
@@ -490,7 +700,8 @@ $loaderBackup = if ($NoLoaderProxy) { $null } else { Join-Path $gameDir "$Loader
 $ngxPath = Join-Path $gameDir "nvngx_dlss.dll"
 $ngxBackup = Join-Path $gameDir "nvngx_dlss.dll.oss-backup"
 $slPath = Join-Path $gameDir "sl.interposer.dll"
-$slRealPath = Join-Path $gameDir "oss_sl_real.dll"
+$slRealDir = Join-Path $gameDir ".oss-capture-real"
+$slRealPath = Join-Path $slRealDir "sl.interposer.dll"
 $fsr3Path = Join-Path $gameDir "ffx_fsr3_x64.dll"
 $fsr3Backup = Join-Path $gameDir "ffx_fsr3_x64.dll.oss-backup"
 $fsr3UpscalerPath = Join-Path $gameDir "ffx_fsr3upscaler_x64.dll"
@@ -525,6 +736,27 @@ $hadFsr3Backup = if ($Fsr3Proxy) { Test-Path -LiteralPath $fsr3Backup } else { $
 $hadFsr3UpscalerBackup = if ($Fsr3UpscalerProxy) { Test-Path -LiteralPath $fsr3UpscalerBackup } else { $false }
 $hadFsrBackendBackup = if ($FsrBackendProxy) { Test-Path -LiteralPath $fsrBackendBackup } else { $false }
 $hadFfxApiBackup = if ($FfxApiProxy) { Test-Path -LiteralPath $ffxApiBackup } else { $false }
+if ($StreamlineProxy -and -not $hadSl -and -not $hadSlReal) {
+  throw "Refusing to run smoke: Streamline proxy requested but the vendor sl.interposer.dll is missing. Restore/verify the Cyberpunk install first. expected=$slPath"
+}
+if ((-not $NoNgxProxy) -and $hadNgx -and -not $hadNgxBackup) {
+  Assert-SourceIsNotArtifact $ngxPath $ngxArtifact "nvngx_dlss.dll"
+}
+if ($StreamlineProxy -and $hadSl -and -not $hadSlReal) {
+  Assert-SourceIsNotArtifact $slPath $slArtifact "sl.interposer.dll"
+}
+if ($Fsr3Proxy -and $hadFsr3 -and -not $hadFsr3Backup) {
+  Assert-SourceIsNotArtifact $fsr3Path $fsr3Artifact "ffx_fsr3_x64.dll"
+}
+if ($Fsr3UpscalerProxy -and $hadFsr3Upscaler -and -not $hadFsr3UpscalerBackup) {
+  Assert-SourceIsNotArtifact $fsr3UpscalerPath $fsr3UpscalerArtifact "ffx_fsr3upscaler_x64.dll"
+}
+if ($FsrBackendProxy -and $hadFsrBackend -and -not $hadFsrBackendBackup) {
+  Assert-SourceIsNotArtifact $fsrBackendPath $fsrBackendArtifact "ffx_backend_dx12_x64.dll"
+}
+if ($FfxApiProxy -and $hadFfxApi -and -not $hadFfxApiBackup) {
+  Assert-SourceIsNotArtifact $ffxApiPath $ffxApiArtifact "amd_fidelityfx_dx12.DLL"
+}
 $localAppData = [Environment]::GetFolderPath("LocalApplicationData")
 $configDir = Join-Path $localAppData "oss-capture"
 $pendingRoot = "E:\OSS-Capture\pending"
@@ -541,8 +773,10 @@ if (Test-Path -LiteralPath $pendingRoot) {
 $proc = $null
 $launchError = $null
 $modBackups = @()
+$staleModRestores = @()
 $oldInitMarker = [Environment]::GetEnvironmentVariable("OSS_GAUSSIAN_INIT_MARKER", "Process")
 $oldInitInDllMain = [Environment]::GetEnvironmentVariable("OSS_GAUSSIAN_INIT_IN_DLLMAIN", "Process")
+$oldSlRealDll = [Environment]::GetEnvironmentVariable("OSS_SL_REAL_DLL", "Process")
 $markerPath = Join-Path (Join-Path $localAppData "oss-gaussian") "init-marker.log"
 $result = [ordered]@{
   status = "unknown"
@@ -556,7 +790,10 @@ $result = [ordered]@{
   fsr3_upscaler_proxy = [bool]$Fsr3UpscalerProxy
   fsr_backend_proxy = [bool]$FsrBackendProxy
   ffx_api_proxy = [bool]$FfxApiProxy
+  d3d12_hooks_enabled = [bool]($EnableD3D12Hooks -and (-not $DisableD3D12Hooks))
   temporarily_disable_mods = [bool]$TemporarilyDisableMods
+  temporarily_disable_loader_proxy = [bool]$TemporarilyDisableLoaderProxy
+  temporarily_disable_asi_loader = [bool]$TemporarilyDisableAsiLoader
   launch_via_steam = [bool]$LaunchViaSteam
   steam_exe = $SteamExe
   steam_app_id = $SteamAppId
@@ -582,6 +819,8 @@ $result = [ordered]@{
   user_settings_before = Get-FileState $userSettingsPath
   force_resolution_scaling = $ForceResolutionScaling
   force_upscaler_quality = $ForceUpscalerQuality
+  force_window_mode = $ForceWindowMode
+  force_display_resolution = $ForceDisplayResolution
   cleared_stale_backups = @{
     nvngx = [bool]$clearedNgxBackup
     streamline_real = [bool]$clearedSlReal
@@ -605,12 +844,17 @@ try {
   if (Test-Path -LiteralPath $configPath) {
     Copy-Item -LiteralPath $configPath -Destination $configBackup -Force
   }
-  if ($ForceResolutionScaling -ne "") {
+  if ($ForceResolutionScaling -ne "" -or $ForceWindowMode -ne "" -or $ForceDisplayResolution -ne "") {
     if (-not (Test-Path -LiteralPath $userSettingsPath)) {
       throw "Cyberpunk UserSettings.json not found: $userSettingsPath"
     }
     Copy-Item -LiteralPath $userSettingsPath -Destination $userSettingsBackup -Force
-    $result.user_settings_override = Apply-CyberpunkCaptureSettings $userSettingsPath $ForceResolutionScaling $ForceUpscalerQuality
+    $result.user_settings_override = Apply-CyberpunkCaptureSettings `
+      $userSettingsPath `
+      $ForceResolutionScaling `
+      $ForceUpscalerQuality `
+      $ForceWindowMode `
+      $ForceDisplayResolution
   } else {
     $result.user_settings_override = @{ skipped = $true }
   }
@@ -632,13 +876,45 @@ try {
       $modTargets += (Join-Path $gameDir "dxgi.dll")
     }
     foreach ($modPath in $modTargets) {
+      $staleRestore = Restore-StaleDisabledModFile $modPath
+      if ($null -ne $staleRestore) {
+        $staleModRestores += $staleRestore
+      }
       $disabled = Disable-ModFileForSmoke $modPath $stamp
       if ($null -ne $disabled) {
         $modBackups += $disabled
       }
     }
+    $result.stale_mod_restores = $staleModRestores
     $result.mod_backups = $modBackups
     Write-Trace "mod-disable-done"
+  }
+
+  if ($TemporarilyDisableAsiLoader -and (-not $TemporarilyDisableMods)) {
+    Write-Trace "asi-loader-disable-start"
+    $asiPath = Join-Path $gameDir "version.dll"
+    $staleRestore = Restore-StaleDisabledModFile $asiPath
+    if ($null -ne $staleRestore) {
+      $staleModRestores += $staleRestore
+    }
+    $disabled = Disable-ModFileForSmoke $asiPath $stamp
+    if ($null -ne $disabled) {
+      $modBackups += $disabled
+    }
+    $result.asi_loader_disabled_backup = $disabled
+    $result.stale_mod_restores = $staleModRestores
+    $result.mod_backups = $modBackups
+    Write-Trace "asi-loader-disable-done"
+  }
+
+  if ($TemporarilyDisableLoaderProxy -and (-not $TemporarilyDisableMods)) {
+    Write-Trace "loader-proxy-disable-start"
+    $disabled = Disable-ModFileForSmoke (Join-Path $gameDir $LoaderProxyName) $stamp
+    if ($null -ne $disabled) {
+      $modBackups += $disabled
+    }
+    $result.loader_proxy_disabled_backup = $disabled
+    Write-Trace "loader-proxy-disable-done"
   }
 
   Write-Trace "backup-start"
@@ -650,7 +926,15 @@ try {
     $createdNgxBackup = $true
   }
   if ($StreamlineProxy -and $hadSl -and -not $hadSlReal) {
+    New-Item -ItemType Directory -Force -Path $slRealDir | Out-Null
     Copy-Item -LiteralPath $slPath -Destination $slRealPath -Force
+    Write-Trace "streamline-real-copy $(Split-Path -Leaf $slPath) -> $slRealPath"
+    Get-ChildItem -LiteralPath $gameDir -File -Filter "sl.*.dll" -ErrorAction SilentlyContinue |
+      Where-Object { $_.FullName -ne $slPath } |
+      ForEach-Object {
+        Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $slRealDir $_.Name) -Force
+        Write-Trace "streamline-plugin-copy $($_.Name)"
+      }
     $createdSlBackup = $true
   }
   if ($Fsr3Proxy -and $hadFsr3 -and -not $hadFsr3Backup) {
@@ -718,6 +1002,7 @@ try {
     capture_api_base = "http://127.0.0.1:8080"
     install_token = "local-cyberpunk-smoke-$stamp"
     enabled = $true
+    d3d12_hooks_enabled = ($EnableD3D12Hooks -and (-not $DisableD3D12Hooks))
   }
   $config | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $configDir "config.json") -Encoding UTF8
 
@@ -726,6 +1011,9 @@ try {
   }
   if ($InitInDllMain) {
     [Environment]::SetEnvironmentVariable("OSS_GAUSSIAN_INIT_IN_DLLMAIN", "1", "Process")
+  }
+  if ($StreamlineProxy) {
+    [Environment]::SetEnvironmentVariable("OSS_SL_REAL_DLL", $slRealPath, "Process")
   }
 
   Write-Trace "launch-start"
@@ -761,6 +1049,26 @@ try {
   $launchedStillRunning = $false
   if ($proc -ne $null) {
     $launchedStillRunning = [bool](Get-Process -Id $proc.Id -ErrorAction SilentlyContinue)
+  }
+  $processSnapshot = $null
+  if ($proc -ne $null) {
+    $liveProc = Get-Process -Id $proc.Id -ErrorAction SilentlyContinue
+    if ($null -ne $liveProc) {
+      $processSnapshot = [ordered]@{
+        id = [int]$liveProc.Id
+        session_id = [int]$liveProc.SessionId
+        responding = [bool]$liveProc.Responding
+        cpu_seconds = [double]$liveProc.CPU
+        main_window_title = [string]$liveProc.MainWindowTitle
+        main_window_handle = [string]$liveProc.MainWindowHandle
+        has_exited = $false
+      }
+    } else {
+      $processSnapshot = [ordered]@{
+        id = [int]$proc.Id
+        has_exited = $true
+      }
+    }
   }
   $loadedModules = if ($launchedStillRunning) { Get-CyberpunkLoadedModules $proc.Id } else { @() }
   $loadedModules = @($loadedModules | ForEach-Object {
@@ -807,22 +1115,24 @@ try {
     @{ skipped = $true; reason = "no new pending files"; pending_delta = $captureFilesDelta }
   }
   $hookLoaded = (($logTail + $markerTail) -join "`n") -match "OSS Gaussian|oss-capture|NGX|dxgi|dllmain-attach|begin|end|ffx|FSR3"
-  $result.status = if ($launchError -ne $null) {
-    "launch_error"
-  } elseif ($captureFilesDelta -gt 0 -and
-            $captureValidation.ContainsKey("valid") -and
-            $captureValidation.valid -eq $false) {
-    "captured_invalid"
-  } elseif ($captureFilesDelta -gt 0) {
-    "captured"
-  } elseif ($hookLoaded) {
-    "hook_loaded_no_capture"
-  } elseif ($proc -ne $null) {
-    "launched_no_hook_evidence"
-  } else {
-    "not_launched"
-  }
+  $evidenceLines = Read-LogEvidenceLines $logPath
+  $nativeHookEvidence = Build-NativeHookEvidence $evidenceLines
+  $providerEvidence = Build-ProviderEvidence $evidenceLines
+  $result.evidence_line_count = $evidenceLines.Count
+  $result.status = Resolve-SmokeStatus `
+    $nativeHookEvidence `
+    $providerEvidence `
+    $hookLoaded `
+    $captureFilesDelta `
+    $captureValidation `
+    $launchError `
+    $proc `
+    $launchedStillRunning
+  $result.hook_loaded = [bool]$hookLoaded
+  $result.native_hook_evidence = $nativeHookEvidence
+  $result.provider_evidence = $providerEvidence
   $result.process_id = if ($proc -ne $null) { $proc.Id } else { $null }
+  $result.process_snapshot = $processSnapshot
   $result.launch_error = $launchError
   $result.process_running_count = $running.Count
   $result.loaded_modules = $loadedModules
@@ -839,6 +1149,7 @@ try {
   Write-Trace "finally-start"
   [Environment]::SetEnvironmentVariable("OSS_GAUSSIAN_INIT_MARKER", $oldInitMarker, "Process")
   [Environment]::SetEnvironmentVariable("OSS_GAUSSIAN_INIT_IN_DLLMAIN", $oldInitInDllMain, "Process")
+  [Environment]::SetEnvironmentVariable("OSS_SL_REAL_DLL", $oldSlRealDll, "Process")
   Get-Process -Name "Cyberpunk2077" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
   Wait-NoCyberpunkProcess 30 | Out-Null
   Write-Trace "process-stop-done"
@@ -869,6 +1180,7 @@ try {
     }
     if ($createdSlBackup) {
       Remove-Item -LiteralPath $slRealPath -Force -ErrorAction SilentlyContinue
+      Remove-Item -LiteralPath $slRealDir -Recurse -Force -ErrorAction SilentlyContinue
     }
   }
 

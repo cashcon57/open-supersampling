@@ -206,14 +206,19 @@ bool AssignField(DllConfig& cfg, const std::string& key, Cursor& c) {
         if (!ParseString(c, s)) return false;
         if      (key == "game_id")          cfg.game_id          = s;
         else if (key == "capture_mode")     cfg.capture_mode     = s;
+        else if (key == "capture_storage_mode") cfg.capture_storage_mode = s;
         else if (key == "install_token")    cfg.install_token    = s;
         else if (key == "capture_api_base") cfg.capture_api_base = s;
+        else if (key == "session_uuid")     cfg.session_uuid     = s;
+        else if (key == "pending_dir")      cfg.pending_dir      = s;
+        else if (key == "output_dir")       cfg.output_dir       = s;
         return true;
     }
     if (ch == 't' || ch == 'f') {
         bool b;
         if (!ParseBool(c, b)) return false;
-        // No bool fields in our subset yet, but accept gracefully.
+        if      (key == "d3d12_hooks_enabled")        cfg.d3d12_hooks_enabled = b;
+        else if (key == "native_d3d12_hooks_enabled") cfg.d3d12_hooks_enabled = b;
         return true;
     }
     if (ch == '-' || ch == '+' || std::isdigit(static_cast<unsigned char>(ch))) {
@@ -250,6 +255,12 @@ DllConfig ParseDllConfig(const std::string& json_text, const std::string& source
     cfg.loaded_from = source_path;
 
     Cursor c{json_text.data(), json_text.data() + json_text.size()};
+    if (c.has(3) &&
+        static_cast<unsigned char>(c.peek(0)) == 0xEF &&
+        static_cast<unsigned char>(c.peek(1)) == 0xBB &&
+        static_cast<unsigned char>(c.peek(2)) == 0xBF) {
+        c.p += 3;
+    }
     c.skip_ws();
     if (c.advance() != '{') {
         OSSG_LOG_ERROR("config", "ParseDllConfig: top-level JSON must be an object (source=%s)",

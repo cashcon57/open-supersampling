@@ -45,6 +45,7 @@ log = logging.getLogger("oss.capture.tray.app")
 
 
 CAPTURE_MODES = cfg_mod.CAPTURE_MODES
+CAPTURE_STORAGE_MODES = cfg_mod.CAPTURE_STORAGE_MODES
 
 
 class TrayApp:
@@ -80,6 +81,18 @@ class TrayApp:
         log.info("capture mode set to %s", mode)
         if self.icon is not None:
             # Refresh the menu so the radio dot moves to the chosen entry.
+            self.icon.update_menu()
+
+    def set_storage_mode(self, mode: str) -> None:
+        """Persist local-only vs upload behavior. Effective on next launch."""
+        if mode not in CAPTURE_STORAGE_MODES:
+            raise ValueError(
+                f"unknown storage mode {mode!r}; expected one of {CAPTURE_STORAGE_MODES}"
+            )
+        self.cfg.capture_storage_mode = mode
+        cfg_mod.save(self.cfg)
+        log.info("capture storage mode set to %s", mode)
+        if self.icon is not None:
             self.icon.update_menu()
 
     # -----------------------------------------------------------------
@@ -136,7 +149,10 @@ class TrayApp:
             except (IndexError, OSError):
                 drive_str = drive
         paused_str = " [PAUSED]" if self.cfg.paused else ""
-        return f"OSS Capture: {self.cfg.capture_mode}, {drive_str}{paused_str}"
+        return (
+            f"OSS Capture: {self.cfg.capture_mode}, "
+            f"{self.cfg.capture_storage_mode}, {drive_str}{paused_str}"
+        )
 
     # -----------------------------------------------------------------
     # Janitor (disk-cap background thread)
@@ -208,14 +224,24 @@ class TrayApp:
             log.warning("no output drive available; skipping %s pid=%d", game.game_id, event.pid)
             return
 
-        output_dir = storage.captures_dir(drive) / game.game_id
-        output_dir.mkdir(parents=True, exist_ok=True)
-        config_path = session_config.write_session_config(
-            game=game,
-            capture_mode=self.cfg.capture_mode,
-            output_dir=output_dir,
-        )
-        result = dll_inject.inject_dll(event.pid)
+        try:
+            game_output_dir = storage.captures_dir(drive) / game.game_id
+            config_path = session_config.write_session_config(
+                game=game,
+                capture_mode=self.cfg.capture_mode,
+                output_dir=game_output_dir,
+                capture_api_base=self.cfg.capture_api_base,
+                capture_storage_mode=self.cfg.capture_storage_mode,
+            )
+        except Exception:
+            log.exception(
+                "failed to write session config for %s pid=%d; skipping injection",
+                game.game_id,
+                event.pid,
+            )
+            return
+
+        result = dll_inject.inject_dll(event.pid, dry_run=self.cfg.dry_run_launch)
         if result.injected:
             log.info(
                 "injected %s into %s pid=%d config=%s output=%s",
@@ -223,7 +249,7 @@ class TrayApp:
                 game.display_name,
                 event.pid,
                 config_path,
-                output_dir,
+                game_output_dir,
             )
         elif result.skipped:
             log.info(
@@ -257,6 +283,15 @@ class TrayApp:
                 checked=lambda _item, m=mode: self.cfg.capture_mode == m,
             )
 
+        def _storage_mode_item(mode: str) -> "pystray.MenuItem":
+            label = "Local only" if mode == "local" else "Upload to R2"
+            return pystray.MenuItem(
+                label,
+                lambda _icon, _item, m=mode: self.set_storage_mode(m),
+                radio=True,
+                checked=lambda _item, m=mode: self.cfg.capture_storage_mode == m,
+            )
+
         def _game_item(game: allowlist.AllowedGame) -> "pystray.MenuItem":
             return pystray.MenuItem(
                 game.display_name,
@@ -277,6 +312,10 @@ class TrayApp:
             pystray.MenuItem(
                 "Capture mode",
                 pystray.Menu(*[_mode_item(m) for m in CAPTURE_MODES]),
+            ),
+            pystray.MenuItem(
+                "Storage mode",
+                pystray.Menu(*[_storage_mode_item(m) for m in CAPTURE_STORAGE_MODES]),
             ),
             pystray.MenuItem("Enabled games", games_menu),
             pystray.MenuItem(

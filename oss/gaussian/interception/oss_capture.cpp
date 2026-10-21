@@ -2,7 +2,9 @@
 
 #include "oss_capture.h"
 
+#include "src/g_buffer_extractor.h"
 #include "src/log.h"
+#include "src/ngx_frame_capture.h"
 
 #include <algorithm>
 #include <atomic>
@@ -10,6 +12,7 @@
 #include <iterator>
 #include <mutex>
 #include <cstdio>
+#include <string>
 
 #if defined(_WIN32)
 #  include <Windows.h>
@@ -20,7 +23,10 @@ namespace {
 
 std::mutex g_sampler_mu;
 CaptureSampler g_sampler(oss_capture_default_config());
+OssCaptureConfig g_config = oss_capture_default_config();
 std::atomic<bool> g_enabled{false};
+std::mutex g_paths_mu;
+std::wstring g_pending_root;
 
 std::mutex g_burst_mu;
 OssCaptureBurstFrame g_active_burst{};
@@ -206,61 +212,46 @@ void on_execute_command_lists_impl(void* command_queue) {
 }
 
 void on_ngx_evaluate_feature_impl(void* command_list, const void* ngx_handle, const void* ngx_params) {
-    (void)command_list;
     (void)ngx_handle;
-    (void)ngx_params;
-    // T2.6: unpack DLSS parameters into LR/depth/motion/normals, compute
-    // candidate stats, run CaptureSampler, arm a burst. Present consumes
-    // N consecutive swap-chain frames after ACCEPT. Rejects never touch disk.
-    //
-    // Implementation outline (pending NVIDIA/DLSS SDK headers vendored under
-    // third_party/DLSS/ — license review required before redistribution):
-    //
-    //   // Cast to the typed parameter dictionary
-    //   const NVSDK_NGX_Parameter* p =
-    //       reinterpret_cast<const NVSDK_NGX_Parameter*>(ngx_params);
-    //
-    //   // Resource pointers (ID3D12Resource*) and dimensions
-    //   ID3D12Resource* color   = nullptr;  p->Get(NVSDK_NGX_Parameter_Color,         (void**)&color);
-    //   ID3D12Resource* output  = nullptr;  p->Get(NVSDK_NGX_Parameter_Output,        (void**)&output);
-    //   ID3D12Resource* depth   = nullptr;  p->Get(NVSDK_NGX_Parameter_Depth,         (void**)&depth);
-    //   ID3D12Resource* motion  = nullptr;  p->Get(NVSDK_NGX_Parameter_MotionVectors, (void**)&motion);
-    //   uint32_t lr_w = 0, lr_h = 0;
-    //   p->Get(NVSDK_NGX_Parameter_Width,  &lr_w);
-    //   p->Get(NVSDK_NGX_Parameter_Height, &lr_h);
-    //   float jitter_x = 0.0f, jitter_y = 0.0f;
-    //   p->Get(NVSDK_NGX_Parameter_Jitter_Offset_X, &jitter_x);
-    //   p->Get(NVSDK_NGX_Parameter_Jitter_Offset_Y, &jitter_y);
-    //
-    //   // Build the candidate
-    //   OssCaptureCandidate cand{};
-    //   cand.frame_index = oss_gaussian::CurrentFrameIndex();
-    //   cand.timestamp_seconds = SecondsSinceStart();
-    //   // motion_mean_magnitude_px requires reading 'motion' contents — use
-    //   // the staging-copy path with a small downscaled snapshot
-    //   // perceptual_hash_64 = oss_capture_phash64_rgb8(...) — same approach
-    //   // depth_degenerate = check first-pixel depth == 1.0 (cleared)
-    //
-    //   OssCaptureDecision decision = oss_capture_consider_candidate(&cand);
-    //   if (decision.capture) {
-    //       // Schedule readback of color + depth + motion via staging_copy.cpp,
-    //       // then invoke oss_capture_write_exr() with the OssCaptureFramePayload
-    //   }
-    //
-    // Why not implement directly: the NVSDK_NGX_Parameter virtual interface
-    // is defined in nvsdk_ngx.h which is licensed redistribution. The DLSS
-    // SDK is at github.com/NVIDIA/DLSS but redistribution requires license
-    // attestation. Vendoring + license review = separate sprint task.
-    //
-    // For now, log the call so we can verify the hook fires when DLSS-enabled
-    // games run with our DLL injected.
-    OSSG_LOG_INFO("capture",
-                  "NGX EvaluateFeature observed (cmd_list=%p, handle=%p, params=%p) — "
-                  "param-dict unpack pending DLSS SDK header vendoring (T2.6)",
-                  command_list, ngx_handle, ngx_params);
+
+    static std::atomic<uint64_t> frame_counter{0};
+    const uint64_t frame_index = frame_counter.fetch_add(1, std::memory_order_relaxed);
+
+    oss_gaussian::GBufferFrame frame{};
+    const auto status = oss_gaussian::ReadFromNgxParameters(
+        static_cast<const NVSDK_NGX_Parameter*>(ngx_params),
+        frame_index,
+        &frame);
+    if (status != OSS_GAUSSIAN_OK) {
+        OSSG_LOG_WARN("capture",
+                      "NGX EvaluateFeature param read failed status=%d cmd_list=%p params=%p",
+                      status,
+                      command_list,
+                      ngx_params);
+        return;
+    }
+
+    oss_gaussian::LogFrameSummary(frame);
+#if !defined(OSS_CAPTURE_UNIT_TEST)
+    oss_gaussian::InvokeFrameCallback(frame.pub);
+#endif
+
+    // Compatibility log-only entry point. Production capture uses the bracketed
+    // begin/end hooks so input copies happen before real DLSS and output copies
+    // happen after DLSS succeeds.
 }
 
 } // namespace
+
+OssCaptureConfig CurrentCaptureConfig() {
+    std::lock_guard<std::mutex> lk(g_sampler_mu);
+    return g_config;
+}
+
+std::wstring CurrentPendingRoot() {
+    std::lock_guard<std::mutex> lk(g_paths_mu);
+    return g_pending_root;
+}
 
 CaptureSampler::CaptureSampler(const OssCaptureConfig& config) : config_(config) {}
 
@@ -370,6 +361,7 @@ OssCaptureConfig oss_capture_default_config(void) {
     OssCaptureConfig cfg{};
     std::strncpy(cfg.game_id, "unknown-game", sizeof(cfg.game_id) - 1u);
     std::strncpy(cfg.game_version, "unknown", sizeof(cfg.game_version) - 1u);
+    std::strncpy(cfg.capture_storage_mode, "local", sizeof(cfg.capture_storage_mode) - 1u);
     oss_capture_apply_mode_preset(&cfg, OSS_CAPTURE_MODE_LITE);
     cfg.dedup_window_seconds = 300.0;
     cfg.loading_gap_seconds = 30.0;
@@ -494,8 +486,13 @@ int oss_capture_configure(const OssCaptureConfig* config) {
         return 0;
     }
     std::lock_guard<std::mutex> lk(oss_gaussian::capture::g_sampler_mu);
+    oss_gaussian::capture::g_config = *config;
     oss_gaussian::capture::g_sampler = oss_gaussian::capture::CaptureSampler(*config);
     oss_gaussian::capture::g_enabled.store(true, std::memory_order_release);
+    if (config->pending_root[0] != L'\0') {
+        std::lock_guard<std::mutex> path_lk(oss_gaussian::capture::g_paths_mu);
+        oss_gaussian::capture::g_pending_root = config->pending_root;
+    }
     OSSG_LOG_INFO(
         "capture",
         "capture-mode configured game_id=%s mode=%s short=(n=%u stride=%.2fs) long=(enabled=%d n=%u stride=%.2fs capture_hr=%d)",
@@ -508,6 +505,11 @@ int oss_capture_configure(const OssCaptureConfig* config) {
         oss_gaussian::capture::long_stride_seconds(*config),
         config->long_capture_hr);
     return 1;
+}
+
+void oss_capture_set_pending_root(const wchar_t* pending_root) {
+    std::lock_guard<std::mutex> lk(oss_gaussian::capture::g_paths_mu);
+    oss_gaussian::capture::g_pending_root = pending_root ? pending_root : L"";
 }
 
 OssCaptureDecision oss_capture_consider_candidate(const OssCaptureCandidate* candidate) {
@@ -600,6 +602,37 @@ void oss_capture_on_execute_command_lists(void* command_queue) {
 #endif
 }
 
+void oss_capture_on_execute_command_lists_executed(
+    void* command_queue,
+    unsigned int command_list_count,
+    void* const* command_lists) {
+#if !defined(OSS_CAPTURE_UNIT_TEST)
+#if defined(_MSC_VER)
+    __try {
+        oss_gaussian::NotifyNgxCaptureCommandListsExecuted(
+            static_cast<ID3D12CommandQueue*>(command_queue),
+            command_list_count,
+            reinterpret_cast<ID3D12CommandList* const*>(command_lists));
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        oss_gaussian::capture::safe_log_exception("ExecuteCommandListsExecuted");
+    }
+#else
+    try {
+        oss_gaussian::NotifyNgxCaptureCommandListsExecuted(
+            static_cast<ID3D12CommandQueue*>(command_queue),
+            command_list_count,
+            reinterpret_cast<ID3D12CommandList* const*>(command_lists));
+    } catch (...) {
+        oss_gaussian::capture::safe_log_exception("ExecuteCommandListsExecuted");
+    }
+#endif
+#else
+    (void)command_queue;
+    (void)command_list_count;
+    (void)command_lists;
+#endif
+}
+
 void oss_capture_on_ngx_evaluate_feature(void* command_list, const void* ngx_handle, const void* ngx_params) {
 #if defined(_MSC_VER)
     __try {
@@ -613,6 +646,52 @@ void oss_capture_on_ngx_evaluate_feature(void* command_list, const void* ngx_han
     } catch (...) {
         oss_gaussian::capture::safe_log_exception("NVSDK_NGX_D3D12_EvaluateFeature");
     }
+#endif
+}
+
+void* oss_capture_on_ngx_evaluate_feature_begin(
+    void* command_list,
+    const void* ngx_handle,
+    const void* ngx_params) {
+    (void)ngx_handle;
+#if !defined(OSS_CAPTURE_UNIT_TEST)
+    static std::atomic<uint64_t> frame_counter{0};
+    const uint64_t frame_index = frame_counter.fetch_add(1, std::memory_order_relaxed);
+    oss_gaussian::GBufferFrame frame{};
+    const auto status = oss_gaussian::ReadFromNgxParameters(
+        static_cast<const NVSDK_NGX_Parameter*>(ngx_params),
+        frame_index,
+        &frame);
+    if (status != OSS_GAUSSIAN_OK) {
+        OSSG_LOG_WARN("capture", "NGX begin param read failed status=%d", status);
+        return nullptr;
+    }
+    oss_gaussian::LogFrameSummary(frame);
+    oss_gaussian::InvokeFrameCallback(frame.pub);
+    return oss_gaussian::BeginNgxFrameCapture(
+        static_cast<ID3D12GraphicsCommandList*>(command_list),
+        frame.pub);
+#else
+    (void)command_list;
+    (void)ngx_params;
+    return nullptr;
+#endif
+}
+
+void oss_capture_on_ngx_evaluate_feature_end(
+    void* capture_ticket,
+    void* command_list,
+    const void* ngx_handle,
+    const void* ngx_params,
+    int ngx_result) {
+    (void)command_list;
+    (void)ngx_handle;
+    (void)ngx_params;
+#if !defined(OSS_CAPTURE_UNIT_TEST)
+    oss_gaussian::EndNgxFrameCapture(capture_ticket, ngx_result);
+#else
+    (void)capture_ticket;
+    (void)ngx_result;
 #endif
 }
 

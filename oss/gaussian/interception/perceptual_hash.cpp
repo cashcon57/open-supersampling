@@ -1,3 +1,5 @@
+#define OSS_GAUSSIAN_BUILDING_DLL 1
+
 #include "oss_capture.h"
 
 #include <algorithm>

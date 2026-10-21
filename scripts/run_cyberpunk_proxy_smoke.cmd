@@ -1,0 +1,2 @@
+@echo off
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File E:\Temp\cyberpunk_proxy_smoke.ps1 -EnableInitMarker -EnableD3D12Hooks -StreamlineProxy -TemporarilyDisableAsiLoader -ForceResolutionScaling DLSS -ForceUpscalerQuality Quality -WaitSeconds 120 -ReportPath E:\Temp\cyberpunk_proxy_smoke_task_report.json -TracePath E:\Temp\cyberpunk_proxy_smoke_task_trace.log > E:\Temp\cyberpunk_proxy_smoke_task_stdout.txt 2>&1

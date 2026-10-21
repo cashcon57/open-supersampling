@@ -23,7 +23,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any, Callable, Iterator, Sequence
 from urllib import error, request
 
@@ -183,6 +183,22 @@ def _read_metadata(meta_path: Path) -> tuple[dict[str, Any] | None, str | None]:
     return raw, None
 
 
+def _frame_uuid_from_capture_path(frame_path: Path) -> str | None:
+    name = frame_path.name
+    if name.endswith(".exr.raw"):
+        return name[: -len(".exr.raw")]
+    if frame_path.suffix.lower() == ".exr":
+        return frame_path.stem
+    return None
+
+
+def _frame_path_for_metadata(meta_path: Path) -> Path:
+    raw_path = meta_path.with_suffix(".raw")
+    if raw_path.exists():
+        return raw_path
+    return meta_path.with_suffix(".exr")
+
+
 def _resolution_pair(meta: dict[str, Any], key: str) -> tuple[int, int] | None:
     value = meta.get(key)
     if (
@@ -308,8 +324,9 @@ def validate_pending_frame(
         return "pending frame path must be <game_id>/<session_uuid>/<frame_uuid>.exr"
 
     path_game_id, path_session_uuid, frame_name = parts
-    if frame_name != frame.frame_path.name or frame.frame_path.suffix.lower() != ".exr":
-        return "pending frame path must point to an .exr file"
+    frame_uuid = _frame_uuid_from_capture_path(frame.frame_path)
+    if frame_name != frame.frame_path.name or frame_uuid is None:
+        return "pending frame path must point to an .exr or .exr.raw file"
 
     meta, err = _read_metadata(frame.meta_path)
     if err is not None:
@@ -319,7 +336,7 @@ def validate_pending_frame(
     checks = (
         ("game_id", path_game_id),
         ("session_uuid", path_session_uuid),
-        ("frame_uuid", frame.frame_path.stem),
+        ("frame_uuid", frame_uuid),
     )
     for key, expected in checks:
         value = meta.get(key)
@@ -330,14 +347,29 @@ def validate_pending_frame(
                 f"metadata field {key!r}={value!r} does not match "
                 f"pending path value {expected!r}"
             )
-    missing_durable = [key for key in REQUIRED_DURABLE_METADATA_FIELDS if key not in meta]
-    if missing_durable:
-        return "metadata missing durable field(s): " + ", ".join(missing_durable)
     storage_mode = meta.get("capture_storage_mode")
     if storage_mode not in {"local", "upload"}:
         return "metadata capture_storage_mode must be 'local' or 'upload'"
     if storage_mode == "local" and not allow_local:
         return "metadata capture_storage_mode='local' is not uploadable"
+    is_raw_payload = frame.frame_path.name.endswith(".exr.raw")
+    if is_raw_payload:
+        if storage_mode != "local":
+            return "raw capture payloads are local-only and cannot be uploaded"
+        raw_path = meta.get("raw_path")
+        if not isinstance(raw_path, str) or PureWindowsPath(raw_path).name != frame.frame_path.name:
+            return "metadata raw_path must point to the .exr.raw payload"
+        missing_raw = [
+            key
+            for key in ("capture_kind", "captured_at_unix", "sequence_index", "width", "height", "dxgi_format")
+            if key not in meta
+        ]
+        if missing_raw:
+            return "metadata missing raw local field(s): " + ", ".join(missing_raw)
+        return None
+    missing_durable = [key for key in REQUIRED_DURABLE_METADATA_FIELDS if key not in meta]
+    if missing_durable:
+        return "metadata missing durable field(s): " + ", ".join(missing_durable)
     channel_presence = meta.get("channel_presence")
     if not isinstance(channel_presence, dict):
         return "metadata channel_presence must be an object"
@@ -348,7 +380,7 @@ def validate_pending_frame(
         return "metadata HR channel conflict: hr_source='none' requires channel_presence.hr=false"
     if meta.get("hr_source") != "none" and hr_present is False:
         return "metadata HR channel conflict: hr_source requires channel_presence.hr=true unless hr_source='none'"
-    if validate_exr:
+    if validate_exr and not is_raw_payload:
         return _exr_validation_error(frame, meta)
     return None
 
@@ -360,8 +392,11 @@ def _iter_capture_candidates(pending_dir: Path) -> Iterator[CaptureFrame]:
     for frame_path in sorted(pending_dir.glob("*/*/*.exr")):
         yielded.add(frame_path)
         yield CaptureFrame(frame_path=frame_path, meta_path=frame_path.with_suffix(".json"))
+    for frame_path in sorted(pending_dir.glob("*/*/*.exr.raw")):
+        yielded.add(frame_path)
+        yield CaptureFrame(frame_path=frame_path, meta_path=frame_path.with_suffix(".json"))
     for meta_path in sorted(pending_dir.glob("*/*/*.json")):
-        frame_path = meta_path.with_suffix(".exr")
+        frame_path = _frame_path_for_metadata(meta_path)
         if frame_path not in yielded:
             yield CaptureFrame(frame_path=frame_path, meta_path=meta_path)
 
@@ -423,10 +458,14 @@ def validate_capture_tree(
     allow_local: bool = True,
     validate_exr: bool = True,
     strict_bursts: bool = True,
+    session_dirs: Sequence[Path] | None = None,
 ) -> list[ValidationIssue]:
     """Validate captured training samples without mutating the pending tree."""
 
     frames = list(_iter_capture_candidates(pending_dir))
+    if session_dirs is not None:
+        allowed = {path.resolve() for path in session_dirs}
+        frames = [frame for frame in frames if frame.frame_path.parent.resolve() in allowed]
     issues: list[ValidationIssue] = []
     for frame in frames:
         if not frame.frame_path.exists():

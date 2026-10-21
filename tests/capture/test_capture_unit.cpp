@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <cstdint>
+#include <filesystem>
 #include <vector>
 
 static OssCaptureCandidate candidate(double t) {
@@ -115,6 +116,27 @@ int main() {
     assert(oss_capture_consume_present_burst(&burst_frame) == 1);
     assert(burst_frame.burst_index == 2);
     assert(oss_capture_consume_present_burst(&burst_frame) == 0);
+
+    const std::wstring configured_pending = L"C:\\oss-capture-test\\pending";
+    oss_capture_set_pending_root(configured_pending.c_str());
+    assert(oss_gaussian::capture::CurrentPendingRoot() == configured_pending);
+
+    std::filesystem::path exr_path = std::filesystem::temp_directory_path() / "oss_capture_no_normals.exr";
+    std::vector<float> lr(4 * 4 * 3, 0.25f);
+    std::vector<float> depth(4 * 4, 0.5f);
+    std::vector<float> motion(4 * 4 * 2, 0.0f);
+    OssCaptureFramePayload payload{};
+    payload.lr_rgb = {lr.data(), 4, 4, 3};
+    payload.depth_z = {depth.data(), 4, 4, 1};
+    payload.motion_xy = {motion.data(), 4, 4, 2};
+    payload.capture_lr = 1;
+    payload.capture_hr = 0;
+    payload.capture_depth = 1;
+    payload.capture_motion = 1;
+    payload.capture_normals = 0;
+    payload.capture_mode = OSS_CAPTURE_MODE_TRICKLE;
+    assert(oss_capture_write_exr(exr_path.c_str(), &payload) == 1);
+    std::filesystem::remove(exr_path);
 
     OssCaptureConfig two_tier = oss_capture_default_config();
     two_tier.two_tier_enabled = 1;

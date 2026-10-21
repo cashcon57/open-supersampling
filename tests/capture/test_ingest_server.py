@@ -110,6 +110,8 @@ def test_ingest_happy_path_writes_to_r2(
     fetched_meta = json.loads(r2_client.get_bytes(expected_json))
     assert fetched_meta["frame_uuid"] == meta["frame_uuid"]
     assert "content_sha256" in fetched_meta
+    assert "contributor_hash" in fetched_meta
+    assert "user_consent_token" not in fetched_meta
 
 
 # ---- schema validation -----------------------------------------------------
@@ -144,6 +146,51 @@ def test_ingest_meta_bad_game_id_returns_400(
     meta = make_meta_fn(game_id="UPPERCASE/slash")
     resp = post_ingest_fn(client, token=token, frame_body=b"X" * 16, meta=meta)
     assert resp.status_code == 400
+
+
+def test_ingest_rejects_non_finite_metadata_numbers(
+    client, make_meta_fn, post_ingest_fn, reset_state
+):
+    token = _register(reset_state)
+    meta = make_meta_fn()
+    meta["motion_mean_magnitude_px"] = float("inf")
+
+    resp = post_ingest_fn(client, token=token, frame_body=b"X" * 16, meta=meta)
+
+    assert resp.status_code == 400
+    assert "finite" in resp.json()["detail"]
+
+
+def test_ingest_rejects_implausible_resolution(
+    client, make_meta_fn, post_ingest_fn, reset_state
+):
+    token = _register(reset_state)
+    meta = make_meta_fn()
+    meta["lr_resolution"] = [20000, 1080]
+
+    resp = post_ingest_fn(client, token=token, frame_body=b"X" * 16, meta=meta)
+
+    assert resp.status_code == 400
+    assert "lr_resolution" in resp.json()["detail"]
+
+
+def test_ingest_rejects_frame_filename_metadata_mismatch(
+    client, make_meta_fn, reset_state
+):
+    token = _register(reset_state)
+    meta = make_meta_fn(frame_uuid="22222222-2222-2222-2222-222222222222")
+
+    resp = client.post(
+        "/ingest",
+        headers={"Authorization": f"Bearer {token}"},
+        files={"frame": ("different.exr", b"X" * 16, "image/x-exr")},
+        data={"meta": json.dumps(meta)},
+    )
+
+    assert resp.status_code == 400
+    detail = resp.json()["detail"]
+    assert detail["error"] == "frame_filename_mismatch"
+    assert detail["frame_uuid"] == meta["frame_uuid"]
 
 
 # ---- frame size cap --------------------------------------------------------

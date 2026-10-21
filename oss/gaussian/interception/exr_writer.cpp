@@ -1,3 +1,5 @@
+#define OSS_GAUSSIAN_BUILDING_DLL 1
+
 #include "oss_capture.h"
 
 #include <cstring>
@@ -31,10 +33,6 @@ constexpr const char* kChannelNames[] = {
     "Metallic.R",
     "Emissive.R", "Emissive.G", "Emissive.B",
 };
-
-bool flag_default_on(uint32_t flag, bool legacy_on) {
-    return flag != 0u || legacy_on;
-}
 
 bool should_write_hr(const OssCaptureFramePayload& payload) {
     return payload.capture_hr != 0u ||
@@ -75,9 +73,9 @@ bool same_canvas(const OssCaptureFramePayload& payload) {
     const uint32_t w = canvas.width;
     const uint32_t h = canvas.height;
     return payload.lr_rgb.width == w && payload.lr_rgb.height == h &&
-           payload.depth_z.width == w && payload.depth_z.height == h &&
-           payload.motion_xy.width == w && payload.motion_xy.height == h &&
-           payload.normals_xyz.width == w && payload.normals_xyz.height == h &&
+           (payload.capture_depth == 0u || (payload.depth_z.width == w && payload.depth_z.height == h)) &&
+           (payload.capture_motion == 0u || (payload.motion_xy.width == w && payload.motion_xy.height == h)) &&
+           (payload.capture_normals == 0u || (payload.normals_xyz.width == w && payload.normals_xyz.height == h)) &&
            (!should_write_hr(payload) || (payload.hr_rgb.width == w && payload.hr_rgb.height == h)) &&
            (payload.capture_albedo == 0u || (payload.albedo_rgb.width == w && payload.albedo_rgb.height == h)) &&
            (payload.capture_roughness == 0u || (payload.roughness.width == w && payload.roughness.height == h)) &&
@@ -96,9 +94,9 @@ int oss_capture_write_exr(const wchar_t* path, const OssCaptureFramePayload* pay
     }
     const bool write_lr = payload->capture_lr != 0u || payload->capture_mode == OSS_CAPTURE_MODE_LITE;
     const bool write_hr = should_write_hr(*payload);
-    const bool write_depth = flag_default_on(payload->capture_depth, true);
-    const bool write_motion = flag_default_on(payload->capture_motion, true);
-    const bool write_normals = flag_default_on(payload->capture_normals, true);
+    const bool write_depth = payload->capture_depth != 0u;
+    const bool write_motion = payload->capture_motion != 0u;
+    const bool write_normals = payload->capture_normals != 0u;
     if ((write_lr && !valid_view(payload->lr_rgb, 3)) ||
         (write_hr && !valid_view(payload->hr_rgb, 3)) ||
         (write_depth && !valid_view(payload->depth_z, 1)) ||

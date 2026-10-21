@@ -30,7 +30,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install --index-url https://download.pytorch.org/whl/cpu \
               torch torchvision
-          pip install -e ".[dev]"
+          pip install -e ".[dev,capture]"
 
       - name: v6 test suite (target architecture)
         run: pytest tests/sr/v6/ -q --tb=short
@@ -54,10 +54,69 @@ jobs:
 
       - name: Validate dashboard data schema
         run: |
-          python scripts/build_public_dashboard.py \
-            --runs-dir tests/fixtures/public-dashboard/runs \
-            --out /tmp/test-dashboard
-          python tools/check_data_schema.py /tmp/test-dashboard/data.json
+            python scripts/build_public_dashboard.py \
+              --runs-dir tests/fixtures/public-dashboard/runs \
+              --out /tmp/test-dashboard
+            python tools/check_data_schema.py /tmp/test-dashboard/data.json
+
+  capture-python:
+    name: capture tests (Python 3.12)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install capture test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install --index-url https://download.pytorch.org/whl/cpu \
+              torch torchvision
+          pip install -e ".[dev,capture]"
+
+      - name: Capture test suite
+        run: pytest tests/capture -q --tb=short
+
+  capture-native-windows:
+    name: capture native DLL (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Configure native capture DLL
+        shell: pwsh
+        run: |
+          cmake -S oss/gaussian/interception `
+            -B build/capture-native `
+            -G "Visual Studio 17 2022" `
+            -A x64
+
+      - name: Build native capture DLL
+        shell: pwsh
+        run: cmake --build build/capture-native --config Release
+
+      - name: Native capture tests
+        shell: pwsh
+        run: ctest --test-dir build/capture-native -C Release --output-on-failure
+
+      - name: Verify staged DLL artifacts
+        shell: pwsh
+        run: |
+          if (!(Get-ChildItem build/capture-native -Recurse -Filter dxgi.dll)) { throw "missing dxgi.dll" }
+          if (!(Get-ChildItem build/capture-native -Recurse -Filter oss_capture.dll)) { throw "missing oss_capture.dll" }
 
   v6-e2e-bench:
     name: v6.1 e2e bench gate (CUDA if available)
@@ -95,7 +154,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install --index-url https://download.pytorch.org/whl/cu124 \
               torch torchvision
-          pip install -e ".[dev]"
+          pip install -e ".[dev,capture]"
           pip install --no-build-isolation -e ./oss/cuda --force-reinstall
           python - <<'PY'
           import torch

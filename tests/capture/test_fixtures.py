@@ -56,6 +56,7 @@ def make_synthetic_capture(
     burst_index: int | None = 0,
     burst_tier: str | None = "short",
     capture_mode: str = "lite",
+    capture_storage_mode: str = "upload",
     include_hr: bool | None = None,
     include_burst: bool | None = None,
     lr_resolution: tuple[int, int] = (16, 9),
@@ -102,6 +103,7 @@ def make_synthetic_capture(
         burst_index=burst_index,
         burst_tier=burst_tier,
         capture_mode=capture_mode,
+        capture_storage_mode=capture_storage_mode,
         include_hr=include_hr,
         include_burst=include_burst,
         lr_resolution=lr_resolution,
@@ -122,25 +124,53 @@ def make_metadata(
     burst_index: int | None,
     burst_tier: str | None = "short",
     capture_mode: str = "lite",
+    capture_storage_mode: str = "upload",
     include_hr: bool = True,
     include_burst: bool = True,
     lr_resolution: tuple[int, int] = (16, 9),
     hr_resolution: tuple[int, int] = (32, 18),
     captured_at_unix: int | None = None,
 ) -> dict:
+    channel_presence = {
+        "lr": True,
+        "hr": include_hr,
+        "depth": True,
+        "motion": True,
+        "normals": True,
+        "albedo": capture_mode in {"regular", "INSANE"},
+        "roughness": capture_mode in {"regular", "INSANE"},
+        "metallic": capture_mode == "INSANE",
+        "emissive": capture_mode == "INSANE",
+    }
     meta = {
         "schema_version": 1,
         "game_id": game_id,
         "game_version": game_version,
+        "capture_kind": "sr",
+        "provider": "dlss",
         "session_uuid": session_uuid,
         "frame_uuid": frame_uuid,
         "captured_at_unix": int(captured_at_unix if captured_at_unix is not None else time.time()),
+        "captured_at_monotonic_seconds": 12.5,
+        "sequence_index": 42,
         "lr_resolution": [int(lr_resolution[0]), int(lr_resolution[1])],
         "hr_resolution": [int(hr_resolution[0]), int(hr_resolution[1])],
+        "render_resolution": [int(lr_resolution[0]), int(lr_resolution[1])],
+        "output_resolution": [int(hr_resolution[0]), int(hr_resolution[1])],
+        "dxgi_formats": {
+            "color": "R16G16B16A16_FLOAT",
+            "output": "R16G16B16A16_FLOAT",
+            "depth": "R32_FLOAT",
+            "motion_vectors": "R16G16_FLOAT",
+        },
         "capture_mode": capture_mode,
+        "capture_storage_mode": capture_storage_mode,
         "hr_source": "dlss-quality" if include_hr else "none",
         "jitter_offset_uv": [0.25, 0.75],
+        "jitter_offset_px": [0.25, 0.75],
+        "exposure_scale": 1.0,
         "motion_mean_magnitude_px": 4.5,
+        "channel_presence": channel_presence,
         "perceptual_hash_64": "0x0123456789abcdef",
         "user_consent_token": "synthetic-consent-token",
         "uploader_version": "1.0.0",
@@ -148,6 +178,7 @@ def make_metadata(
     if include_burst:
         meta["burst_uuid"] = burst_uuid
         meta["burst_index"] = int(0 if burst_index is None else burst_index)
+        meta["burst_n"] = 60 if burst_tier == "long" else 2
         meta["burst_tier"] = burst_tier
     return meta
 
@@ -275,22 +306,49 @@ def test_synthetic_capture_fixture_matches_pending_layout_and_schema(tmp_path: P
         "schema_version",
         "game_id",
         "game_version",
+        "capture_kind",
+        "provider",
         "session_uuid",
         "frame_uuid",
         "burst_uuid",
         "burst_index",
+        "burst_n",
         "burst_tier",
         "capture_mode",
+        "capture_storage_mode",
         "captured_at_unix",
+        "captured_at_monotonic_seconds",
+        "sequence_index",
         "lr_resolution",
         "hr_resolution",
+        "render_resolution",
+        "output_resolution",
+        "dxgi_formats",
         "hr_source",
         "jitter_offset_uv",
+        "jitter_offset_px",
+        "exposure_scale",
         "motion_mean_magnitude_px",
+        "channel_presence",
         "perceptual_hash_64",
         "user_consent_token",
         "uploader_version",
     }
+
+
+def test_synthetic_metadata_validates_durable_schema(tmp_path: Path) -> None:
+    from server.oss_capture_ingest.schema import validate_metadata
+
+    capture = make_synthetic_capture(tmp_path)
+
+    normalized = validate_metadata(capture.metadata)
+
+    assert normalized["capture_kind"] == "sr"
+    assert normalized["provider"] == "dlss"
+    assert normalized["render_resolution"] == capture.metadata["lr_resolution"]
+    assert normalized["output_resolution"] == capture.metadata["hr_resolution"]
+    assert normalized["dxgi_formats"]["motion_vectors"] == "R16G16_FLOAT"
+    assert normalized["channel_presence"]["depth"] is True
 
 
 def test_synthetic_exr_contains_capture_channels(tmp_path: Path) -> None:

@@ -16,10 +16,19 @@
 
 #include <cstring>
 #include <cstdint>
+#include <cstdio>
 #include <mutex>
 #include <string>
 #include <vector>
 #include <atomic>
+
+#if defined(_MSC_VER)
+#include <intrin.h>
+#pragma intrinsic(_ReturnAddress)
+#define OSSG_SL_RETURN_ADDRESS() _ReturnAddress()
+#else
+#define OSSG_SL_RETURN_ADDRESS() nullptr
+#endif
 
 namespace oss_gaussian {
 void OssGaussianEnsureInitializedFromProxyExport();
@@ -128,12 +137,20 @@ constexpr oss_gaussian::sl_proxy::SlBaseStructureAbi kViewportHandleType = {
     {0x99, 0x94, 0xfb, 0xe5, 0x25, 0x69, 0xaa, 0xa4}, 1};
 std::once_flag g_load_once;
 HMODULE g_real_sl = nullptr;
+std::wstring g_real_sl_path;
 std::atomic<uint64_t> g_sl_frame_counter{0};
+std::atomic<uint64_t> g_sl_call_counter{0};
+
+struct StoredSlResourceTag {
+    oss_gaussian::sl_proxy::SlResourceTagAbi tag{};
+    oss_gaussian::sl_proxy::SlResourceAbi resource{};
+    bool has_resource = false;
+};
 
 struct SlTagSnapshot {
     const void* frame = nullptr;
     const void* viewport = nullptr;
-    std::vector<oss_gaussian::sl_proxy::SlResourceTagAbi> tags;
+    std::vector<StoredSlResourceTag> tags;
     oss_gaussian::sl_proxy::SlConstantsAbi constants{};
     bool has_constants = false;
 };
@@ -166,6 +183,14 @@ SlTagSnapshot& FindOrCreateSnapshotLocked(const void* frame, const void* viewpor
     return snapshot;
 }
 
+void RebindStoredResourcePointers(SlTagSnapshot& snapshot) {
+    for (StoredSlResourceTag& stored : snapshot.tags) {
+        if (stored.has_resource) {
+            stored.tag.resource = &stored.resource;
+        }
+    }
+}
+
 void StoreTags(const void* frame,
                const void* viewport,
                const oss_gaussian::sl_proxy::SlResourceTagAbi* tags,
@@ -174,8 +199,16 @@ void StoreTags(const void* frame,
     std::lock_guard<std::mutex> lk(g_tag_mu);
     SlTagSnapshot& snapshot = FindOrCreateSnapshotLocked(frame, viewport);
     snapshot.tags.clear();
+    snapshot.tags.reserve(num_tags);
     for (uint32_t i = 0; i < num_tags; ++i) {
-        snapshot.tags.push_back(tags[i]);
+        StoredSlResourceTag stored{};
+        stored.tag = tags[i];
+        if (tags[i].resource) {
+            stored.resource = *tags[i].resource;
+            stored.tag.resource = &stored.resource;
+            stored.has_resource = true;
+        }
+        snapshot.tags.push_back(stored);
     }
     OSSG_LOG_INFO("sl_proxy", "stored %u Streamline tags frame=%p viewport=%p",
                   num_tags, frame, viewport);
@@ -262,6 +295,7 @@ bool BuildStreamlineFrame(uint32_t feature,
             const bool viewport_matches = !viewport || it->viewport == viewport;
             if (frame_matches && viewport_matches) {
                 snapshot = *it;
+                RebindStoredResourcePointers(snapshot);
                 found_snapshot = true;
                 break;
             }
@@ -280,8 +314,8 @@ bool BuildStreamlineFrame(uint32_t feature,
         out->mv_scale_y = snapshot.constants.mvec_scale.y;
         out->reset = snapshot.constants.reset ? 1u : 0u;
     }
-    for (const auto& tag : snapshot.tags) {
-        ApplyTagToFrame(tag, *out);
+    for (const auto& stored : snapshot.tags) {
+        ApplyTagToFrame(stored.tag, *out);
     }
     for (const auto& tag : local_tags) {
         ApplyTagToFrame(tag, *out);
@@ -333,6 +367,79 @@ std::wstring ModulePath(HMODULE module) {
     return std::wstring(path);
 }
 
+std::string WideToUtf8(const std::wstring& value) {
+    if (value.empty()) return std::string();
+    const int needed = WideCharToMultiByte(
+        CP_UTF8, 0, value.data(), static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
+    if (needed <= 0) return std::string();
+    std::string out(static_cast<size_t>(needed), '\0');
+    WideCharToMultiByte(
+        CP_UTF8, 0, value.data(), static_cast<int>(value.size()), out.data(), needed, nullptr, nullptr);
+    return out;
+}
+
+std::wstring BaseName(const std::wstring& path) {
+    const size_t slash = path.find_last_of(L"\\/");
+    return slash == std::wstring::npos ? path : path.substr(slash + 1);
+}
+
+std::string CallerModuleName(void* return_address) {
+    if (!return_address) return "<unknown>";
+    HMODULE caller_module = nullptr;
+    const DWORD flags = GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                        GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT;
+    if (!GetModuleHandleExW(flags, reinterpret_cast<LPCWSTR>(return_address), &caller_module)) {
+        return "<unmapped>";
+    }
+    const std::wstring path = ModulePath(caller_module);
+    if (path.empty()) return "<unknown-module>";
+    return WideToUtf8(BaseName(path));
+}
+
+const char* SlResultName(int32_t result) {
+    switch (result) {
+        case 0: return "eOk";
+        case 21: return "eErrorNotInitialized";
+        case 24: return "eErrorInitNotCalled";
+        default: return "unknown";
+    }
+}
+
+uint64_t LogCallStart(const char* fn, void* return_address) {
+    const uint64_t call = g_sl_call_counter.fetch_add(1, std::memory_order_relaxed) + 1ull;
+    const std::string caller = CallerModuleName(return_address);
+    OSSG_LOG_INFO(
+        "sl_proxy",
+        "#%llu %s enter caller=%s ret=%p real=%s",
+        static_cast<unsigned long long>(call),
+        fn ? fn : "<null>",
+        caller.c_str(),
+        return_address,
+        g_real_sl_path.empty() ? "<not-loaded>" : WideToUtf8(g_real_sl_path).c_str());
+    return call;
+}
+
+void LogSlResult(uint64_t call, const char* fn, int32_t result, void* real_proc) {
+    OSSG_LOG_INFO(
+        "sl_proxy",
+        "#%llu %s result=%d(%s) real_proc=%p",
+        static_cast<unsigned long long>(call),
+        fn ? fn : "<null>",
+        result,
+        SlResultName(result),
+        real_proc);
+}
+
+void LogHresult(uint64_t call, const char* fn, long result, void* real_proc) {
+    OSSG_LOG_INFO(
+        "sl_proxy",
+        "#%llu %s hr=0x%08lx real_proc=%p",
+        static_cast<unsigned long long>(call),
+        fn ? fn : "<null>",
+        result,
+        real_proc);
+}
+
 std::wstring SelfModulePath() {
     HMODULE self = nullptr;
     const DWORD flags = GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
@@ -359,12 +466,14 @@ std::vector<std::wstring> BuildCandidatePaths() {
     const DWORD exe_len = GetModuleFileNameW(nullptr, exe_path, MAX_PATH);
     if (exe_len > 0 && exe_len < MAX_PATH) {
         const std::wstring exe_dir = DirectoryOf(exe_path);
+        candidates.push_back(JoinPath(JoinPath(exe_dir, L".oss-capture-real"), kOriginalSlDllName));
         candidates.push_back(JoinPath(exe_dir, kRealSlDllName));
     }
 
     wchar_t cwd[MAX_PATH] = {};
     const DWORD cwd_len = GetCurrentDirectoryW(MAX_PATH, cwd);
     if (cwd_len > 0 && cwd_len < MAX_PATH) {
+        candidates.push_back(JoinPath(JoinPath(cwd, L".oss-capture-real"), kOriginalSlDllName));
         candidates.push_back(JoinPath(cwd, kRealSlDllName));
     }
 
@@ -400,6 +509,7 @@ HMODULE TryLoadCandidate(const std::wstring& candidate, const std::wstring& self
         FreeLibrary(module);
         return nullptr;
     }
+    g_real_sl_path = loaded_path.empty() ? FullPath(candidate) : loaded_path;
     return module;
 }
 
@@ -409,7 +519,10 @@ void LoadRealSlOnce() {
     for (const std::wstring& candidate : BuildCandidatePaths()) {
         if (HMODULE module = TryLoadCandidate(candidate, self_path)) {
             g_real_sl = module;
-            OSSG_LOG_INFO("sl_proxy", "loaded real Streamline interposer");
+            OSSG_LOG_INFO(
+                "sl_proxy",
+                "loaded real Streamline interposer path=%s",
+                WideToUtf8(g_real_sl_path).c_str());
             return;
         }
     }
@@ -507,20 +620,20 @@ void* ResolveExport(const char* name) {
 
 extern "C" {
 
-__declspec(dllexport) int32_t
+int32_t
 OssgSlEvaluateFeature(uint32_t feature,
                       const void* frame,
                       const void** inputs,
                       uint32_t num_inputs,
                       void* command_buffer);
-__declspec(dllexport) int32_t
+int32_t
 OssgSlSetConstants(const void* constants, const void* frame, const void* viewport);
-__declspec(dllexport) int32_t
+int32_t
 OssgSlSetTag(const void* viewport,
              const oss_gaussian::sl_proxy::SlResourceTagAbi* tags,
              uint32_t num_tags,
              void* command_buffer);
-__declspec(dllexport) int32_t
+int32_t
 OssgSlSetTagForFrame(const void* frame,
                      const void* viewport,
                      const oss_gaussian::sl_proxy::SlResourceTagAbi* tags,
@@ -528,23 +641,34 @@ OssgSlSetTagForFrame(const void* frame,
                      void* command_buffer);
 
 	#define OSSG_SL_FWD(RET, IMPL, NAME, SIG, ARGS, FAIL_VALUE)                  \
-	    __declspec(dllexport) RET IMPL SIG {                                      \
+	    RET IMPL SIG {                                                            \
 	        oss_gaussian::sl_proxy::EnsureNativeInit();                          \
+	        oss_gaussian::LogInit();                                             \
+	        const uint64_t call_id =                                             \
+	            oss_gaussian::sl_proxy::LogCallStart(NAME, OSSG_SL_RETURN_ADDRESS()); \
 	        using Fn = RET (*) SIG;                                               \
 	        auto real = oss_gaussian::sl_proxy::ResolveTyped<Fn>(NAME);          \
 	        if (!real) return FAIL_VALUE;                                         \
-	        return real ARGS;                                                     \
+	        const RET result = real ARGS;                                         \
+	        oss_gaussian::sl_proxy::LogSlResult(                                 \
+	            call_id, NAME, static_cast<int32_t>(result), reinterpret_cast<void*>(real)); \
+	        return result;                                                       \
 	    }
 
 	#define OSSG_SL_FWD_WINAPI(RET, IMPL, NAME, SIG, ARGS, FAIL_VALUE)           \
-	    __declspec(dllexport) RET WINAPI IMPL SIG {                               \
+	    RET WINAPI IMPL SIG {                                                     \
 	        oss_gaussian::LogInit();                                             \
 	        OSSG_LOG_TRACE("sl_proxy", "forward %s", NAME);                     \
+	        const uint64_t call_id =                                             \
+	            oss_gaussian::sl_proxy::LogCallStart(NAME, OSSG_SL_RETURN_ADDRESS()); \
 	        oss_gaussian::sl_proxy::EnsureNativeInit();                          \
 	        using Fn = RET (WINAPI*) SIG;                                         \
 	        auto real = oss_gaussian::sl_proxy::ResolveTyped<Fn>(NAME);          \
 	        if (!real) return FAIL_VALUE;                                         \
-        return real ARGS;                                                     \
+	        const RET result = real ARGS;                                        \
+	        oss_gaussian::sl_proxy::LogHresult(                                  \
+	            call_id, NAME, static_cast<long>(result), reinterpret_cast<void*>(real)); \
+        return result;                                                       \
     }
 
 OSSG_SL_FWD_WINAPI(long, OssgSlCreateDXGIFactory, "CreateDXGIFactory",
@@ -574,9 +698,11 @@ OSSG_SL_FWD_WINAPI(long, OssgSlD3D11CreateDeviceAndSwapChain, "D3D11CreateDevice
                     sdk_version, swap_chain_desc, swap_chain, device, feature_level,
                     immediate_context),
                    oss_gaussian::sl_proxy::kForwardENotImpl)
-	__declspec(dllexport) long WINAPI
+	long WINAPI
 	OssgSlD3D12CreateDevice(void* adapter, int minimum_feature_level, REFIID riid, void** device) {
 	    oss_gaussian::LogInit();
+	    const uint64_t call_id =
+	        oss_gaussian::sl_proxy::LogCallStart("D3D12CreateDevice", OSSG_SL_RETURN_ADDRESS());
 	    OSSG_LOG_INFO("sl_proxy",
 	                  "D3D12CreateDevice adapter=%p min_feature_level=%d out=%p",
 	                  adapter,
@@ -586,6 +712,8 @@ OSSG_SL_FWD_WINAPI(long, OssgSlD3D11CreateDeviceAndSwapChain, "D3D11CreateDevice
 	    auto real = oss_gaussian::sl_proxy::ResolveTyped<Fn>("D3D12CreateDevice");
 	    if (!real) return oss_gaussian::sl_proxy::kForwardENotImpl;
 	    const long hr = real(adapter, minimum_feature_level, riid, device);
+	    oss_gaussian::sl_proxy::LogHresult(
+	        call_id, "D3D12CreateDevice", hr, reinterpret_cast<void*>(real));
 	    OSSG_LOG_INFO("sl_proxy", "D3D12CreateDevice result=0x%08lx device=%p",
 	                  hr,
 	                  device ? *device : nullptr);
@@ -650,59 +778,83 @@ OSSG_SL_FWD(int32_t, OssgSlUpgradeInterface, "slUpgradeInterface",
             (void** base_interface), (base_interface),
             oss_gaussian::sl_proxy::kSlErrorInitNotCalled)
 
-	__declspec(dllexport) int32_t
+	int32_t
 	OssgSlInit(const void* preferences, uint64_t sdk_version) {
 	    oss_gaussian::sl_proxy::EnsureNativeInit();
 	    oss_gaussian::LogInit();
+    const uint64_t call_id =
+        oss_gaussian::sl_proxy::LogCallStart("slInit", OSSG_SL_RETURN_ADDRESS());
     OSSG_LOG_INFO("sl_proxy", "slInit sdk_version=%llu",
                   static_cast<unsigned long long>(sdk_version));
     using Fn = int32_t (*)(const void*, uint64_t);
     auto real = oss_gaussian::sl_proxy::ResolveTyped<Fn>("slInit");
     if (!real) return oss_gaussian::sl_proxy::MissingRealSl("slInit");
-    return real(preferences, sdk_version);
+    const int32_t result = real(preferences, sdk_version);
+    oss_gaussian::sl_proxy::LogSlResult(
+        call_id, "slInit", result, reinterpret_cast<void*>(real));
+    OSSG_LOG_INFO("sl_proxy", "slInit result=%d", result);
+    return result;
 }
 
-	__declspec(dllexport) int32_t
+	int32_t
 	OssgSlSetD3DDevice(void* d3d_device) {
 	    oss_gaussian::sl_proxy::EnsureNativeInit();
 	    oss_gaussian::LogInit();
+    const uint64_t call_id =
+        oss_gaussian::sl_proxy::LogCallStart("slSetD3DDevice", OSSG_SL_RETURN_ADDRESS());
     OSSG_LOG_INFO("sl_proxy", "slSetD3DDevice device=%p", d3d_device);
     using Fn = int32_t (*)(void*);
     auto real = oss_gaussian::sl_proxy::ResolveTyped<Fn>("slSetD3DDevice");
     if (!real) return oss_gaussian::sl_proxy::MissingRealSl("slSetD3DDevice");
-    return real(d3d_device);
+    const int32_t result = real(d3d_device);
+    oss_gaussian::sl_proxy::LogSlResult(
+        call_id, "slSetD3DDevice", result, reinterpret_cast<void*>(real));
+    OSSG_LOG_INFO("sl_proxy", "slSetD3DDevice result=%d", result);
+    return result;
 }
 
-	__declspec(dllexport) int32_t
+	int32_t
 	OssgSlSetConstants(const void* constants, const void* frame, const void* viewport) {
 	    oss_gaussian::sl_proxy::EnsureNativeInit();
 	    oss_gaussian::LogInit();
+    const uint64_t call_id =
+        oss_gaussian::sl_proxy::LogCallStart("slSetConstants", OSSG_SL_RETURN_ADDRESS());
     OSSG_LOG_INFO("sl_proxy", "slSetConstants constants=%p frame=%p viewport=%p",
                   constants, frame, viewport);
     oss_gaussian::sl_proxy::StoreConstants(frame, viewport, constants);
     using Fn = int32_t (*)(const void*, const void*, const void*);
     auto real = oss_gaussian::sl_proxy::ResolveTyped<Fn>("slSetConstants");
     if (!real) return oss_gaussian::sl_proxy::MissingRealSl("slSetConstants");
-    return real(constants, frame, viewport);
+    const int32_t result = real(constants, frame, viewport);
+    oss_gaussian::sl_proxy::LogSlResult(
+        call_id, "slSetConstants", result, reinterpret_cast<void*>(real));
+    OSSG_LOG_INFO("sl_proxy", "slSetConstants result=%d", result);
+    return result;
 }
 
-	__declspec(dllexport) int32_t
+	int32_t
 	OssgSlSetTag(const void* viewport,
 	             const oss_gaussian::sl_proxy::SlResourceTagAbi* tags,
 	             uint32_t num_tags,
 	             void* command_buffer) {
 	    oss_gaussian::sl_proxy::EnsureNativeInit();
 	    oss_gaussian::LogInit();
+    const uint64_t call_id =
+        oss_gaussian::sl_proxy::LogCallStart("slSetTag", OSSG_SL_RETURN_ADDRESS());
     OSSG_LOG_INFO("sl_proxy", "slSetTag viewport=%p cmd=%p", viewport, command_buffer);
     oss_gaussian::sl_proxy::LogTagSummary(tags, num_tags);
     oss_gaussian::sl_proxy::StoreTags(nullptr, viewport, tags, num_tags);
     using Fn = int32_t (*)(const void*, const oss_gaussian::sl_proxy::SlResourceTagAbi*, uint32_t, void*);
     auto real = oss_gaussian::sl_proxy::ResolveTyped<Fn>("slSetTag");
     if (!real) return oss_gaussian::sl_proxy::MissingRealSl("slSetTag");
-	    return real(viewport, tags, num_tags, command_buffer);
+	    const int32_t result = real(viewport, tags, num_tags, command_buffer);
+	    oss_gaussian::sl_proxy::LogSlResult(
+	        call_id, "slSetTag", result, reinterpret_cast<void*>(real));
+	    OSSG_LOG_INFO("sl_proxy", "slSetTag result=%d", result);
+	    return result;
 	}
 
-	__declspec(dllexport) int32_t
+	int32_t
 	OssgSlSetTagForFrame(const void* frame,
 	                     const void* viewport,
 	                     const oss_gaussian::sl_proxy::SlResourceTagAbi* tags,
@@ -710,6 +862,8 @@ OSSG_SL_FWD(int32_t, OssgSlUpgradeInterface, "slUpgradeInterface",
 	                     void* command_buffer) {
 	    oss_gaussian::sl_proxy::EnsureNativeInit();
 	    oss_gaussian::LogInit();
+	    const uint64_t call_id =
+	        oss_gaussian::sl_proxy::LogCallStart("slSetTagForFrame", OSSG_SL_RETURN_ADDRESS());
 	    OSSG_LOG_INFO("sl_proxy", "slSetTagForFrame frame=%p viewport=%p cmd=%p",
 	                  frame, viewport, command_buffer);
 	    oss_gaussian::sl_proxy::LogTagSummary(tags, num_tags);
@@ -717,17 +871,25 @@ OSSG_SL_FWD(int32_t, OssgSlUpgradeInterface, "slUpgradeInterface",
 	    using Fn = int32_t (*)(const void*, const void*, const oss_gaussian::sl_proxy::SlResourceTagAbi*, uint32_t, void*);
 	    auto real = oss_gaussian::sl_proxy::ResolveTyped<Fn>("slSetTagForFrame");
 	    if (!real) return oss_gaussian::sl_proxy::MissingRealSl("slSetTagForFrame");
-	    return real(frame, viewport, tags, num_tags, command_buffer);
+	    const int32_t result = real(frame, viewport, tags, num_tags, command_buffer);
+	    oss_gaussian::sl_proxy::LogSlResult(
+	        call_id, "slSetTagForFrame", result, reinterpret_cast<void*>(real));
+	    OSSG_LOG_INFO("sl_proxy", "slSetTagForFrame result=%d", result);
+	    return result;
 	}
 
-	__declspec(dllexport) int32_t
+	int32_t
 	OssgSlGetFeatureFunction(uint32_t feature, const char* function_name, void** function) {
 	    oss_gaussian::sl_proxy::EnsureNativeInit();
 	    oss_gaussian::LogInit();
+	    const uint64_t call_id =
+	        oss_gaussian::sl_proxy::LogCallStart("slGetFeatureFunction", OSSG_SL_RETURN_ADDRESS());
 	    using Fn = int32_t (*)(uint32_t, const char*, void**);
 	    auto real = oss_gaussian::sl_proxy::ResolveTyped<Fn>("slGetFeatureFunction");
 	    if (!real) return oss_gaussian::sl_proxy::MissingRealSl("slGetFeatureFunction");
 	    const int32_t result = real(feature, function_name, function);
+	    oss_gaussian::sl_proxy::LogSlResult(
+	        call_id, "slGetFeatureFunction", result, reinterpret_cast<void*>(real));
 	    OSSG_LOG_INFO("sl_proxy", "slGetFeatureFunction feature=%u name=%s result=%d ptr=%p",
 	                  feature,
 	                  function_name ? function_name : "<null>",
@@ -751,7 +913,7 @@ OSSG_SL_FWD(int32_t, OssgSlUpgradeInterface, "slUpgradeInterface",
 	    return result;
 	}
 
-	__declspec(dllexport) int32_t
+	int32_t
 	OssgSlEvaluateFeature(uint32_t feature,
                       const void* frame,
 	                      const void** inputs,
@@ -759,6 +921,8 @@ OSSG_SL_FWD(int32_t, OssgSlUpgradeInterface, "slUpgradeInterface",
 	                      void* command_buffer) {
 	    oss_gaussian::sl_proxy::EnsureNativeInit();
 	    oss_gaussian::LogInit();
+    const uint64_t call_id =
+        oss_gaussian::sl_proxy::LogCallStart("slEvaluateFeature", OSSG_SL_RETURN_ADDRESS());
     OSSG_LOG_INFO("sl_proxy",
                   "slEvaluateFeature feature=%u frame=%p inputs=%p num_inputs=%u cmd=%p",
                   feature,
@@ -782,6 +946,8 @@ OSSG_SL_FWD(int32_t, OssgSlUpgradeInterface, "slUpgradeInterface",
     if (capture_ticket) {
         oss_gaussian::EndNgxFrameCapture(capture_ticket, result == 0 ? 0x1 : result);
     }
+    oss_gaussian::sl_proxy::LogSlResult(
+        call_id, "slEvaluateFeature", result, reinterpret_cast<void*>(real));
     OSSG_LOG_INFO("sl_proxy", "slEvaluateFeature result=%d", result);
     return result;
 }

@@ -3251,7 +3251,7 @@ window.__getDashboardState = getDashboardState;
 window.__setDashboardState = setDashboardState;
 
 function lossValueFromRow(row) {
-  const value = Number(row?.loss_total ?? row?.loss);
+  const value = Number(row?.loss_total ?? row?.total ?? row?.loss);
   return Number.isFinite(value) ? value : null;
 }
 
@@ -3690,7 +3690,7 @@ function trainingTickerHtml(run) {
     const isNew = trainingPulseState.advanced && Number(row.step || 0) === trainingPulseState.newStep && index === 0;
     return `<div class="step-ticker-row ${isNew ? "is-new" : ""} grid grid-cols-[auto_1fr_1fr_1fr] gap-3 border-t border-zinc-800 px-3 py-2 text-xs text-zinc-400 first:border-t-0" data-subtext>
       <span class="font-mono text-zinc-200" data-text>${Number(row.step || 0).toLocaleString()}</span>
-      <span>total ${fmtNumber(row.loss_total ?? row.loss, 5)}</span>
+      <span>total ${fmtNumber(row.loss_total ?? row.total ?? row.loss, 5)}</span>
       <span>charb ${fmtNumber(row.loss_charbonnier ?? row.l1 ?? row.t_l1, 5)}</span>
       <span>lpips ${fmtNumber(row.loss_lpips ?? row.lpips ?? row.t_lpips, 5)}</span>
     </div>`;
@@ -3782,7 +3782,7 @@ function directionForHeadline(item) {
 function valueForMetricRow(row, key) {
   if (!row || !key) return null;
   if (key === "step") return row.step;
-  if (key === "loss_total") return row.loss_total ?? row.loss;
+  if (key === "loss_total") return row.loss_total ?? row.total ?? row.loss;
   if (key === "lpips") return row.loss_lpips ?? row.lpips ?? row.t_lpips;
   if (key === "psnr") return trainingPsnrValue(row);
   if (key === "temporal_ratio") return row.temporal_ratio ?? row.ratio;
@@ -5236,7 +5236,7 @@ function renderSingleMetricComparison(data, metric, opts) {
 
 function chartTooltipLines(row, run) {
   const lines = [
-    `loss_total: ${fmtNumber(row.loss_total ?? row.loss, 5)}`,
+    `loss_total: ${fmtNumber(row.loss_total ?? row.total ?? row.loss, 5)}`,
     ...lossComponentDefs.map((def) => `${def.label}: ${fmtNumber(valueFromRow(row, def.key, def.aliases), 5)}`),
   ];
   if (row.gpu_status) {

@@ -15,6 +15,7 @@ from typing import Optional
 
 
 DEFAULT_DLL_NAME = "oss_capture.dll"
+DEFAULT_INJECTION_TIMEOUT_SECONDS = 10.0
 
 
 @dataclass(frozen=True)
@@ -23,6 +24,7 @@ class InjectionResult:
     dll_path: Path
     injected: bool
     skipped: bool = False
+    dry_run: bool = False
     message: str = ""
 
 
@@ -36,13 +38,37 @@ def default_dll_path() -> Path:
     return Path(base) / "oss-capture" / DEFAULT_DLL_NAME
 
 
-def inject_dll(pid: int, dll_path: Optional[Path | str] = None) -> InjectionResult:
+def _env_dry_run() -> bool:
+    return os.environ.get("OSS_CAPTURE_INJECTION_DRY_RUN", "").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def inject_dll(
+    pid: int,
+    dll_path: Optional[Path | str] = None,
+    *,
+    dry_run: bool = False,
+    timeout_seconds: float = DEFAULT_INJECTION_TIMEOUT_SECONDS,
+) -> InjectionResult:
     """Inject ``dll_path`` into ``pid``.
 
     Returns a structured result instead of exiting so the tray app can log
     failures and keep running.
     """
     path = Path(dll_path) if dll_path is not None else default_dll_path()
+    if dry_run or _env_dry_run():
+        return InjectionResult(
+            pid=pid,
+            dll_path=path,
+            injected=False,
+            skipped=True,
+            dry_run=True,
+            message="DLL injection dry-run",
+        )
     if platform.system() != "Windows":
         return InjectionResult(
             pid=pid,
@@ -58,10 +84,10 @@ def inject_dll(pid: int, dll_path: Optional[Path | str] = None) -> InjectionResu
             injected=False,
             message=f"DLL not found: {path}",
         )
-    return _inject_windows(pid, path)
+    return _inject_windows(pid, path, timeout_seconds=timeout_seconds)
 
 
-def _inject_windows(pid: int, dll_path: Path) -> InjectionResult:
+def _inject_windows(pid: int, dll_path: Path, *, timeout_seconds: float) -> InjectionResult:
     try:
         import win32api  # type: ignore[import-not-found]
         import win32con  # type: ignore[import-not-found]
@@ -113,7 +139,24 @@ def _inject_windows(pid: int, dll_path: Path) -> InjectionResult:
             thread_handle = created[0]
         else:
             thread_handle = created
-        win32event.WaitForSingleObject(thread_handle, win32event.INFINITE)
+        timeout_ms = max(1, int(timeout_seconds * 1000.0))
+        wait_result = win32event.WaitForSingleObject(thread_handle, timeout_ms)
+        wait_object_0 = getattr(win32event, "WAIT_OBJECT_0", 0)
+        wait_timeout = getattr(win32event, "WAIT_TIMEOUT", 0x00000102)
+        if wait_result == wait_timeout:
+            return InjectionResult(
+                pid=pid,
+                dll_path=dll_path,
+                injected=False,
+                message=f"LoadLibraryW timed out after {timeout_seconds:g}s",
+            )
+        if wait_result != wait_object_0:
+            return InjectionResult(
+                pid=pid,
+                dll_path=dll_path,
+                injected=False,
+                message=f"LoadLibraryW wait failed: {wait_result}",
+            )
         exit_code = win32process.GetExitCodeThread(thread_handle)
         if exit_code == 0:
             return InjectionResult(

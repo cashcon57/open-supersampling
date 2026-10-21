@@ -27,7 +27,74 @@ if str(REPO_ROOT) not in sys.path:
 
 from oss.capture import uploader  # noqa: E402
 from oss.capture.uploader import CaptureFrame, UploadConfig, UploadResult  # noqa: E402
-from tests.capture.test_fixtures import make_synthetic_capture  # noqa: E402
+try:
+    from tests.capture.test_fixtures import make_synthetic_capture  # type: ignore  # noqa: E402
+except ImportError:
+
+    def make_synthetic_capture(  # type: ignore[no-redef]
+        pending_dir: Path,
+        *,
+        game_id: str = "synthetic-game",
+        game_version: str = "test",
+        session_uuid: str | None = None,
+        frame_uuid: str | None = None,
+        burst_uuid: str | None = None,
+        burst_index: int | None = 0,
+        burst_tier: str | None = "short",
+        capture_mode: str = "lite",
+        lr_resolution: tuple[int, int] = (16, 9),
+        captured_at_unix: int | None = None,
+        **_: Any,
+    ) -> Any:
+        """Minimal dependency-free capture fixture for operator smoke tests.
+
+        The ingest server validates metadata and multipart shape, but it does
+        not parse EXR pixels. This keeps the simulator usable on a fresh
+        Windows host before scientific Python packages are installed.
+        """
+
+        session_uuid = session_uuid or str(uuid.uuid4())
+        frame_uuid = frame_uuid or str(uuid.uuid4())
+        session_dir = pending_dir / game_id / session_uuid
+        session_dir.mkdir(parents=True, exist_ok=True)
+        frame_path = session_dir / f"{frame_uuid}.exr"
+        meta_path = session_dir / f"{frame_uuid}.json"
+        frame_path.write_bytes(b"OSS synthetic capture smoke payload\n")
+        include_burst = burst_tier is not None
+        metadata: dict[str, Any] = {
+            "schema_version": 1,
+            "game_id": game_id,
+            "game_version": game_version,
+            "session_uuid": session_uuid,
+            "frame_uuid": frame_uuid,
+            "captured_at_unix": int(captured_at_unix if captured_at_unix is not None else time.time()),
+            "lr_resolution": [int(lr_resolution[0]), int(lr_resolution[1])],
+            "hr_resolution": [int(lr_resolution[0]) * 2, int(lr_resolution[1]) * 2],
+            "capture_mode": capture_mode,
+            "hr_source": "synthetic",
+            "jitter_offset_uv": [0.25, 0.75],
+            "motion_mean_magnitude_px": 4.5,
+            "perceptual_hash_64": "0x0123456789abcdef",
+            "user_consent_token": "synthetic-consent-token",
+            "uploader_version": "1.0.0",
+        }
+        if include_burst:
+            metadata.update(
+                {
+                    "burst_uuid": burst_uuid or str(uuid.uuid4()),
+                    "burst_index": int(0 if burst_index is None else burst_index),
+                    "burst_tier": burst_tier,
+                }
+            )
+        meta_path.write_text(json.dumps(metadata, indent=2, sort_keys=True), encoding="utf-8")
+
+        @dataclass(frozen=True)
+        class SyntheticCapture:
+            frame_path: Path
+            meta_path: Path
+            metadata: dict[str, Any]
+
+        return SyntheticCapture(frame_path=frame_path, meta_path=meta_path, metadata=metadata)
 
 
 DEFAULT_SERVER = "https://capture.oss-supersampling.dev"
@@ -231,6 +298,7 @@ def simulate_session(args: argparse.Namespace) -> int:
             pending_dir=pending,
             ingest_url=target_url,
             install_token=args.token,
+            capture_storage_mode="upload",
             max_attempts=args.max_attempts,
             backoff_seconds=tuple(args.backoff),
         )

@@ -40,14 +40,19 @@ namespace oss_gaussian {
 /// LoadLibrary the real C:\Windows\System32\dxgi.dll and cache its HMODULE so
 /// the per-export trampolines can resolve their target on first call.
 ///
-/// Called from DllMain DLL_PROCESS_ATTACH. Returns true on success. On
-/// failure the DLL still loads — individual forwarders log a miss and return
-/// E_NOTIMPL. We never abort process load from DllMain.
+/// Called from the async DLL init worker and lazily by forwarders. Returns
+/// true on success. On failure the DLL still loads — individual forwarders log
+/// a miss and return E_NOTIMPL.
 bool OssGaussianDxgiProxyAttach();
 
-/// Free the cached system dxgi.dll HMODULE. Called from DllMain
-/// DLL_PROCESS_DETACH. Idempotent.
+/// Free the cached system dxgi.dll HMODULE. Idempotent. Do not call from
+/// DllMain; it can run LoadLibrary/FreeLibrary-sensitive paths.
 void OssGaussianDxgiProxyDetach();
+
+/// Called by DXGI export trampolines before forwarding. This gives the DLL a
+/// second, non-DllMain initialization path for games whose loader startup keeps
+/// a CreateThread-born DllMain worker from running promptly.
+void OssGaussianEnsureInitializedFromProxyExport();
 
 } // namespace oss_gaussian
 

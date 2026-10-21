@@ -11,11 +11,15 @@
 //      and returns immediately; the worker thread does the wait + write).
 //    - Must NOT keep a fence alive across game shutdown; UninstallStagingCopy
 //      flushes pending writes and tears down the worker.
-//    - Must handle the readback-heap allocation pool: we recycle a small
-//      pool of staging buffers (default 4) to avoid hot-path malloc.
+//    - Must handle the readback-heap allocation pool: we recycle a bounded
+//      pool of staging buffers to avoid hot-path malloc. Pool/backpressure
+//      limits are configurable with OSS_GAUSSIAN_STAGING_POOL_SIZE and
+//      OSS_GAUSSIAN_STAGING_MAX_IN_FLIGHT.
 //
-//  Status: SCAFFOLDED. Compiles on Windows; the actual D3D12 copy commands
-//  + fence path are stubbed pending real-game testing on 3080 Ti.
+//  Status: production fallback. The provider paths still produce training
+//  EXRs when DLSS/FSR resources are available; this helper backs the Present
+//  fallback with raw backbuffer dumps for games where provider interception is
+//  still being profiled.
 //
 //  Copyright 2026 OSS-Gaussian contributors. Apache 2.0.
 // =============================================================================
@@ -41,8 +45,8 @@ bool InitStagingCopy(ID3D12Device* device);
 // true if the request was queued; false if the staging pool is exhausted
 // (in which case the caller drops this frame).
 //
-// `src` MUST be in a state that can be transitioned to D3D12_RESOURCE_STATE_
-// COPY_SOURCE. The hook layer is responsible for the prior-state knowledge.
+// `src` is expected to be a swapchain backbuffer immediately before Present.
+// The helper transitions PRESENT -> COPY_SOURCE -> PRESENT around the copy.
 bool ScheduleReadback(
     ID3D12CommandQueue*  queue,
     ID3D12Resource*      src,
@@ -54,16 +58,24 @@ bool ScheduleReadback(
 );
 
 // Drain pending readbacks and shut down the worker thread. Called from
-// UninstallD3D12Hooks() and from DLL_PROCESS_DETACH. Idempotent.
+// UninstallD3D12Hooks(); do not call from DllMain. Idempotent.
 void ShutdownStagingCopy();
 
 // Telemetry for the dashboard / log inspector.
 struct StagingCopyStats {
     unsigned long long requested;
+    unsigned long long scheduled;
     unsigned long long completed;
     unsigned long long dropped_pool_full;
+    unsigned long long dropped_backpressure;
     unsigned long long failed_copy;
     unsigned long long failed_write;
+    unsigned long long in_flight;
+    unsigned long long queued;
+    unsigned long long pool_size;
+    unsigned long long max_in_flight;
+    unsigned long long high_water_in_flight;
+    unsigned long long high_water_queued;
 };
 StagingCopyStats GetStagingCopyStats();
 

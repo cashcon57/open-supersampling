@@ -1,11 +1,10 @@
 // =============================================================================
 //  ngx_exports.cpp
 //
-//  Stub implementations of the 10 NVSDK_NGX_D3D12_* exports. Each stub:
-//    1. Logs the call via OutputDebugStringA + the file logger.
-//    2. Returns NVSDK_NGX_Result_Success (or a benign code) so the game
-//       continues. The pass-through plumbing to real `nvngx_dlss.dll` lands
-//       in T2.5 (`ngx_passthrough.cpp`).
+//  Pass-through implementations of the 10 NVSDK_NGX_D3D12_* exports. Each
+//  wrapper lazily resolves the same symbol from the real nvngx_dlss.dll and
+//  forwards the original arguments. EvaluateFeature additionally notifies the
+//  OSS capture layer before forwarding to DLSS.
 //
 //  Modeled on:
 //    - OptiScaler `OptiScaler/NVNGX_DLSS.cpp` (the export bag).
@@ -17,54 +16,30 @@
 //
 //  Signatures here intentionally use local typedefs / forward decls so the
 //  scaffold compiles before NVIDIA/DLSS headers are vendored under
-//  third_party/DLSS/. Once vendored, replace these typedefs with the real
-//  `#include <nvsdk_ngx.h>` and remove the forwards.
+//  third_party/DLSS/.
 //
 //  Copyright 2026 OSS-Gaussian contributors
 //  Licensed under the Apache License, Version 2.0 (see ../LICENSE).
 // =============================================================================
 #include "log.h"
+#include "ngx_passthrough.h"
 
 #include "../oss_capture.h"
 
 #include <Windows.h>
 
-// -----------------------------------------------------------------------------
-//  Local mirrors of the public NGX C surface. Sourced from
-//  NVIDIA/DLSS `nvsdk_ngx.h`. ABI-stable across SDK versions for these symbols.
-// -----------------------------------------------------------------------------
-
-// NVIDIA's headers define this as __cdecl on Windows. Mirror it locally so
-// the scaffold compiles before nvsdk_ngx.h is vendored.
-#ifndef NVSDK_CONV
-#  define NVSDK_CONV __cdecl
-#endif
-
-extern "C" {
-
-typedef int          NVSDK_NGX_Result;
-typedef int          NVSDK_NGX_Feature;
-typedef int          NVSDK_NGX_Version;
-struct  NVSDK_NGX_Parameter;
-struct  NVSDK_NGX_Handle;
-struct  NVSDK_NGX_FeatureCommonInfo;
-struct  ID3D12Device;
-struct  ID3D12GraphicsCommandList;
-
-typedef void (*PFN_NVSDK_NGX_ProgressCallback)(float progress, bool* should_cancel);
-
-// Per nvsdk_ngx_defs.h — the values we hand back. 1 == Success.
-constexpr NVSDK_NGX_Result NVSDK_NGX_Result_Success = 0x1;
-
-} // extern "C"
-
 namespace {
 
-inline void StubLog(const char* fn) {
+inline void ForwardLog(const char* fn) {
     char buf[160];
     _snprintf_s(buf, _countof(buf), _TRUNCATE, "[oss-gaussian] called: %s\n", fn);
     OutputDebugStringA(buf);
-    OSSG_LOG_INFO("ngx", "stub: %s", fn);
+    OSSG_LOG_TRACE("ngx", "forward: %s", fn);
+}
+
+inline NVSDK_NGX_Result MissingRealNgx(const char* fn) {
+    OSSG_LOG_ERROR("ngx", "%s: real nvngx_dlss.dll or export unavailable", fn);
+    return NVSDK_NGX_Result_FAIL;
 }
 
 } // namespace
@@ -80,81 +55,137 @@ inline void StubLog(const char* fn) {
 extern "C" {
 
 __declspec(dllexport) NVSDK_NGX_Result NVSDK_CONV
-NVSDK_NGX_D3D12_Init(unsigned long long /*InApplicationId*/,
-                     const wchar_t*     /*InApplicationDataPath*/,
-                     ID3D12Device*      /*InDevice*/,
-                     NVSDK_NGX_Version  /*InSDKVersion*/) {
-    StubLog("NVSDK_NGX_D3D12_Init");
-    return NVSDK_NGX_Result_Success;
+NVSDK_NGX_D3D12_Init(unsigned long long InApplicationId,
+                     const wchar_t*     InApplicationDataPath,
+                     ID3D12Device*      InDevice,
+                     NVSDK_NGX_Version  InSDKVersion) {
+    ForwardLog("NVSDK_NGX_D3D12_Init");
+    auto real = oss_gaussian::ngx::ResolveTyped<oss_gaussian::ngx::D3D12InitFn>(
+        "NVSDK_NGX_D3D12_Init");
+    if (!real) return MissingRealNgx("NVSDK_NGX_D3D12_Init");
+    return real(InApplicationId, InApplicationDataPath, InDevice, InSDKVersion);
 }
 
 __declspec(dllexport) NVSDK_NGX_Result NVSDK_CONV
-NVSDK_NGX_D3D12_Init_Ext(unsigned long long                 /*InApplicationId*/,
-                         const wchar_t*                     /*InApplicationDataPath*/,
-                         ID3D12Device*                      /*InDevice*/,
-                         const NVSDK_NGX_FeatureCommonInfo* /*InFeatureInfo*/,
-                         NVSDK_NGX_Version                  /*InSDKVersion*/) {
-    StubLog("NVSDK_NGX_D3D12_Init_Ext");
-    return NVSDK_NGX_Result_Success;
+NVSDK_NGX_D3D12_Init_Ext(unsigned long long                 InApplicationId,
+                         const wchar_t*                     InApplicationDataPath,
+                         ID3D12Device*                      InDevice,
+                         NVSDK_NGX_Version                  InSDKVersion,
+                         const NVSDK_NGX_Parameter*         InParameters) {
+    ForwardLog("NVSDK_NGX_D3D12_Init_Ext");
+    auto real = oss_gaussian::ngx::ResolveTyped<oss_gaussian::ngx::D3D12InitExtFn>(
+        "NVSDK_NGX_D3D12_Init_Ext");
+    if (!real) return MissingRealNgx("NVSDK_NGX_D3D12_Init_Ext");
+    return real(InApplicationId, InApplicationDataPath, InDevice, InSDKVersion, InParameters);
 }
 
 __declspec(dllexport) NVSDK_NGX_Result NVSDK_CONV
-NVSDK_NGX_D3D12_Shutdown1(ID3D12Device* /*InDevice*/) {
-    StubLog("NVSDK_NGX_D3D12_Shutdown1");
-    return NVSDK_NGX_Result_Success;
+NVSDK_NGX_D3D12_Shutdown1(ID3D12Device* InDevice) {
+    ForwardLog("NVSDK_NGX_D3D12_Shutdown1");
+    auto real = oss_gaussian::ngx::ResolveTyped<oss_gaussian::ngx::D3D12Shutdown1Fn>(
+        "NVSDK_NGX_D3D12_Shutdown1");
+    if (!real) return MissingRealNgx("NVSDK_NGX_D3D12_Shutdown1");
+    return real(InDevice);
 }
 
 __declspec(dllexport) NVSDK_NGX_Result NVSDK_CONV
-NVSDK_NGX_D3D12_GetCapabilityParameters(NVSDK_NGX_Parameter** /*OutParameters*/) {
-    StubLog("NVSDK_NGX_D3D12_GetCapabilityParameters");
-    return NVSDK_NGX_Result_Success;
+NVSDK_NGX_D3D12_GetCapabilityParameters(NVSDK_NGX_Parameter** OutParameters) {
+    ForwardLog("NVSDK_NGX_D3D12_GetCapabilityParameters");
+    auto real =
+        oss_gaussian::ngx::ResolveTyped<oss_gaussian::ngx::D3D12GetCapabilityParametersFn>(
+            "NVSDK_NGX_D3D12_GetCapabilityParameters");
+    if (!real) {
+        if (OutParameters) *OutParameters = nullptr;
+        return MissingRealNgx("NVSDK_NGX_D3D12_GetCapabilityParameters");
+    }
+    return real(OutParameters);
 }
 
 __declspec(dllexport) NVSDK_NGX_Result NVSDK_CONV
-NVSDK_NGX_D3D12_AllocateParameters(NVSDK_NGX_Parameter** /*OutParameters*/) {
-    StubLog("NVSDK_NGX_D3D12_AllocateParameters");
-    return NVSDK_NGX_Result_Success;
+NVSDK_NGX_D3D12_AllocateParameters(NVSDK_NGX_Parameter** OutParameters) {
+    ForwardLog("NVSDK_NGX_D3D12_AllocateParameters");
+    auto real =
+        oss_gaussian::ngx::ResolveTyped<oss_gaussian::ngx::D3D12AllocateParametersFn>(
+            "NVSDK_NGX_D3D12_AllocateParameters");
+    if (!real) {
+        if (OutParameters) *OutParameters = nullptr;
+        return MissingRealNgx("NVSDK_NGX_D3D12_AllocateParameters");
+    }
+    return real(OutParameters);
 }
 
 __declspec(dllexport) NVSDK_NGX_Result NVSDK_CONV
-NVSDK_NGX_D3D12_DestroyParameters(NVSDK_NGX_Parameter* /*InParameters*/) {
-    StubLog("NVSDK_NGX_D3D12_DestroyParameters");
-    return NVSDK_NGX_Result_Success;
+NVSDK_NGX_D3D12_DestroyParameters(NVSDK_NGX_Parameter* InParameters) {
+    ForwardLog("NVSDK_NGX_D3D12_DestroyParameters");
+    auto real =
+        oss_gaussian::ngx::ResolveTyped<oss_gaussian::ngx::D3D12DestroyParametersFn>(
+            "NVSDK_NGX_D3D12_DestroyParameters");
+    if (!real) return MissingRealNgx("NVSDK_NGX_D3D12_DestroyParameters");
+    return real(InParameters);
 }
 
 __declspec(dllexport) NVSDK_NGX_Result NVSDK_CONV
-NVSDK_NGX_D3D12_CreateFeature(ID3D12GraphicsCommandList* /*InCmdList*/,
-                              NVSDK_NGX_Feature          /*InFeatureID*/,
-                              NVSDK_NGX_Parameter*       /*InParameters*/,
-                              NVSDK_NGX_Handle**         /*OutHandle*/) {
-    StubLog("NVSDK_NGX_D3D12_CreateFeature");
-    return NVSDK_NGX_Result_Success;
+NVSDK_NGX_D3D12_CreateFeature(ID3D12GraphicsCommandList* InCmdList,
+                              NVSDK_NGX_Feature          InFeatureID,
+                              NVSDK_NGX_Parameter*       InParameters,
+                              NVSDK_NGX_Handle**         OutHandle) {
+    ForwardLog("NVSDK_NGX_D3D12_CreateFeature");
+    auto real = oss_gaussian::ngx::ResolveTyped<oss_gaussian::ngx::D3D12CreateFeatureFn>(
+        "NVSDK_NGX_D3D12_CreateFeature");
+    if (!real) {
+        if (OutHandle) *OutHandle = nullptr;
+        return MissingRealNgx("NVSDK_NGX_D3D12_CreateFeature");
+    }
+    return real(InCmdList, InFeatureID, InParameters, OutHandle);
 }
 
 __declspec(dllexport) NVSDK_NGX_Result NVSDK_CONV
 NVSDK_NGX_D3D12_EvaluateFeature(ID3D12GraphicsCommandList*     InCmdList,
                                 const NVSDK_NGX_Handle*        InFeatureHandle,
                                 const NVSDK_NGX_Parameter*     InParameters,
-                                PFN_NVSDK_NGX_ProgressCallback /*InCallback*/) {
-    StubLog("NVSDK_NGX_D3D12_EvaluateFeature");
-    oss_capture_on_ngx_evaluate_feature(InCmdList, InFeatureHandle, InParameters);
-    return NVSDK_NGX_Result_Success;
+                                PFN_NVSDK_NGX_ProgressCallback InCallback) {
+    ForwardLog("NVSDK_NGX_D3D12_EvaluateFeature");
+    auto real =
+        oss_gaussian::ngx::ResolveTyped<oss_gaussian::ngx::D3D12EvaluateFeatureFn>(
+            "NVSDK_NGX_D3D12_EvaluateFeature");
+    if (!real) return MissingRealNgx("NVSDK_NGX_D3D12_EvaluateFeature");
+    void* ticket = oss_capture_on_ngx_evaluate_feature_begin(
+        InCmdList,
+        InFeatureHandle,
+        InParameters);
+    const NVSDK_NGX_Result result =
+        real(InCmdList, InFeatureHandle, InParameters, InCallback);
+    oss_capture_on_ngx_evaluate_feature_end(
+        ticket,
+        InCmdList,
+        InFeatureHandle,
+        InParameters,
+        result);
+    return result;
 }
 
 __declspec(dllexport) NVSDK_NGX_Result NVSDK_CONV
-NVSDK_NGX_D3D12_ReleaseFeature(NVSDK_NGX_Handle* /*InHandle*/) {
-    StubLog("NVSDK_NGX_D3D12_ReleaseFeature");
-    return NVSDK_NGX_Result_Success;
+NVSDK_NGX_D3D12_ReleaseFeature(NVSDK_NGX_Handle* InHandle) {
+    ForwardLog("NVSDK_NGX_D3D12_ReleaseFeature");
+    auto real = oss_gaussian::ngx::ResolveTyped<oss_gaussian::ngx::D3D12ReleaseFeatureFn>(
+        "NVSDK_NGX_D3D12_ReleaseFeature");
+    if (!real) return MissingRealNgx("NVSDK_NGX_D3D12_ReleaseFeature");
+    return real(InHandle);
 }
 
 __declspec(dllexport) NVSDK_NGX_Result NVSDK_CONV
-NVSDK_NGX_D3D12_GetScratchBufferSize(ID3D12Device*        /*InDevice*/,
-                                     NVSDK_NGX_Feature    /*InFeatureID*/,
-                                     const NVSDK_NGX_Parameter* /*InParameters*/,
+NVSDK_NGX_D3D12_GetScratchBufferSize(NVSDK_NGX_Feature    InFeatureID,
+                                     const NVSDK_NGX_Parameter* InParameters,
                                      size_t*              OutSizeInBytes) {
-    StubLog("NVSDK_NGX_D3D12_GetScratchBufferSize");
-    if (OutSizeInBytes) *OutSizeInBytes = 0;
-    return NVSDK_NGX_Result_Success;
+    ForwardLog("NVSDK_NGX_D3D12_GetScratchBufferSize");
+    auto real =
+        oss_gaussian::ngx::ResolveTyped<oss_gaussian::ngx::D3D12GetScratchBufferSizeFn>(
+            "NVSDK_NGX_D3D12_GetScratchBufferSize");
+    if (!real) {
+        if (OutSizeInBytes) *OutSizeInBytes = 0;
+        return MissingRealNgx("NVSDK_NGX_D3D12_GetScratchBufferSize");
+    }
+    return real(InFeatureID, InParameters, OutSizeInBytes);
 }
 
 } // extern "C"

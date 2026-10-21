@@ -11,10 +11,13 @@
 
 #ifdef __cplusplus
 #include <cstddef>
+#include <string>
 #endif
 
 #if defined(_WIN32)
-#  if defined(OSS_GAUSSIAN_BUILDING_DLL)
+#  if defined(OSS_GAUSSIAN_SUPPRESS_PUBLIC_EXPORTS)
+#    define OSS_CAPTURE_API
+#  elif defined(OSS_GAUSSIAN_BUILDING_DLL)
 #    define OSS_CAPTURE_API __declspec(dllexport)
 #  else
 #    define OSS_CAPTURE_API __declspec(dllimport)
@@ -54,6 +57,7 @@ typedef struct OssCaptureConfig {
     char     game_id[64];
     char     game_version[64];
     char     user_consent_token[160];
+    char     capture_storage_mode[16];
     wchar_t  pending_root[260];
     double   capture_stride_seconds; // Compatibility alias; prefer stride_seconds.
     uint32_t burst_n;
@@ -169,6 +173,7 @@ typedef struct OssCaptureFramePayload {
 OSS_CAPTURE_API OssCaptureConfig oss_capture_default_config(void);
 OSS_CAPTURE_API int oss_capture_apply_mode_preset(OssCaptureConfig* config, OssCaptureMode mode);
 OSS_CAPTURE_API int oss_capture_configure(const OssCaptureConfig* config);
+OSS_CAPTURE_API void oss_capture_set_pending_root(const wchar_t* pending_root);
 OSS_CAPTURE_API OssCaptureDecision oss_capture_consider_candidate(const OssCaptureCandidate* candidate);
 OSS_CAPTURE_API uint64_t oss_capture_phash64_rgb8(const uint8_t* rgb, uint32_t width, uint32_t height, uint32_t stride_bytes);
 OSS_CAPTURE_API uint32_t oss_capture_hamming_distance64(uint64_t a, uint64_t b);
@@ -179,7 +184,21 @@ OSS_CAPTURE_API uint32_t oss_capture_consume_present_burst(OssCaptureBurstFrame*
 // void* to keep this header free of Windows/D3D12 includes.
 OSS_CAPTURE_API void oss_capture_on_present(void* swap_chain);
 OSS_CAPTURE_API void oss_capture_on_execute_command_lists(void* command_queue);
+OSS_CAPTURE_API void oss_capture_on_execute_command_lists_executed(
+    void* command_queue,
+    unsigned int command_list_count,
+    void* const* command_lists);
 OSS_CAPTURE_API void oss_capture_on_ngx_evaluate_feature(void* command_list, const void* ngx_handle, const void* ngx_params);
+OSS_CAPTURE_API void* oss_capture_on_ngx_evaluate_feature_begin(
+    void* command_list,
+    const void* ngx_handle,
+    const void* ngx_params);
+OSS_CAPTURE_API void oss_capture_on_ngx_evaluate_feature_end(
+    void* capture_ticket,
+    void* command_list,
+    const void* ngx_handle,
+    const void* ngx_params,
+    int ngx_result);
 
 #ifdef __cplusplus
 } // extern "C"
@@ -212,6 +231,9 @@ private:
     size_t     recent_count_ = 0;
     size_t     recent_next_ = 0;
 };
+
+OssCaptureConfig CurrentCaptureConfig();
+std::wstring CurrentPendingRoot();
 
 } // namespace oss_gaussian::capture
 #endif

@@ -66,35 +66,72 @@ oss/gaussian/interception/
     Detours/.gitkeep                     # vendored in T2.2
 ```
 
-## Build (3080 Ti box, Windows 11)
+## Build and Package for Cyberpunk 2077 (Windows 11)
 
 Prerequisites:
-- Visual Studio 2026 with the "Desktop development with C++" workload
-  (gives MSVC v143+, Windows 11 SDK, CMake)
-- Either: open the **VS 2026 Native Tools Command Prompt for x64**, or run from
-  any shell after invoking `vcvars64.bat`.
+- Visual Studio 2022 or newer with "Desktop development with C++"
+- CMake 3.20+
+- Python 3.11+
+- PyInstaller (`python -m pip install pyinstaller`)
+- WiX Toolset v3 (`candle.exe` and `light.exe` on `PATH`)
+- PowerShell from a shell where MSVC x64 tools are active
 
-Build steps:
+The packaging flow uses a staging directory that must contain exactly these
+WiX inputs:
 
-```bat
-cd %REPO%\oss\gaussian\interception
-cmake -S . -B build -G "Visual Studio 17 2022" -A x64
-cmake --build build --config Release
+| File | Producer | Install target |
+|------|----------|----------------|
+| `oss_capture.dll` | CMake `CaptureInstaller` component | `<Cyberpunk>\bin\x64\dxgi.dll` |
+| `oss_capture_uploader.exe` | PyInstaller uploader spec | `%LOCALAPPDATA%\oss-capture\oss_capture_uploader.exe` |
+| `config.json` | `scripts/build_capture_installer.py` | `%LOCALAPPDATA%\oss-capture\config.json` |
+| `scheduled_task.xml` | `scripts/build_capture_installer.py` | `%LOCALAPPDATA%\oss-capture\scheduled_task.xml` |
+
+PowerShell build/package commands:
+
+```powershell
+$Repo = "C:\src\OpenSuperSampling"
+$Stage = "$Repo\dist\oss_capture_cyberpunk_v1.0.0"
+$GameBin = "C:\Program Files (x86)\Steam\steamapps\common\Cyberpunk 2077\bin\x64"
+
+cd $Repo
+cmake -S oss\gaussian\interception -B build\interception -G "Visual Studio 17 2022" -A x64
+cmake --build build\interception --config Release
+cmake --install build\interception --config Release --component CaptureInstaller --prefix $Stage
+
+python -m PyInstaller oss\capture\installer\oss_capture_uploader_pyinstaller.spec --distpath $Stage
+Move-Item -Force "$Stage\oss_capture_uploader\oss_capture_uploader.exe" "$Stage\oss_capture_uploader.exe"
+
+python scripts\build_capture_installer.py `
+  --game cyberpunk-2077 `
+  --game-exe-name Cyberpunk2077.exe `
+  --proxy-dll-name dxgi.dll `
+  --installer-version 1.0.0 `
+  --mode lite `
+  --output $Stage `
+  --require-artifacts
+
+candle.exe -nologo -dArtifactDir="$Stage" "$Stage\oss_capture_installer.wxs" -out "$Stage\oss_capture_installer.wixobj"
+light.exe -nologo -ext WixUtilExtension "$Stage\oss_capture_installer.wixobj" -out "$Stage\oss_capture_cyberpunk_v1.0.0.msi"
+
+msiexec.exe /i "$Stage\oss_capture_cyberpunk_v1.0.0.msi" GAME_BIN_X64_DIR="$GameBin"
 ```
 
-Output: `build\Release\dxgi.dll`.
+The CMake build also leaves the game-local proxy at
+`build\interception\Release\dxgi.dll`. The installer stage consumes the
+canonical copy named `oss_capture.dll`, then installs it as `dxgi.dll`.
 
 To use clang-cl instead of MSVC:
 
-```bat
-cmake -S . -B build-clang -T ClangCL -A x64
-cmake --build build-clang --config Release
+```powershell
+cmake -S oss\gaussian\interception -B build\interception-clang -G "Visual Studio 17 2022" -T ClangCL -A x64
+cmake --build build\interception-clang --config Release
 ```
 
 ## Verify the build
 
-```bat
-dumpbin /exports build\Release\dxgi.dll
+```powershell
+dumpbin /exports build\interception\Release\dxgi.dll
+python scripts\build_capture_installer.py --game cyberpunk-2077 --game-exe-name Cyberpunk2077.exe --proxy-dll-name dxgi.dll --output $Stage --require-artifacts
 ```
 
 Expected exports (Sprint 2 scaffold):
@@ -120,21 +157,20 @@ The DXGI proxy exports (`CreateDXGIFactory*`, `DXGIGetDebugInterface1`, the
 PIX/Compat/DXGID3D10 surface, etc.) are added in **T2.3** via
 `src/dxgi_proxy.cpp` (runtime LoadLibrary + GetProcAddress trampolines).
 
-## Install (Cyberpunk 2077)
+## Manual Install (Cyberpunk 2077)
 
-Sprint 2 install/uninstall scripts land in T2.12 under `scripts/install.ps1`
-and `scripts/uninstall.ps1`. Until then, manual steps:
+Prefer the MSI flow above. For a direct smoke test:
 
 1. Quit Cyberpunk.
-2. Back up: `copy "<Cyberpunk root>\bin\x64\nvngx_dlss.dll" nvngx_dlss.dll.real`.
-3. Drop our DLL: `copy build\Release\dxgi.dll "<Cyberpunk root>\bin\x64\dxgi.dll"`.
+2. Back up any existing `dxgi.dll` in `<Cyberpunk root>\bin\x64\`.
+3. Drop our DLL: `copy build\interception\Release\dxgi.dll "<Cyberpunk root>\bin\x64\dxgi.dll"`.
 4. **Disable Path Tracing** in Settings → Graphics (Sprint 2 does not handle DLSS-RR).
 
 To roll back:
 
 1. Quit Cyberpunk.
 2. Delete `<Cyberpunk root>\bin\x64\dxgi.dll`.
-3. `move nvngx_dlss.dll.real nvngx_dlss.dll` (back to the original name).
+3. Restore the previous `dxgi.dll` if one existed.
 
 If `dxgi.dll` collides with another mod (Special K, ReShade), rename our DLL
 to one of the OptiScaler fallback names: `winmm.dll`, `version.dll`,

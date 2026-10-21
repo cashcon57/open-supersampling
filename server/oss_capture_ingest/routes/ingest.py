@@ -30,6 +30,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from pathlib import PurePath, PureWindowsPath
 from typing import Any, Dict, Optional
 
 # These modules are only imported transitively from create_app(), which
@@ -81,6 +82,43 @@ async def _read_upload_body(upload, max_bytes: int) -> bytes:
             raise ValueError("too_large")
         chunks.append(chunk)
     return b"".join(chunks)
+
+
+def _validate_frame_filename(upload: UploadFile, frame_uuid: str) -> None:
+    """Reject multipart filenames that contradict the metadata identity."""
+
+    filename = upload.filename
+    if filename is None:
+        return
+    leaf = PurePath(PureWindowsPath(filename).name).name
+    if filename != leaf:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "frame_filename_has_path",
+                "message": "frame filename must not contain path components",
+                "filename": filename,
+            },
+        )
+    if PurePath(leaf).suffix.lower() != ".exr":
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "frame_filename_bad_suffix",
+                "message": "frame filename must end with .exr",
+                "filename": filename,
+            },
+        )
+    if PurePath(leaf).stem != frame_uuid:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "frame_filename_mismatch",
+                "message": "frame filename stem must match metadata frame_uuid",
+                "filename": filename,
+                "frame_uuid": frame_uuid,
+            },
+        )
 
 
 def build_router(*, max_frame_bytes: int = MAX_FRAME_BYTES) -> APIRouter:
@@ -156,6 +194,7 @@ def build_router(*, max_frame_bytes: int = MAX_FRAME_BYTES) -> APIRouter:
             normalized = validate_metadata(meta_obj)
         except SchemaError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
+        _validate_frame_filename(frame, normalized["frame_uuid"])
 
         # ---- per-game attempt rate limit --------------------------------
         # game_id is now validated; check the per-(token, game) budget.
@@ -227,6 +266,10 @@ def build_router(*, max_frame_bytes: int = MAX_FRAME_BYTES) -> APIRouter:
         )
 
         meta_with_hash = dict(normalized)
+        consent_token = str(meta_with_hash.pop("user_consent_token", ""))
+        meta_with_hash["contributor_hash"] = hashlib.sha256(
+            f"{token}:{consent_token}".encode("utf-8")
+        ).hexdigest()
         meta_with_hash["content_sha256"] = content_hash
         meta_with_hash["frame_bytes"] = len(frame_bytes)
         meta_bytes = json.dumps(meta_with_hash, sort_keys=True).encode("utf-8")

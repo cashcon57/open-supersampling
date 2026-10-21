@@ -3,6 +3,9 @@
 **Date:** 2026-05-08
 **Parent spec:** `docs/superpowers/specs/2026-05-04-oss-capture-tool-design.md`
 **Prior handoff:** `docs/archive/coordination/codex-handoff-2026-05-06-capture.md`
+**Current production gate:** `docs/coordination/capture-production-readiness.md`
+
+> Status update, 2026-05-11: this file contains useful phase history, but the state audit below is stale in places. Current repo state has Detours vendored, a DLL config reader, D3D12 hook telemetry, installer input/WiX generation, tray flow, ingest, uploader, and docs. The missing production work is now narrower and harder: real NGX/DLSS pass-through, parameter extraction, safe D3D12 readback, valid multi-channel EXR emission, MSI compile/sign/install smoke, and a reproducible Cyberpunk benchmark capture accepted by the training loader.
 
 ## A. State audit
 

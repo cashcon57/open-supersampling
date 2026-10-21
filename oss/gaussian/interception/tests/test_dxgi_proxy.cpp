@@ -25,6 +25,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <chrono>
+#include <thread>
 
 namespace {
 
@@ -67,6 +69,26 @@ int main(int argc, char** argv) {
 
     HMODULE proxy = LoadLibraryA(argv[1]);
     if (!proxy) return Fail("LoadLibraryA(proxy) failed", GetLastError());
+
+    using InitFn = unsigned int(WINAPI*)();
+    auto pIsInitialized =
+        reinterpret_cast<InitFn>(GetProcAddress(proxy, "oss_gaussian_is_initialized"));
+    if (!pIsInitialized) {
+        FreeLibrary(proxy);
+        return Fail("oss_gaussian_is_initialized resolve");
+    }
+    bool initialized = false;
+    for (int i = 0; i < 100; ++i) {
+        if (pIsInitialized() != 0) {
+            initialized = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(25));
+    }
+    if (!initialized) {
+        FreeLibrary(proxy);
+        return Fail("async DLL initializer did not complete");
+    }
 
     int missing = 0;
     for (const char* name : kRequiredExports) {

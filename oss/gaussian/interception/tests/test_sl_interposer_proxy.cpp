@@ -12,40 +12,53 @@
 
 namespace {
 
-constexpr const char* kRequiredExports[] = {
-    "CreateDXGIFactory",
-    "CreateDXGIFactory1",
-    "CreateDXGIFactory2",
-    "D3D11CreateDevice",
-    "D3D11CreateDeviceAndSwapChain",
-    "D3D12CreateDevice",
-    "D3D12CreateRootSignatureDeserializer",
-    "D3D12CreateVersionedRootSignatureDeserializer",
-    "D3D12EnableExperimentalFeatures",
-    "D3D12GetDebugInterface",
-    "D3D12GetInterface",
-    "D3D12SerializeRootSignature",
-    "D3D12SerializeVersionedRootSignature",
-    "DXGIGetDebugInterface1",
-    "slAllocateResources",
-    "slEvaluateFeature",
-    "slFreeResources",
-    "slGetFeatureFunction",
-    "slGetFeatureRequirements",
-    "slGetFeatureVersion",
-    "slGetNativeInterface",
-    "slGetNewFrameToken",
-    "slInit",
-    "slIsFeatureLoaded",
-    "slIsFeatureSupported",
-    "slSetConstants",
-    "slSetD3DDevice",
-    "slSetFeatureLoaded",
-    "slSetTag",
-    "slSetTagForFrame",
-    "slSetVulkanInfo",
-    "slShutdown",
-    "slUpgradeInterface",
+struct ExportSpec {
+    const char* name;
+    WORD ordinal;
+};
+
+constexpr ExportSpec kRequiredExports[] = {
+    {"CreateDXGIFactory", 1},
+    {"CreateDXGIFactory1", 2},
+    {"CreateDXGIFactory2", 3},
+    {"D3D11CreateDevice", 4},
+    {"D3D11CreateDeviceAndSwapChain", 5},
+    {"D3D12CreateDevice", 6},
+    {"D3D12CreateRootSignatureDeserializer", 7},
+    {"D3D12CreateVersionedRootSignatureDeserializer", 8},
+    {"D3D12EnableExperimentalFeatures", 9},
+    {"D3D12GetDebugInterface", 10},
+    {"D3D12GetInterface", 11},
+    {"D3D12SerializeRootSignature", 12},
+    {"D3D12SerializeVersionedRootSignature", 13},
+    {"DXGIGetDebugInterface1", 14},
+    {"slAllocateResources", 15},
+    {"slEvaluateFeature", 16},
+    {"slFreeResources", 17},
+    {"slGetFeatureFunction", 18},
+    {"slGetFeatureRequirements", 19},
+    {"slGetFeatureVersion", 20},
+    {"slGetNativeInterface", 21},
+    {"slGetNewFrameToken", 22},
+    {"slInit", 23},
+    {"slIsFeatureLoaded", 24},
+    {"slIsFeatureSupported", 25},
+    {"slSetConstants", 26},
+    {"slSetD3DDevice", 27},
+    {"slSetFeatureLoaded", 28},
+    {"slSetTag", 29},
+    {"slSetVulkanInfo", 30},
+    {"slShutdown", 31},
+    {"slUpgradeInterface", 32},
+};
+
+constexpr const char* kForbiddenExports[] = {
+    "OssgSlEvaluateFeature",
+    "OssgSlGetFeatureFunction",
+    "OssgSlInit",
+    "OssgSlSetD3DDevice",
+    "OssgSlSetTag",
+    "OssgSlSetTagForFrame",
 };
 
 int Fail(const char* msg, DWORD err = 0) {
@@ -65,11 +78,29 @@ int main(int argc, char** argv) {
     if (!proxy) return Fail("LoadLibraryA(proxy) failed", GetLastError());
 
     int missing = 0;
-    for (const char* name : kRequiredExports) {
-        if (!GetProcAddress(proxy, name)) {
-            std::fprintf(stderr, "[test_sl_interposer_proxy] missing export: %s\n", name);
+    for (const ExportSpec& spec : kRequiredExports) {
+        FARPROC by_name = GetProcAddress(proxy, spec.name);
+        FARPROC by_ordinal = GetProcAddress(proxy, MAKEINTRESOURCEA(spec.ordinal));
+        if (!by_name || !by_ordinal) {
+            std::fprintf(stderr, "[test_sl_interposer_proxy] missing export: %s @%u\n",
+                         spec.name, spec.ordinal);
+            ++missing;
+        } else if (by_name != by_ordinal) {
+            std::fprintf(stderr,
+                         "[test_sl_interposer_proxy] name/ordinal mismatch: %s @%u\n",
+                         spec.name, spec.ordinal);
             ++missing;
         }
+    }
+    for (const char* name : kForbiddenExports) {
+        if (GetProcAddress(proxy, name)) {
+            std::fprintf(stderr, "[test_sl_interposer_proxy] unexpected export: %s\n", name);
+            ++missing;
+        }
+    }
+    if (!GetProcAddress(proxy, "slSetTagForFrame")) {
+        std::fprintf(stderr, "[test_sl_interposer_proxy] missing compatibility export: slSetTagForFrame\n");
+        ++missing;
     }
     if (missing) {
         FreeLibrary(proxy);
@@ -89,7 +120,7 @@ int main(int argc, char** argv) {
     }
 
     FreeLibrary(proxy);
-    std::printf("[test_sl_interposer_proxy] OK: %zu exports resolved; missing-real call failed closed\n",
+    std::printf("[test_sl_interposer_proxy] OK: %zu ordinal exports resolved; missing-real call failed closed\n",
                 sizeof(kRequiredExports) / sizeof(kRequiredExports[0]));
     return 0;
 }

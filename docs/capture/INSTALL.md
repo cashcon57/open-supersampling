@@ -1,10 +1,23 @@
 # OSS Capture Tool Install Runbook
 
-This runbook is for the per-game OSS Capture Tool MSI. The tool captures selected gameplay frames for OSS training data, uploads accepted captures automatically, and deletes local frame files after upload or terminal rejection.
+> Pre-release/operator-only. No public MSI is production-ready yet. Today the harness can validate ingest and synthetic upload; real D3D12/DLSS frame capture is not accepted as training data until the Cyberpunk readiness gate passes.
+
+This runbook is for the per-game OSS Capture Tool MSI once the production readiness gate is green. The intended tool captures selected gameplay frames for OSS training data, uploads accepted captures automatically, and deletes local frame files after successful upload or terminal rejection.
 
 Maintainer context: [capture next phases](../coordination/capture-tool-next-phases.md) and [capture tool design](../superpowers/specs/2026-05-04-oss-capture-tool-design.md).
 
 Before installing, check the [supported games policy](SUPPORTED_GAMES.md).
+
+## Production Readiness Checklist
+
+- [ ] MSI built from WiX and installed on a clean Windows host.
+- [ ] DLL loads through game-local proxy without game crash.
+- [ ] Present/ExecuteCommandLists hooks active; hook status not failed.
+- [ ] Active upscaler dispatch params decoded for LR, HR, depth, motion, and jitter.
+- [ ] EXR output contains required channels, not `.raw` staging dumps.
+- [ ] Uploader deletes 2xx and terminal 4xx, preserves 429/5xx/network retryables, and enforces the pending cap.
+- [ ] R2 object, metadata sidecar, and `_index.parquet` row are visible.
+- [ ] Uninstall restores prior proxy DLL and removes scheduled task/cache.
 
 ## Install
 
@@ -14,8 +27,11 @@ Before installing, check the [supported games policy](SUPPORTED_GAMES.md).
    - Example shape: `...\SteamLibrary\steamapps\common\<Game Name>\`
    - The installer verifies the expected game executable under the game install tree.
 4. Choose a capture mode. `lite` is the default.
-5. Click **Install**.
-6. Done. Leave the OSS Capture tray app running while you play.
+5. Choose a storage mode:
+   - `local`: capture to disk only; nothing is uploaded.
+   - `upload`: send accepted captures to the configured ingest service/R2 bucket.
+6. Click **Install**.
+7. Done. Leave the OSS Capture tray app running while you play.
 
 ## What Gets Installed
 
@@ -28,20 +44,50 @@ The installer creates:
   - pending capture files under `pending\<game_id>\<session_uuid>\` while they are waiting to upload
 - A game-local proxy DLL in the game's binary directory, usually:
   - `<game install dir>\bin\x64\dxgi.dll`
+  - `<game install dir>\bin\x64\nvngx_dlss.dll`
+  - `<game install dir>\bin\x64\sl.interposer.dll`
+  - `<game install dir>\bin\x64\ffx_fsr3_x64.dll`
 
-If a proxy DLL with the same name already exists, the installer backs it up before installing the OSS Capture proxy.
+`dxgi.dll` installs the DXGI/D3D12 hooks. Vendor upscaler proxies such as `nvngx_dlss.dll`, `sl.interposer.dll`, and `ffx_fsr3_x64.dll` install pass-through hooks and forward to the real vendor DLL. If a proxy DLL with the same name already exists, the installer backs it up before installing the OSS Capture proxy.
 
-Pending captures are temporary. Successful uploads are deleted immediately. Rejected captures are deleted instead of retried. Network/server failures are retried with backoff, then dropped rather than filling the disk.
+In `local` storage mode, captures stay on disk and the uploader leaves them alone. In `upload` storage mode, pending captures are temporary: successful uploads are deleted immediately, terminal rejected captures are deleted instead of retried, and rate limits/network/server failures stay pending for later scheduled passes. The pending-dir cap evicts oldest frames if the uploader cannot catch up.
 
 ## Tray Menu
 
 Use the OSS Capture tray icon for routine controls:
 
 - **Change capture mode**: switch between capture modes after install.
+- **Change storage mode**: switch between local-only capture and upload-to-R2 for future sessions.
 - **Open log dir**: open the local OSS Capture log directory.
 - **Force flush pending**: immediately ask the uploader to drain pending captures instead of waiting for the next scheduled pass.
 
 Mode changes apply to future capture work. If a game is already running, restart the game if the new mode does not take effect immediately.
+
+## Cyberpunk Readiness Harness
+
+For the Cyberpunk 2077 validation host, use the programmatic harness before installing or dogfooding a build. It verifies ingest, generates the Cyberpunk installer config inputs, optionally launches the game benchmark, runs a synthetic fallback capture when a token is available, and prints a JSON readiness report.
+
+Local Windows run from the repo root:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\cyberpunk_capture_harness.ps1 `
+  -RepoPath C:\Users\<you>\OpenSuperSampling `
+  -StartIngest `
+  -MintLocalToken
+```
+
+SSH run through PowerShell remoting over an existing SSH config or tailnet hostname:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\cyberpunk_capture_harness.ps1 `
+  -HostName <windows-3080ti-host> `
+  -RepoPath C:\Users\<you>\OpenSuperSampling `
+  -Server http://127.0.0.1:8080 `
+  -StartIngest `
+  -MintLocalToken
+```
+
+If Cyberpunk is not in a standard install path, add `-CyberpunkExe "D:\Games\Cyberpunk 2077\bin\x64\Cyberpunk2077.exe"`. Add `-LaunchCyberpunk` only when you want the harness to start the game; otherwise it only reports whether the executable was found. To use an existing ingest token, pass `-Token` or set `OSS_CAPTURE_INSTALL_TOKEN` instead of `-MintLocalToken`.
 
 ## Bandwidth
 

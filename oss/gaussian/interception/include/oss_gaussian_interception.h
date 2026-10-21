@@ -23,7 +23,9 @@ extern "C" {
 #endif
 
 #if defined(_WIN32)
-#  if defined(OSS_GAUSSIAN_BUILDING_DLL)
+#  if defined(OSS_GAUSSIAN_SUPPRESS_PUBLIC_EXPORTS)
+#    define OSS_GAUSSIAN_API
+#  elif defined(OSS_GAUSSIAN_BUILDING_DLL)
 #    define OSS_GAUSSIAN_API __declspec(dllexport)
 #  else
 #    define OSS_GAUSSIAN_API __declspec(dllimport)

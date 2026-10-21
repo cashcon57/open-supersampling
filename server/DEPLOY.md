@@ -80,12 +80,10 @@ python scripts/build_capture_installer.py \
   --game-exe-name Cyberpunk2077.exe \
   --proxy-dll-name dxgi.dll \
   --capture-api-base https://capture.oss-supersampling.dev \
-  --token <UUID-from-mint-token> \
+  --install-token <UUID-from-mint-token> \
   --mode lite \
   --output ./out/installer-cp77/
 ```
-
-(`--mode` flag pending on Codex C24 in R9 ask.)
 
 ## Smoke test from local
 

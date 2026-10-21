@@ -186,7 +186,17 @@ if(TARGET OpenEXR::OpenEXR)
 endif()
 
 add_library(oss_gaussian_streamline_interposer SHARED
-    ${INTERCEPTION_SOURCES}
+    oss_capture.cpp
+    exr_writer.cpp
+    perceptual_hash.cpp
+    src/dllmain.cpp
+    src/d3d12_hooks.cpp
+    src/staging_copy.cpp
+    src/dll_config.cpp
+    src/ngx_frame_capture.cpp
+    src/sl_interposer_proxy.cpp
+    src/g_buffer_extractor.cpp
+    src/log.cpp
     ${INTERCEPTION_HEADERS}
     src/sl_interposer_proxy.def)
 
@@ -211,7 +221,8 @@ target_compile_definitions(oss_gaussian_streamline_interposer
     PRIVATE
         OSS_GAUSSIAN_NO_SYSTEM_PROXY_ATTACH=1
         OSS_GAUSSIAN_DEFER_NATIVE_ATTACH=1
-        OSS_GAUSSIAN_PROXY_EXPORT_LIGHTWEIGHT_INIT=1)
+        OSS_GAUSSIAN_PROXY_EXPORT_LIGHTWEIGHT_INIT=1
+        OSS_GAUSSIAN_SUPPRESS_PUBLIC_EXPORTS=1)
 
 if(TARGET OpenEXR::OpenEXR)
     target_compile_definitions(oss_gaussian_streamline_interposer PRIVATE OSS_CAPTURE_HAS_OPENEXR=1)
@@ -343,11 +354,24 @@ add_custom_command(TARGET oss_gaussian_ffx_backend_dx12_interception POST_BUILD
             "$<TARGET_FILE_DIR:oss_gaussian_ffx_backend_dx12_interception>/oss_capture_ffx_backend_dx12.dll"
     COMMENT "Staging FFX DX12 backend artifact ffx_backend_dx12_x64.dll / oss_capture_ffx_backend_dx12.dll")
 
-add_library(oss_gaussian_ffx_api_interception SHARED
+set(FFX_API_INTERCEPTION_SOURCES
+    oss_capture.cpp
+    exr_writer.cpp
+    perceptual_hash.cpp
+    src/dllmain.cpp
+    src/d3d12_hooks.cpp
+    src/staging_copy.cpp
+    src/dll_config.cpp
+    src/ngx_passthrough.cpp
+    src/ngx_frame_capture.cpp
     src/ffx_api_proxy.cpp
+    src/g_buffer_extractor.cpp
+    src/log.cpp)
+
+add_library(oss_gaussian_ffx_api_interception SHARED
+    ${FFX_API_INTERCEPTION_SOURCES}
+    ${INTERCEPTION_HEADERS}
     src/ffx_api_proxy.h
-    src/log.cpp
-    src/log.h
     src/ffx_api_proxy.def)
 
 set_target_properties(oss_gaussian_ffx_api_interception PROPERTIES
@@ -362,7 +386,21 @@ target_include_directories(oss_gaussian_ffx_api_interception
     PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 
 target_link_libraries(oss_gaussian_ffx_api_interception
-    PRIVATE shlwapi)
+    PRIVATE
+        detours
+        version
+        shlwapi)
+
+target_compile_definitions(oss_gaussian_ffx_api_interception
+    PRIVATE
+        OSS_GAUSSIAN_NO_SYSTEM_PROXY_ATTACH=1
+        OSS_GAUSSIAN_DEFER_NATIVE_ATTACH=1
+        OSS_GAUSSIAN_PROXY_EXPORT_LIGHTWEIGHT_INIT=1)
+
+if(TARGET OpenEXR::OpenEXR)
+    target_compile_definitions(oss_gaussian_ffx_api_interception PRIVATE OSS_CAPTURE_HAS_OPENEXR=1)
+    target_link_libraries(oss_gaussian_ffx_api_interception PRIVATE OpenEXR::OpenEXR)
+endif()
 
 add_custom_command(TARGET oss_gaussian_ffx_api_interception POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -429,6 +467,14 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_dxgi_proxy.cpp")
     add_test(
         NAME    test_dxgi_proxy
         COMMAND test_dxgi_proxy "$<TARGET_FILE:oss_gaussian_interception>")
+endif()
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_d3d12_hook_status_compile.cpp")
+    add_executable(test_d3d12_hook_status_compile
+        tests/test_d3d12_hook_status_compile.cpp)
+    target_include_directories(test_d3d12_hook_status_compile
+        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    add_test(NAME test_d3d12_hook_status_compile COMMAND test_d3d12_hook_status_compile)
 endif()
 
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_ngx_exports.cpp")

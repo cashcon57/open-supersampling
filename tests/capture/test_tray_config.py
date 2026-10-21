@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
 import time
 from pathlib import Path
 
@@ -33,6 +32,9 @@ def test_config_load_returns_defaults_when_no_file(monkeypatch, tmp_path) -> Non
     assert cfg.paused is False
     assert cfg.enabled_games == {}
     assert cfg.disk_cap_bytes == cfg_mod.DEFAULT_DISK_CAP_BYTES
+    assert cfg.capture_api_base == cfg_mod.DEFAULT_CAPTURE_API_BASE
+    assert cfg.capture_storage_mode == "local"
+    assert cfg.dry_run_launch is False
 
 
 def test_config_save_then_load_roundtrips(monkeypatch, tmp_path) -> None:
@@ -43,9 +45,13 @@ def test_config_save_then_load_roundtrips(monkeypatch, tmp_path) -> None:
         paused=True,
         enabled_games={"cyberpunk-2077": True, "alan-wake-2": False},
         disk_cap_bytes=50 * 1024**3,
+        capture_api_base="https://capture.example.test/",
+        capture_storage_mode="upload",
+        dry_run_launch=True,
     )
     cfg_mod.save(written)
     read_back = cfg_mod.load()
+    written.capture_api_base = "https://capture.example.test"
     assert read_back == written
 
 
@@ -73,9 +79,24 @@ def test_config_unknown_keys_are_dropped(monkeypatch, tmp_path) -> None:
     assert cfg.capture_mode == "regular"
 
 
+def test_config_invalid_persisted_values_fall_back_to_defaults(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(cfg_mod, "_config_dir", lambda: tmp_path)
+    (tmp_path / "tray-config.json").write_text(
+        json.dumps({"capture_mode": "BROKEN"}),
+        encoding="utf-8",
+    )
+    cfg = cfg_mod.load()
+    assert cfg.capture_mode == "lite"
+
+
 def test_config_invalid_mode_raises() -> None:
     with pytest.raises(ValueError, match="capture_mode"):
         cfg_mod.TrayConfig(capture_mode="ULTRA-DUPER-MODE")
+
+
+def test_config_invalid_storage_mode_raises() -> None:
+    with pytest.raises(ValueError, match="capture_storage_mode"):
+        cfg_mod.TrayConfig(capture_storage_mode="internet")
 
 
 def test_config_too_small_disk_cap_raises() -> None:

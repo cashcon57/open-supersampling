@@ -23,43 +23,24 @@
 // =============================================================================
 #include "dxgi_proxy.h"
 
+#include "d3d12_hooks.h"
 #include "log.h"
 
 #include <Windows.h>
 #include <dxgi.h>
 #include <dxgi1_3.h>
 
+#include <mutex>
+
 namespace oss_gaussian {
 
 namespace {
 
 // HMODULE for C:\Windows\System32\dxgi.dll. Set in Attach, cleared in Detach.
-// Loader-locked access only on Attach/Detach; per-call reads are racy-tolerant
-// (the value is only ever set once, then cleared at process exit).
 HMODULE g_systemDxgi = nullptr;
+std::mutex g_systemDxgiMu;
 
-// Resolve a symbol from g_systemDxgi, log a miss if absent. Templated so each
-// trampoline gets its own function-local static cache.
-template <typename Fn>
-Fn ResolveOnce(const char* name, Fn& cache) {
-    if (cache) return cache;
-    if (!g_systemDxgi) {
-        OSSG_LOG_WARN("dxgi_proxy",
-                      "%s: forward miss; system32 dxgi.dll not loaded", name);
-        return nullptr;
-    }
-    cache = reinterpret_cast<Fn>(GetProcAddress(g_systemDxgi, name));
-    if (!cache) {
-        OSSG_LOG_WARN("dxgi_proxy",
-                      "%s: forward miss; system32 dxgi.dll did not export this symbol",
-                      name);
-    }
-    return cache;
-}
-
-} // namespace
-
-bool OssGaussianDxgiProxyAttach() {
+bool EnsureSystemDxgiLoadedLocked() {
     if (g_systemDxgi) return true;
 
     // Absolute path. Never rely on PATH/SafeDllSearchMode — that risks the
@@ -76,7 +57,37 @@ bool OssGaussianDxgiProxyAttach() {
     return true;
 }
 
+// Resolve a symbol from g_systemDxgi, log a miss if absent. Templated so each
+// trampoline gets its own function-local static cache.
+template <typename Fn>
+Fn ResolveOnce(const char* name, Fn& cache) {
+    if (cache) return cache;
+
+    std::lock_guard<std::mutex> lk(g_systemDxgiMu);
+    if (cache) return cache;
+    if (!EnsureSystemDxgiLoadedLocked()) {
+        OSSG_LOG_WARN("dxgi_proxy",
+                      "%s: forward miss; system32 dxgi.dll not loaded", name);
+        return nullptr;
+    }
+    cache = reinterpret_cast<Fn>(GetProcAddress(g_systemDxgi, name));
+    if (!cache) {
+        OSSG_LOG_WARN("dxgi_proxy",
+                      "%s: forward miss; system32 dxgi.dll did not export this symbol",
+                      name);
+    }
+    return cache;
+}
+
+} // namespace
+
+bool OssGaussianDxgiProxyAttach() {
+    std::lock_guard<std::mutex> lk(g_systemDxgiMu);
+    return EnsureSystemDxgiLoadedLocked();
+}
+
 void OssGaussianDxgiProxyDetach() {
+    std::lock_guard<std::mutex> lk(g_systemDxgiMu);
     if (g_systemDxgi) {
         FreeLibrary(g_systemDxgi);
         g_systemDxgi = nullptr;
@@ -101,6 +112,7 @@ void OssGaussianDxgiProxyDetach() {
     extern "C" HRESULT WINAPI IMPL_NAME SIG {                                 \
         using Fn = HRESULT(WINAPI*) SIG;                                      \
         static Fn fn = nullptr;                                               \
+        ::oss_gaussian::OssGaussianEnsureInitializedFromProxyExport();        \
         Fn resolved = ::oss_gaussian::ResolveOnce<Fn>(EXPORT_NAME, fn);       \
         if (!resolved) return E_NOTIMPL;                                      \
         return resolved ARGS;                                                 \
@@ -111,6 +123,7 @@ void OssGaussianDxgiProxyDetach() {
     extern "C" void WINAPI IMPL_NAME SIG {                                    \
         using Fn = void(WINAPI*) SIG;                                         \
         static Fn fn = nullptr;                                               \
+        ::oss_gaussian::OssGaussianEnsureInitializedFromProxyExport();        \
         Fn resolved = ::oss_gaussian::ResolveOnce<Fn>(EXPORT_NAME, fn);       \
         if (!resolved) return;                                                \
         resolved ARGS;                                                        \
@@ -121,6 +134,7 @@ void OssGaussianDxgiProxyDetach() {
     extern "C" int WINAPI IMPL_NAME SIG {                                     \
         using Fn = int(WINAPI*) SIG;                                          \
         static Fn fn = nullptr;                                               \
+        ::oss_gaussian::OssGaussianEnsureInitializedFromProxyExport();        \
         Fn resolved = ::oss_gaussian::ResolveOnce<Fn>(EXPORT_NAME, fn);       \
         if (!resolved) return 0;                                              \
         return resolved ARGS;                                                 \
@@ -130,9 +144,51 @@ void OssGaussianDxgiProxyDetach() {
 //  Documented public DXGI exports.
 // -----------------------------------------------------------------------------
 
-OSSG_DXGI_FWD_HRESULT(OssgCreateDXGIFactory,  "CreateDXGIFactory",  (REFIID riid, void** ppFactory), (riid, ppFactory))
-OSSG_DXGI_FWD_HRESULT(OssgCreateDXGIFactory1, "CreateDXGIFactory1", (REFIID riid, void** ppFactory), (riid, ppFactory))
-OSSG_DXGI_FWD_HRESULT(OssgCreateDXGIFactory2, "CreateDXGIFactory2", (UINT Flags, REFIID riid, void** ppFactory), (Flags, riid, ppFactory))
+extern "C" HRESULT WINAPI OssgCreateDXGIFactory(REFIID riid, void** ppFactory) {
+    using Fn = HRESULT(WINAPI*)(REFIID, void**);
+    static Fn fn = nullptr;
+    ::oss_gaussian::OssGaussianEnsureInitializedFromProxyExport();
+    Fn resolved = ::oss_gaussian::ResolveOnce<Fn>("CreateDXGIFactory", fn);
+    if (!resolved) return E_NOTIMPL;
+    HRESULT hr = resolved(riid, ppFactory);
+    OSSG_LOG_INFO("dxgi_proxy", "CreateDXGIFactory hr=0x%08lx factory=%p",
+                  hr, ppFactory ? *ppFactory : nullptr);
+    if (SUCCEEDED(hr) && ppFactory && *ppFactory) {
+        ::oss_gaussian::NotifyDxgiFactoryCreatedForCapture(*ppFactory);
+    }
+    return hr;
+}
+
+extern "C" HRESULT WINAPI OssgCreateDXGIFactory1(REFIID riid, void** ppFactory) {
+    using Fn = HRESULT(WINAPI*)(REFIID, void**);
+    static Fn fn = nullptr;
+    ::oss_gaussian::OssGaussianEnsureInitializedFromProxyExport();
+    Fn resolved = ::oss_gaussian::ResolveOnce<Fn>("CreateDXGIFactory1", fn);
+    if (!resolved) return E_NOTIMPL;
+    HRESULT hr = resolved(riid, ppFactory);
+    OSSG_LOG_INFO("dxgi_proxy", "CreateDXGIFactory1 hr=0x%08lx factory=%p",
+                  hr, ppFactory ? *ppFactory : nullptr);
+    if (SUCCEEDED(hr) && ppFactory && *ppFactory) {
+        ::oss_gaussian::NotifyDxgiFactoryCreatedForCapture(*ppFactory);
+    }
+    return hr;
+}
+
+extern "C" HRESULT WINAPI OssgCreateDXGIFactory2(UINT Flags, REFIID riid, void** ppFactory) {
+    using Fn = HRESULT(WINAPI*)(UINT, REFIID, void**);
+    static Fn fn = nullptr;
+    ::oss_gaussian::OssGaussianEnsureInitializedFromProxyExport();
+    Fn resolved = ::oss_gaussian::ResolveOnce<Fn>("CreateDXGIFactory2", fn);
+    if (!resolved) return E_NOTIMPL;
+    HRESULT hr = resolved(Flags, riid, ppFactory);
+    OSSG_LOG_INFO("dxgi_proxy", "CreateDXGIFactory2 flags=%u hr=0x%08lx factory=%p",
+                  Flags, hr, ppFactory ? *ppFactory : nullptr);
+    if (SUCCEEDED(hr) && ppFactory && *ppFactory) {
+        ::oss_gaussian::NotifyDxgiFactoryCreatedForCapture(*ppFactory);
+    }
+    return hr;
+}
+
 OSSG_DXGI_FWD_HRESULT(OssgDXGIDeclareAdapterRemovalSupport, "DXGIDeclareAdapterRemovalSupport", (void), ())
 OSSG_DXGI_FWD_HRESULT(OssgDXGIGetDebugInterface1, "DXGIGetDebugInterface1", (UINT Flags, REFIID riid, void** pDebug), (Flags, riid, pDebug))
 
