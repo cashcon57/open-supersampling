@@ -42,6 +42,18 @@ if [[ ! -d "$SECRETS" ]]; then
   exit 2
 fi
 
+# Non-interactive auth. wrangler's stored OAuth login expires and can't be
+# refreshed from launchd, which silently broke every run from 2026-05-15 to
+# 2026-10-21. Use the account API token from .secrets instead.
+if [[ -z "${CLOUDFLARE_API_TOKEN:-}" && -f "${SECRETS}/cloudflare-api-token.txt" ]]; then
+  CLOUDFLARE_API_TOKEN="$(tr -d '\r\n' < "${SECRETS}/cloudflare-api-token.txt")"
+  export CLOUDFLARE_API_TOKEN
+fi
+if [[ -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
+  echo "missing CLOUDFLARE_API_TOKEN and ${SECRETS}/cloudflare-api-token.txt" >&2
+  exit 4
+fi
+
 AGE_PUB_FILE="${SECRETS}/age-public-key.txt"
 if [[ ! -f "$AGE_PUB_FILE" ]]; then
   echo "missing $AGE_PUB_FILE — run age-keygen first" >&2
@@ -80,8 +92,11 @@ echo "[$(date '+%H:%M:%S')] done — backup at r2://${BUCKET}/${KEY}"
 # (1st-of-month). Daily older than 14 days that are NOT 1st-of-month get
 # deleted. Stops the bucket from growing unbounded.
 echo "[$(date '+%H:%M:%S')] pruning old backups..."
-ALL_KEYS="$(CLOUDFLARE_ACCOUNT_ID="$CF_ACCOUNT" wrangler r2 object list "$BUCKET" --remote 2>/dev/null \
-  | awk '/^secrets-/ {print $1}' || true)"
+# wrangler has no `r2 object list`, so list through the Cloudflare API.
+ALL_KEYS="$(curl -fsS -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+  "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT}/r2/buckets/${BUCKET}/objects?per_page=1000" \
+  | python3 -c 'import json,sys; [print(o["key"]) for o in json.load(sys.stdin).get("result") or [] if o["key"].startswith("secrets-")]' \
+  || true)"
 NOW_EPOCH="$(date -u +%s)"
 THIRTEEN_DAYS_AGO="$((NOW_EPOCH - 13 * 86400))"
 
@@ -121,9 +136,10 @@ echo "[$(date '+%H:%M:%S')] retention prune complete."
 #      c) a fresh keypair you generated and shared with a buddy beforehand
 #
 # 3. Find the latest backup blob:
-#      export CLOUDFLARE_ACCOUNT_ID=c067afd6ea60a95b946c63c599095a65
-#      wrangler r2 object list oss-secrets-backup --remote
-#      # pick latest secrets-<host>-<ts>.tar.gz.age
+#      Cloudflare dashboard → R2 → oss-secrets-backup, or with an API token:
+#      curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+#        "https://api.cloudflare.com/client/v4/accounts/c067afd6ea60a95b946c63c599095a65/r2/buckets/oss-secrets-backup/objects?per_page=1000"
+#      # pick latest secrets-<host>-<ts>.tar.gz.age (wrangler has no object list)
 #
 # 4. Download:
 #      wrangler r2 object get oss-secrets-backup/<KEY> --file=/tmp/restore.tar.gz.age --remote
