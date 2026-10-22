@@ -22,11 +22,11 @@ Sources:
 Repo/cron scan at 2026-06-12 23:23 CDT found these research inputs landed since 2026-06-08:
 
 - `docs/research/hypotheses/H011-v7-thin-structure-error-residuals.md` — filed 2026-06-08 from manual dashboard viz inspection around `srcnn-v7.0-pico-005` step ~19K. It classifies bright crossbar/mullion patterns in the `|err v7 alpha=0.5|` panel as likely thin-structure edge-alignment / contrast residuals, **not** duplicated geometry in RGB and **not** a training blocker by itself. Escalate only if RGB duplication, flicker/crawl, worsening metrics, or broad recurrence appears. Sources: `docs/research/hypotheses/H011-v7-thin-structure-error-residuals.md:5-12`, `:26-45`.
-- `docs/research/2026-06-08-oss-research-brief.md` — surfaced `Liquid Neural Networks ... Dynamic 3DGS`, `EvoGS`, `SparseStreet`, dynamic-4DGS paradigm survey, `LEGS`, `GS-STVSR`, `3DGS^3`, `VeloGauss`, `R5DGS`, `ReFrame`, deployment-friendly SR transformers, hybrid precision, WebGPU dispatch overhead, OptiScaler, FSR 4/Redstone, DLSS 4.5, and MetalFX/Metal 4 signals.
-- `docs/research/2026-06-09-oss-research-brief.md` — added `REFINE` render-free 3DGS pruning, `Latent Spatial Memory`, `LiteVSR`, `NGram-MoSE`, `Ultra Flash`, and a first strong `RDNU` competitor signal. It also flagged dashboard/trainer stall as the ops blocker.
-- `docs/research/2026-06-10-oss-research-brief.md` — added `Envision4D`, `ManiSplat`, `QuantSR+`, `AutoMegaKernel`, fixed-point/NPU restoration, AI-LOD precision scheduling, compressed-domain online VSR, and repeated RDNU/DLSS/XeSS competitive pressure. Source actions: deep-read RDNU, Envision4D, AutoMegaKernel/QuantSR+, ablate LEGS, investigate AI-LOD scheduling.
-- `docs/research/2026-06-11-oss-research-brief.md` — reinforced `PersistGS`, `R5DGS`, `ConFi-GS`, `Flow-based Gaussian Splatting`, INT8 deployment-aware SR, and RDNU; called out DLSS 4.5 Ray Reconstruction, AMD FSR 4 support-segmentation narrative, and Intel XeSS 3 MFG.
-- `docs/research/2026-06-12-oss-research-brief.md` — consolidated top follow-ups: `VeloGauss`, `Liquid-D3DGS`, `PersistGS`, `3DGS^3`, RDNU, SR3R, NVIDIA DLSS 4.5/Ray Reconstruction, AMD RDNA4 WMMA/tooling, Intel XeSS 3 MFG, INT8/QAT, TensorRT/dispatch-fusion, and targeted Wayback CDX checks for prior-art URLs. Latest live dashboard check from this update showed v7 at step `23,950`, viz tail through `step-00023000.png`; prior stall appears cleared, but ops monitoring remains P0.
+- `docs/research/briefs/2026-06-08-oss-research-brief.md` — surfaced `Liquid Neural Networks ... Dynamic 3DGS`, `EvoGS`, `SparseStreet`, dynamic-4DGS paradigm survey, `LEGS`, `GS-STVSR`, `3DGS^3`, `VeloGauss`, `R5DGS`, `ReFrame`, deployment-friendly SR transformers, hybrid precision, WebGPU dispatch overhead, OptiScaler, FSR 4/Redstone, DLSS 4.5, and MetalFX/Metal 4 signals.
+- `docs/research/briefs/2026-06-09-oss-research-brief.md` — added `REFINE` render-free 3DGS pruning, `Latent Spatial Memory`, `LiteVSR`, `NGram-MoSE`, `Ultra Flash`, and a first strong `RDNU` competitor signal. It also flagged dashboard/trainer stall as the ops blocker.
+- `docs/research/briefs/2026-06-10-oss-research-brief.md` — added `Envision4D`, `ManiSplat`, `QuantSR+`, `AutoMegaKernel`, fixed-point/NPU restoration, AI-LOD precision scheduling, compressed-domain online VSR, and repeated RDNU/DLSS/XeSS competitive pressure. Source actions: deep-read RDNU, Envision4D, AutoMegaKernel/QuantSR+, ablate LEGS, investigate AI-LOD scheduling.
+- `docs/research/briefs/2026-06-11-oss-research-brief.md` — reinforced `PersistGS`, `R5DGS`, `ConFi-GS`, `Flow-based Gaussian Splatting`, INT8 deployment-aware SR, and RDNU; called out DLSS 4.5 Ray Reconstruction, AMD FSR 4 support-segmentation narrative, and Intel XeSS 3 MFG.
+- `docs/research/briefs/2026-06-12-oss-research-brief.md` — consolidated top follow-ups: `VeloGauss`, `Liquid-D3DGS`, `PersistGS`, `3DGS^3`, RDNU, SR3R, NVIDIA DLSS 4.5/Ray Reconstruction, AMD RDNA4 WMMA/tooling, Intel XeSS 3 MFG, INT8/QAT, TensorRT/dispatch-fusion, and targeted Wayback CDX checks for prior-art URLs. Latest live dashboard check from this update showed v7 at step `23,950`, viz tail through `step-00023000.png`; prior stall appears cleared, but ops monitoring remains P0.
 
 Backlog impact:
 
@@ -85,14 +85,14 @@ Backlog impact:
    - Velocity/time priors: deep-read `VeloGauss`, `Liquid-D3DGS`, `Envision4D`, `CausalGS`, and `R5DGS` against v7 `V_xt`, exact engine motion vectors, and `t_query` smoothness.
    - Canvas/object persistence: mine `PersistGS`, `RiGS`, `SparseStreet`, `Latent Spatial Memory`, and `EvoGS` for static/rigid/transient primitive classes, occlusion permanence, parent-child density, and active-set pruning.
    - Loss/detail: try LEGS-style Laplacian/detail weighting only as a training/loss ablation, because it does not change runtime architecture.
-   - Sources: `docs/research/2026-06-08-oss-research-brief.md`, `docs/research/2026-06-09-oss-research-brief.md`, `docs/research/2026-06-10-oss-research-brief.md`, `docs/research/2026-06-12-oss-research-brief.md`.
+   - Sources: `docs/research/briefs/2026-06-08-oss-research-brief.md`, `docs/research/briefs/2026-06-09-oss-research-brief.md`, `docs/research/briefs/2026-06-10-oss-research-brief.md`, `docs/research/briefs/2026-06-12-oss-research-brief.md`.
 
 11. **Audit competitor/baseline pressure from last-5-day reports.**
    - `RDNU` is the most relevant new open-source competitor lead: RDNA3-focused, G-buffer-guided neural upscaler, useful as AMD/deployment/baseline pressure even if its claims need verification.
    - `3DGS^3` and `GS-STVSR` remain closest paper collisions for unified SR+FG / 2DGS continuous space-time claims.
    - `OptiScaler` remains the integration/shim precedent, not an architecture baseline.
    - Vendor pressure: DLSS 4.5 Ray Reconstruction, FSR 4/Redstone, XeSS 3 MFG. Position OSS around open/vendor-neutral unified SR+FG, not immediate ray-reconstruction parity.
-   - Sources: `docs/research/2026-06-08-oss-research-brief.md`, `docs/research/2026-06-10-oss-research-brief.md`, `docs/research/2026-06-11-oss-research-brief.md`, `docs/research/2026-06-12-oss-research-brief.md`.
+   - Sources: `docs/research/briefs/2026-06-08-oss-research-brief.md`, `docs/research/briefs/2026-06-10-oss-research-brief.md`, `docs/research/briefs/2026-06-11-oss-research-brief.md`, `docs/research/briefs/2026-06-12-oss-research-brief.md`.
 
 ## P2 — capture tool / real training data pipeline
 
@@ -149,7 +149,7 @@ Backlog impact:
     - Quantization/student: deep-read `QuantSR+`, deployment-aware INT8 SR, NAWQ-SR, fixed-point/NPU restoration, and ternary/FPGA upscaler signals before freezing the ≤1M-param student.
     - Fusion/dispatch: use `AutoMegaKernel`, WebGPU dispatch-overhead measurements, and deployment-friendly SR transformer papers as evidence for fused kernels / persistent command buffers / minimal launch count.
     - Scheduling: evaluate AI-LOD-style distance/foveation/region-adaptive precision or splat-budget scheduling after the v7 hot path is measured.
-    - Sources: `docs/research/2026-06-10-oss-research-brief.md`, `docs/research/2026-06-11-oss-research-brief.md`, `docs/research/2026-06-12-oss-research-brief.md`.
+    - Sources: `docs/research/briefs/2026-06-10-oss-research-brief.md`, `docs/research/briefs/2026-06-11-oss-research-brief.md`, `docs/research/briefs/2026-06-12-oss-research-brief.md`.
 
 ## P5 — cross-vendor ports
 

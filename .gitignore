@@ -106,3 +106,6 @@ artifacts/
 !archive/**/gpu_status.json
 !archive/**/stdout.log
 docker/training-api/.env
+
+# Paper PDFs downloaded by research agents (most licences forbid redistribution)
+docs/research/papers/

@@ -1,0 +1,60 @@
+# OSS Research Brief — 2026-07-04
+
+## Project Status Summary
+- Latest commits: `a97a180` tailnet-gated training controls on dashboard; `fcf8084` training control API/dashboard panel; `0660f55` preserved v7-pico-005 step-5000 snapshot + recovery doc; `56a9a65` reverted DataLoader `num_workers=0` for WSL2 deadlock; `d1255c8` Linux WindowsPath checkpoint shim; plus HAT flash-attn, TF32/DataLoader prefetch, PSNR proxy, fp32 raster smoothing, and apex redirect fixes.
+- Open issues: #14 VRAM footprint; #13 Nsight L2 hit-rate profile; #12 packed low-rank canvas layout; #10 G-buffer encoder ablation; #9 RepVGG/ECBSR/RepSR backbone ablation; #8 cross-vendor kernel ports; #7 FSR4 teacher distillation; #6 v6.2-pico launch; #5 no-ML shader variant; #4 HAT-Tiny student distillation.
+- README status snapshot: pre-alpha; v7 is current teacher architecture (`srcnn-v7.0-pico-005`) with N-D Gaussian canvas + native time axis; shipping ≤1M-param TensorRT FP8 student remains untrained. README still frames OSS as one Gaussian-canvas architecture for SR at `t=1` and OSS-FX/frame extrapolation via time/alpha-query rendering.
+- Training dashboard: headline still says `v7.0 Pico OSS-FX is training right now`, active run `srcnn-v7.0-pico-005`, step **30,300 / 100,000**, loss **0.18269**, viz step **26,000**, updated just now/live. Health tooltip contradicts this: **Trainer — offline, stuck at step 30,300 for 165h**. Watcher healthy/published 0s ago, CF Worker healthy HTTP 200 in 98ms, R2 origin healthy HTTP 200. GPU stats unavailable / host offline or rsync failed. Same training step as 2026-07-03; stuck duration increased from 141h to 165h.
+
+## New Papers (arXiv)
+
+### Gaussian Splatting / Temporal
+- **Learning Efficient 4D Gaussian Representations from Monocular Videos with Flow Splatting** (arXiv:2606.29976, Shengjun Zhang, Jinzhao Li, Xin Fei, Yueqi Duan, 2026-06-29; already tracked) — Time-varying Gaussian means/covariances plus velocity-field/flow-splatting supervision for dynamic 4D-GS. **Why it matters to OSS:** direct comparison target for v7's native time-axis and `V_xt` cross-covariance motion encoding.
+- **Resonant Brane Splatting for Arbitrary-Scale Super-Resolution** (arXiv:2606.29453v2, Giulio Federico et al., 2026-06-28; v2 still current) — Higher-order Gaussian-Hermite “Brane” primitives aim to encode high-frequency detail with fewer overlapping splats. **Why it matters to OSS:** possible primitive/raster ablation for v7 edge/detail recovery; associated GitHub repo remains unlicensed, so code is read-only/idea-only.
+- **Learning to Adaptively Allocate Gaussians for Arbitrary-Scale Image Super-Resolution** (arXiv:2606.29400, Giulio Federico et al., 2026-06-28; already tracked) — Predicts adaptive Gaussian allocation/densification from LR features with neural routing and hierarchical pointer convolution. **Why it matters to OSS:** direct feed-forward density-budget comparison for v7 parent-child/loss-adaptive canvas allocation.
+- **Arbitrary-Scale 3D Gaussian Super-Resolution** (arXiv:2508.16467v2, Huimin Zeng, Yue Bai, Yun Fu, 2025-08-22; newly surfaced as missing from main bibliography) — Integrated arbitrary-scale 3DGS SR using scale-aware rendering, generative-prior optimization, and progressive super-resolving. **Why it matters to OSS:** arbitrary/non-integer scale handling and scale-aware Gaussian rendering are relevant if OSS moves beyond fixed 2×/3×/4× modes.
+
+### Super-Resolution / Upscaling
+- **LCS: An AI-based Low-Complexity Scaler for Power-Efficient Super-Resolution of Game Content** (arXiv:2507.22873, Simon Pochinda et al., 2025-07-30; newly surfaced) — NPU-oriented low-complexity game-content scaler trained on GameIR pairs with adversarial training, reparameterization, and quantization; compares against AMD EASF/FSR1. **Why it matters to OSS:** closest surfaced “tiny game scaler” paper for the ≤1M-param student/handheld pitch; potential competitive baseline for low-power tiers.
+- **Continuous Space-Time Video Super-Resolution with 3D Fourier Fields** (arXiv:2509.26325v2, Alexander Becker, Julius Erbach, Dominik Narnhofer, Konrad Schindler, 2025-09-30; newly surfaced) — Represents video as a continuous 3D Fourier field for arbitrary spatial/time sampling and analytic Gaussian point-spread anti-aliasing. **Why it matters to OSS:** strong representation-level prior for continuous spatiotemporal sampling; useful contrast to Gaussian canvas/time-axis design.
+- **AVSR-Diff: Scale-Agnostic Diffusion Priors for Temporally Consistent Arbitrary-Scale Video Super-Resolution** (arXiv:2607.00987, Geunhyuk Youk et al., 2026-07-01; already appended 2026-07-03) — Temporally gated recurrence + scale-aware Fourier refinement around a diffusion prior. **Why it matters to OSS:** plausible teacher/pseudo-target source; not a shipping runtime path.
+- **Efficient INT8 Single-Image Super-Resolution via Deployment-Aware Quantization and Teacher-Guided Training** (arXiv:2604.20291, Pham Phuong Nam Nguyen et al., 2026-04-22; already tracked) — Three-stage quantized SISR with DCT supervision, confidence-weighted distillation, and QAT on the fused deploy graph. **Why it matters to OSS:** practical recipe for student distillation/INT8-FP8 calibration.
+
+### Frame Extrapolation / Generation
+- **Edit2Interp: Adapting Image Foundation Models from Spatial Editing to Video Frame Interpolation with Few-Shot Learning** (arXiv:2603.15003, Nasrin Rahimi et al., 2026-03-16; newly surfaced) — Shows a static image-editing foundation model can be LoRA-adapted for video frame interpolation with 64–256 samples. **Why it matters to OSS:** teacher/offline-data idea only; confirms generic spatial priors can be bent into temporal synthesis, but the runtime/model class is too heavy for OSS shipping.
+- **Learning Video Dynamics with Predictive Differentiable Rendering** (arXiv:2606.31050, Yujin Tang et al., 2026-06-30; already tracked) — Predicts future frames through an internal differentiable-rendering / 3DGS-style state. **Why it matters to OSS:** closest recent comparison for Gaussian-state video dynamics and OSS-FX positioning.
+- **CausalGS / VeloGauss** (arXiv:2605.10586 / 2605.10567; already tracked) — Physics/velocity-field Gaussian future prediction lines. **Why it matters to OSS:** references for velocity/long-horizon losses if v7 time-axis interpolation needs stronger regularization than exact engine MVs.
+- **RSTT: Real-time Spatial Temporal Transformer for Space-Time Video Super-Resolution** (arXiv:2203.14186; already appended) — Older unified STVSR transformer. **Why it matters to OSS:** historical baseline for “one model does SR + temporal interpolation,” though too large/slow for OSS's <2ms target.
+
+### Inference Optimization
+- **Unfolding Once is Enough: A Deployment-Friendly Transformer Unit for Super-Resolution** (arXiv:2308.02794, Yong Liu et al., 2023; already tracked) — UFONE/DITN removes deployment-hostile transformer redundancies and targets TensorRT friendliness. **Why it matters to OSS:** reference for HAT-like teacher simplification or deployable student blocks.
+- **ITNet: A Learnable Integral Transform That Subsumes Convolution, Attention, and Recurrence** (arXiv:2606.19538v3, Ashim Dhor, Rasel Mondal, Pin-Yu Chen, 2026-06-17; already tracked) — Unified convolution/attention/recurrence operator with tiled kernel-fusion discussion. **Why it matters to OSS:** speculative operator reference for fused canvas-update kernels.
+- **Efficient Integer-Arithmetic-Only Convolutional Neural Networks** (arXiv:2006.11735, older query result) and **NAWQ-SR** (arXiv:2212.09501) — Older quantized inference references resurfaced by INT8/TensorRT queries. **Why it matters to OSS:** reinforce that the student path needs QAT + layer policy + fused kernels, not only export flags.
+
+## Archive.org Findings
+- `"gaussian splatting" "super-resolution"`: 3 hits, dominated by GitHub/star-list captures; no useful primary mirror.
+- `"frame generation" "deep learning"`: 4 broad hits, including Minecraft/Radiance capture, FluidFrames older Windows builds, DLSS Swapper-style artifacts, and OSF-style records; ecosystem archaeology only.
+- `"real-time upscaling" game`: 0 hits.
+- `GS-STVSR OR GSASR OR GRAPE OR STSS`: 16,605 hits but polluted by unrelated “grape” media/items; first results unrelated. For known papers/projects, continue targeted Wayback CDX against arXiv/project/GitHub URLs rather than broad Archive search.
+
+## GitHub / Open Source
+- **GiulioFede/ResonantBraneSplatting** — pushed 2026-07-01, 0 stars, no license; matches the RBS/Brane primitive arXiv. **Opportunity:** primitive/raster idea for v7 edge/detail ablations. **Blocker:** no license, read-only until clarified. <https://github.com/GiulioFede/ResonantBraneSplatting>
+- **Azusa309/MedGSSR** — pushed 2026-06-22, MIT, 2 stars; hierarchical feed-forward Gaussian splatting for medical image SR / 3D reconstruction. **Relevance:** architecture-only; domain mismatch large. <https://github.com/Azusa309/MedGSSR>
+- **Rolaand-Jayz/RE-of-FSR-4.1.0-Upscaling** — still public, MIT, 3 stars, pushed 2026-07-02; static structural analysis of AMD FSR 4.1.0 neural upscaler (DXIL entrypoints, weight extraction, blob layout). **Threat/opportunity:** useful lead for issue #7 FSR4 teacher/operator-layout reconnaissance; verify claims before relying on them. <https://github.com/Rolaand-Jayz/RE-of-FSR-4.1.0-Upscaling>
+- `"frame generation" "open source"` returned 0 current GitHub hits in the structured scan. `"neural upscaler"` also surfaced two `cloudy-sky-gold/neural-upscaler-*` landing/docs repos; they appear to be marketing/docs pages, not a useful upscaler implementation.
+- Vendor page probes: NVIDIA GeForce News, AMD GPUOpen News/FSR4, Apple Metal, and Unity releases loaded. Intel XeSS overview and Unreal blog returned 403. No primary vendor page scrape revealed a new technical upscaling architecture disclosure in this run.
+
+## News
+- **DLSS 4:** Google News RSS surfaced NVIDIA's June DLSS game lineup/Summer of RTX item and TechPowerUp coverage of DLSS game support. Non-primary headlines included commentary/noise; no new DLSS architecture disclosure verified.
+- **FSR 4:** RSS showed stronger competitive momentum: PCMag/PC Gamer headlines on Valve working with AMD on FSR 4 for Steam Machine, plus TechPowerUp/How-To Geek headlines claiming FSR 4.1 availability/older Radeon support. **Threat:** Linux/Steam/handheld availability is moving into OSS's target positioning space; confirm via AMD/Valve primary sources when possible.
+- **Intel Arc / XeSS:** mostly Arc G3 handheld and benchmark/chatter headlines; no primary XeSS technical update verified. Intel XeSS page returned 403 from the cron environment.
+- **Apple / Metal:** RSS was mostly Metal gaming/Game Porting Toolkit commentary and AppleMagazine-style pieces; Apple Metal overview loaded but no concrete MetalFX/upscaler API change was found.
+- **Game engines:** `Unreal Engine Unity upscaling DLSS FSR when:14d` produced no useful Google News RSS items. Unity releases page loaded; Unreal blog returned 403.
+
+## Action Items / Follow-ups
+- [ ] CRITICAL ops: dashboard still says live/training while trainer is offline/stuck at step 30,300 for **165h** and GPU stats are unavailable; reconcile trainer process, public copy, and health semantics.
+- [ ] Add/deep-read **LCS** as the low-power game-content scaler baseline for the ≤1M-param/handheld student story.
+- [ ] Deep-read **Continuous Space-Time Video Super-Resolution with 3D Fourier Fields** for continuous time/space sampling and analytic Gaussian anti-aliasing comparisons against v7's Gaussian canvas.
+- [ ] Revisit **Arbitrary-Scale 3D Gaussian Super-Resolution** for scale-aware rendering if OSS wants arbitrary non-integer upscaling factors.
+- [ ] Keep **RBS / ResonantBraneSplatting** idea-only until license is explicit; compare Brane primitives to v7 Gaussian assumptions.
+- [ ] Track AMD/Valve FSR 4 on Steam Machine/handhelds and FSR 4.1 Linux/older-RDNA claims as competitive positioning threats.
