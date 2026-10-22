@@ -13,6 +13,7 @@ const colors = {
   gold: "#c8a960",
   v4: "#f0b56f",
   v5: "#fbbf24",
+  v62: "#5eead4",
   nvidia: "#8cffc1",
   amd: "#ff7b7b",
   intel: "#7dd3fc",
@@ -311,15 +312,27 @@ function buildLpipsInflight(canvasEl, data, opts = {}) {
   const run = runForOptions(data, opts);
   if (!run) throw new Error("run not found");
   const rows = run.loss_curve || [];
-  const series = xy(rows, "loss_lpips", "lpips", "t_lpips");
+  const series = xy(rows, "loss_lpips", "sr_lpips", "lpips", "t_lpips");
   if (!series.length) throw new Error("no in-flight LPIPS points for run");
-  const ref = referenceLine(rows, 0.1666);
+  const v5Ref = referenceLine(rows, 0.1666);
+  const v6Ref = referenceLine(rows, 0.10475);
   const options = chartOptions({ yTitle: "training-crop LPIPS" }, opts);
-  options.scales.y.min = 0;
-  options.scales.y.max = 1;
+  const referenceYs = [...v5Ref, ...v6Ref].map((p) => p.y);
+  const ys = series.map((p) => p.y).filter((y) => Number.isFinite(y));
+  if (ys.length) {
+    const lo = Math.min(...ys, ...referenceYs);
+    const hi = Math.max(...ys, ...referenceYs);
+    const pad = Math.max(0.005, (hi - lo) * 0.15);
+    options.scales.y.min = Math.max(0, lo - pad);
+    options.scales.y.max = Math.min(1, hi + pad);
+  } else {
+    options.scales.y.min = 0;
+    options.scales.y.max = 1;
+  }
   const datasets = [
     { label: `${run.history?.title || run.label || "run"} LPIPS`, data: series, borderColor: colors.lpips, backgroundColor: colors.lpips, pointRadius: 0, pointHitRadius: 6, pointHoverRadius: 4, borderWidth: 2, tension: 0 },
-    { label: "v5 held-out LPIPS ref 0.1666", data: ref, borderColor: colors.gold, backgroundColor: colors.gold, pointRadius: 0, pointHitRadius: 6, borderWidth: 1.5, borderDash: [5, 4], tension: 0 },
+    { label: "v5 held-out LPIPS ref 0.1666", data: v5Ref, borderColor: colors.gold, backgroundColor: colors.gold, pointRadius: 0, pointHitRadius: 6, borderWidth: 1.5, borderDash: [5, 4], tension: 0 },
+    { label: "v6.2 held-out LPIPS ref 0.10475", data: v6Ref, borderColor: colors.v62, backgroundColor: colors.v62, pointRadius: 0, pointHitRadius: 6, borderWidth: 1.5, borderDash: [2, 4], tension: 0 },
   ].filter((dataset) => dataset.data.length);
   return createChart(canvasEl, { type: "line", data: { datasets }, options: applyEmbedCrowdingRules(options, "lpips-inflight", opts) });
 }

@@ -5434,7 +5434,7 @@ function renderTrainingLpipsChart(canvas, run) {
   const series = xy(rows, "loss_lpips", "sr_lpips", "lpips", "t_lpips");
   if (!series.length) return null;
   const v5Ref = referenceLine(rows, 0.1666);
-  const v6Ref = referenceLine(rows, 0.112);
+  const v6Ref = referenceLine(rows, 0.10475);
   const referenceYs = [...v5Ref, ...v6Ref].map((p) => p.y);
   const options = chartOptions({ yTitle: "training-crop LPIPS" });
   // Auto-fit y-axis to actual data range with 10% headroom on each side.
@@ -5455,7 +5455,7 @@ function renderTrainingLpipsChart(canvas, run) {
   const datasets = [
     { label: `${run.history?.title || run.label || "run"} LPIPS`, data: series, borderColor: colors.lpips, backgroundColor: colors.lpips, pointRadius: 0, pointHitRadius: 6, pointHoverRadius: 4, borderWidth: 2, tension: 0 },
     { label: "v5 held-out LPIPS ref 0.1666", data: v5Ref, borderColor: colors.gold, backgroundColor: colors.gold, pointRadius: 0, pointHitRadius: 6, borderWidth: 1.5, borderDash: [5, 4], tension: 0 },
-    { label: "v6.2 held-out LPIPS ref 0.112", data: v6Ref, borderColor: colors.v62, backgroundColor: colors.v62, pointRadius: 0, pointHitRadius: 6, borderWidth: 1.5, borderDash: [1, 4], tension: 0 },
+    { label: "v6.2 held-out LPIPS ref 0.10475", data: v6Ref, borderColor: colors.v62, backgroundColor: colors.v62, pointRadius: 0, pointHitRadius: 6, borderWidth: 1.5, borderDash: [1, 4], tension: 0 },
   ].filter((dataset) => dataset.data.length);
   return bindChartControls(attachEventAnnotations(new Chart(canvas, { type: "line", data: { datasets }, options }), run, canvas), canvas);
 }

@@ -1,0 +1,1569 @@
+diff --git a/dashboard-public/index.html b/dashboard-public/index.html
+index 32c736e..2667817 100644
+--- a/dashboard-public/index.html
++++ b/dashboard-public/index.html
+@@ -1702,6 +1702,30 @@
+       </span>
+     </div>
+ 
++    <section id="training-controls" class="hidden rounded-md border border-cyan-700 bg-cyan-950/15 p-4" data-surface aria-label="Trainer controls">
++      <div class="flex items-start justify-between gap-3 mb-3">
++        <div>
++          <h2 class="text-lg font-semibold text-cyan-200" data-text>Trainer controls</h2>
++          <p class="text-xs text-zinc-400" data-subtext>Private controls for the training host. This panel only appears when you are on the Tailscale tailnet.</p>
++          <p id="train-status-detail" class="mt-1 text-xs text-zinc-400" data-subtext aria-live="polite">Checking whether the trainer is reachable…</p>
++        </div>
++        <span id="train-status-badge" class="rounded border border-zinc-700 px-2 py-0.5 text-xs text-zinc-300" role="status" aria-live="polite">Checking</span>
++      </div>
++      <div id="train-secret-prompt" class="mb-3 flex flex-wrap items-center gap-2">
++        <label for="train-secret-input" class="sr-only">Trainer API secret</label>
++        <input id="train-secret-input" type="password" placeholder="Trainer API secret" autocomplete="off" spellcheck="false" class="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm text-zinc-200 w-64" />
++        <button id="train-secret-save" type="button" class="rounded border border-cyan-600 px-3 py-1 text-sm text-cyan-200 hover:bg-cyan-900/50">Unlock controls</button>
++        <button id="train-secret-clear" type="button" class="rounded border border-zinc-700 px-3 py-1 text-sm text-zinc-300 hover:bg-zinc-800">Forget secret</button>
++        <span id="train-secret-msg" class="text-xs text-zinc-500" aria-live="polite"></span>
++      </div>
++      <div class="flex flex-wrap items-center gap-2">
++        <button id="train-btn-start" disabled title="Start the trainer container. The trainer should resume from its configured checkpoint if one exists." class="rounded border border-emerald-700 px-4 py-2 text-sm font-medium text-emerald-300 hover:bg-emerald-950/50 disabled:opacity-40 disabled:cursor-not-allowed">Start / resume</button>
++        <button id="train-btn-stop" disabled title="Stop the trainer container through Docker Compose." class="rounded border border-red-700 px-4 py-2 text-sm font-medium text-red-300 hover:bg-red-950/50 disabled:opacity-40 disabled:cursor-not-allowed">Stop trainer</button>
++        <button id="train-btn-restart" disabled title="Restart the trainer container through Docker Compose." class="rounded border border-amber-700 px-4 py-2 text-sm font-medium text-amber-300 hover:bg-amber-950/50 disabled:opacity-40 disabled:cursor-not-allowed">Restart trainer</button>
++      </div>
++      <pre id="train-api-output" class="mt-3 hidden max-h-40 overflow-auto rounded border border-zinc-800 bg-zinc-950/60 p-2 text-xs text-zinc-400 font-mono"></pre>
++    </section>
++
+     <div id="loss-divergence-banner" class="loss-divergence-banner" hidden role="alert" aria-live="assertive"></div>
+ 
+     <div class="terminal-divider" aria-hidden="true"><span class="td-corner">┌─ signal ─</span><span class="td-rule"></span><span class="td-corner">─┐</span></div>
+@@ -8524,6 +8548,226 @@ function fillTerminalRules() {
+   });
+ }
+ 
++// ── Training control panel (tailnet-gated) ──────────────────────────
++async function initTrainingControls() {
++  const API = localStorage.getItem('oss-training-api-url') || 'http://100.126.238.73:8765';
++  const SECRET_KEY = 'oss-training-api-secret';
++  const panel = document.getElementById('training-controls');
++  const badge = document.getElementById('train-status-badge');
++  const statusDetail = document.getElementById('train-status-detail');
++  const secretInput = document.getElementById('train-secret-input');
++  const secretSave = document.getElementById('train-secret-save');
++  const secretClear = document.getElementById('train-secret-clear');
++  const secretMsg = document.getElementById('train-secret-msg');
++  const startBtn = document.getElementById('train-btn-start');
++  const stopBtn = document.getElementById('train-btn-stop');
++  const restartBtn = document.getElementById('train-btn-restart');
++  const output = document.getElementById('train-api-output');
++
++  let secret = localStorage.getItem(SECRET_KEY) || '';
++  let busy = false;
++
++  // Check if we're on the tailnet
++  try {
++    const resp = await fetch(`${API}/health`, { mode: 'cors', signal: AbortSignal.timeout(3000) });
++    if (!resp.ok) return;
++    panel.classList.remove('hidden');
++  } catch (err) {
++    console.info('Trainer controls hidden: training API is not reachable from this browser.', err);
++    return; /* not on tailnet */
++  }
++
++  function authHeaders() { return { 'Authorization': `Bearer ${secret}` }; }
++
++  function trainBadgeClass(tone) {
++    const base = 'rounded border px-2 py-0.5 text-xs';
++    if (tone === 'good') return `${base} border-emerald-700 text-emerald-300`;
++    if (tone === 'warn') return `${base} border-amber-700 text-amber-300`;
++    if (tone === 'bad') return `${base} border-red-700 text-red-300`;
++    return `${base} border-zinc-700 text-zinc-300`;
++  }
++
++  function trainStateText(data) {
++    if (!data) return { badge: 'Unknown', detail: 'I could not read the trainer status yet.', tone: 'muted' };
++    if (data.reason === 'infra_ok_but_trainer_stale') {
++      return { badge: 'Trainer is stale', detail: data.detail || 'The infrastructure looks healthy, but the trainer has stopped reporting new progress.', tone: 'bad' };
++    }
++    if (data.reason === 'trainer_stale_step') {
++      return { badge: 'Trainer may be stuck', detail: data.detail || 'The trainer is running, but step or loss has not refreshed recently.', tone: 'warn' };
++    }
++    if (data.reason === 'gpu_telemetry_missing') {
++      return { badge: 'GPU telemetry missing', detail: data.detail || 'The trainer may be running, but GPU status is not available.', tone: 'warn' };
++    }
++    if (data.running) {
++      const step = data.trainer?.latest_step;
++      const stepText = Number.isFinite(step) ? ` Current step: ${step.toLocaleString()}.` : '';
++      return { badge: 'Training is running', detail: `${data.detail || 'The trainer container is running.'}${stepText}`, tone: data.overall === 'degraded' ? 'warn' : 'good' };
++    }
++    if (data.state === 'not-found') {
++      return { badge: 'Trainer is not created', detail: 'The trainer container does not exist yet. Use Start / resume to create and launch it.', tone: 'warn' };
++    }
++    if (data.state === 'exited') {
++      const exit = data.exit_code ?? 'unknown';
++      return { badge: 'Training is stopped', detail: `The trainer container exited with code ${exit}. Use Start / resume to continue from the configured checkpoint path.`, tone: exit === 0 ? 'muted' : 'bad' };
++    }
++    return { badge: `Trainer is ${data.state || 'not running'}`, detail: data.detail || 'The trainer is reachable, but Docker is reporting a non-running state.', tone: 'warn' };
++  }
++
++  function setActionButtons({ canStart, canStop, canRestart }) {
++    startBtn.disabled = !canStart || busy;
++    stopBtn.disabled = !canStop || busy;
++    restartBtn.disabled = !canRestart || busy;
++    startBtn.dataset.statusDisabled = String(!canStart);
++    stopBtn.dataset.statusDisabled = String(!canStop);
++    restartBtn.dataset.statusDisabled = String(!canRestart);
++  }
++
++  function setControlsBusy(isBusy, label = '') {
++    busy = isBusy;
++    for (const btn of [startBtn, stopBtn, restartBtn, secretSave, secretClear]) {
++      if (!btn) continue;
++      btn.disabled = isBusy || btn.dataset.statusDisabled === 'true';
++      btn.setAttribute('aria-busy', isBusy ? 'true' : 'false');
++    }
++    if (label) {
++      badge.textContent = label;
++      badge.className = trainBadgeClass('warn');
++      statusDetail.textContent = 'Waiting for the trainer API to finish the requested change…';
++    }
++  }
++
++  function showOutput(message, details = '') {
++    output.textContent = details ? `${message}\n\nDetails:\n${details}` : message;
++    output.classList.remove('hidden');
++  }
++
++  function actionPendingText(action) {
++    return { start: 'Starting trainer…', stop: 'Stopping trainer…', restart: 'Restarting trainer…' }[action] || 'Working…';
++  }
++
++  function actionResultText(action, data) {
++    const result = data?.result || 'unknown';
++    const failed = result === 'failed' || Number(data?.returncode || 0) !== 0;
++    if (action === 'start' && result === 'already-running') return { message: 'Training was already running.', tone: 'good' };
++    if (action === 'start' && result === 'started') return { message: 'Training started. I’ll refresh the status in a moment.', tone: 'good' };
++    if (action === 'stop' && result === 'stopped') return { message: 'Training stop was sent successfully. The container should report stopped shortly.', tone: 'warn' };
++    if (action === 'restart' && result === 'restarted') return { message: 'Trainer restart was sent successfully. Give it a few seconds to come back online.', tone: 'warn' };
++    if (result === 'busy') return { message: 'Another trainer command is already running. Wait for it to finish, then try again.', tone: 'warn' };
++    if (failed) return { message: `The ${action} command failed.`, tone: 'bad' };
++    return { message: `The ${action} command finished with result: ${result}.`, tone: 'muted' };
++  }
++
++  async function refreshStatus() {
++    if (!secret) {
++      badge.textContent = 'Locked';
++      badge.className = trainBadgeClass('muted');
++      statusDetail.textContent = 'Enter the trainer API secret to enable start, stop, and restart.';
++      setActionButtons({ canStart: false, canStop: false, canRestart: false });
++      return;
++    }
++    try {
++      const resp = await fetch(`${API}/status`, { headers: authHeaders(), signal: AbortSignal.timeout(5000) });
++      if (!resp.ok) {
++        badge.textContent = resp.status === 401 ? 'Secret rejected' : 'API error';
++        badge.className = trainBadgeClass('bad');
++        statusDetail.textContent = resp.status === 401 ? 'The API secret was rejected. Check the secret and unlock controls again.' : `The trainer API returned HTTP ${resp.status}.`;
++        setActionButtons({ canStart: false, canStop: false, canRestart: false });
++        return;
++      }
++      const data = await resp.json();
++      const state = trainStateText(data);
++      badge.textContent = state.badge;
++      badge.className = trainBadgeClass(state.tone);
++      statusDetail.textContent = state.detail;
++      const actions = data.actions || { can_start: !data.running, can_stop: data.running, can_restart: data.running };
++      setActionButtons({ canStart: !!actions.can_start, canStop: !!actions.can_stop, canRestart: !!actions.can_restart });
++    } catch (err) {
++      badge.textContent = 'API unreachable';
++      badge.className = trainBadgeClass('bad');
++      statusDetail.textContent = `Could not contact the trainer API: ${err.message}`;
++      setActionButtons({ canStart: false, canStop: false, canRestart: false });
++    }
++  }
++
++  async function apiAction(action) {
++    if (!secret) {
++      showOutput('Enter the trainer API secret before using the controls.');
++      secretInput.focus();
++      return;
++    }
++    setControlsBusy(true, actionPendingText(action));
++    try {
++      const resp = await fetch(`${API}/${action}`, { method: 'POST', headers: authHeaders(), signal: AbortSignal.timeout(120000) });
++      let data = {};
++      try { data = await resp.json(); } catch { data = { result: 'failed', stderr: 'The training API returned a non-JSON response.' }; }
++      if (!resp.ok) {
++        const msg = resp.status === 401 ? 'The API secret was rejected. Check the secret and try again.' : `The training API returned HTTP ${resp.status}.`;
++        showOutput(msg, data.error || data.message || data.stderr || '');
++        badge.textContent = resp.status === 401 ? 'Secret rejected' : 'API error';
++        badge.className = trainBadgeClass('bad');
++        return;
++      }
++      const result = actionResultText(action, data);
++      showOutput(result.message, [data.stdout, data.stderr ? `STDERR:\n${data.stderr}` : ''].filter(Boolean).join('\n'));
++      badge.textContent = result.message;
++      badge.className = trainBadgeClass(result.tone);
++    } catch (err) {
++      const timedOut = /aborted|timeout/i.test(err?.message || '');
++      showOutput(timedOut ? 'The trainer API did not answer before the timeout.' : `Could not contact the trainer API: ${err.message}`);
++      badge.textContent = timedOut ? 'Request timed out' : 'API unreachable';
++      badge.className = trainBadgeClass('bad');
++    } finally {
++      setControlsBusy(false);
++      setTimeout(refreshStatus, 2000);
++    }
++  }
++
++  secretSave.addEventListener('click', () => {
++    const val = secretInput.value.trim();
++    if (!val) {
++      secretMsg.textContent = 'Enter the trainer API secret first.';
++      secretMsg.className = 'text-xs text-amber-300';
++      return;
++    }
++    secret = val;
++    localStorage.setItem(SECRET_KEY, secret);
++    secretMsg.textContent = 'Controls unlocked in this browser.';
++    secretMsg.className = 'text-xs text-emerald-400';
++    refreshStatus();
++  });
++
++  secretClear.addEventListener('click', () => {
++    secret = '';
++    localStorage.removeItem(SECRET_KEY);
++    secretInput.value = '';
++    secretMsg.textContent = 'Secret removed from this browser.';
++    secretMsg.className = 'text-xs text-zinc-400';
++    badge.textContent = 'Locked';
++    badge.className = trainBadgeClass('muted');
++    statusDetail.textContent = 'Enter the trainer API secret to enable start, stop, and restart.';
++    setActionButtons({ canStart: false, canStop: false, canRestart: false });
++    output.classList.add('hidden');
++  });
++
++  secretInput.addEventListener('keydown', (event) => {
++    if (event.key === 'Enter') secretSave.click();
++  });
++
++  // Pre-fill from localStorage
++  if (secret) {
++    secretInput.value = secret;
++    secretMsg.textContent = 'Saved secret loaded from this browser.';
++    secretMsg.className = 'text-xs text-zinc-400';
++    refreshStatus();
++  } else {
++    refreshStatus();
++  }
++
++  startBtn.addEventListener('click', () => apiAction('start'));
++  stopBtn.addEventListener('click', () => apiAction('stop'));
++  restartBtn.addEventListener('click', () => apiAction('restart'));
++}
++
+ document.addEventListener("DOMContentLoaded", () => {
+   setTheme(localStorage.getItem("oss-dashboard-theme") === "light");
+   document.getElementById("theme-toggle").addEventListener("click", () => {
+@@ -8539,6 +8783,7 @@ document.addEventListener("DOMContentLoaded", () => {
+   fillTerminalRules();
+   pollDashboard();
+   loadStatus();
++  initTrainingControls();
+   window.setInterval(loadStatus, 30_000);
+   startLiveUpdates();
+ });
+diff --git a/docker/training-api/Dockerfile b/docker/training-api/Dockerfile
+index a924439..cfc27e6 100644
+--- a/docker/training-api/Dockerfile
++++ b/docker/training-api/Dockerfile
+@@ -1,6 +1,7 @@
+ FROM docker:cli
+ RUN apk add --no-cache python3 curl
+ COPY scripts/training_api.py /app/training_api.py
++COPY scripts/training_status.py /app/training_status.py
+ WORKDIR /app
+ HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=2 \
+     CMD python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:8765/health')" || exit 1
+diff --git a/docker/training-api/docker-compose.yml b/docker/training-api/docker-compose.yml
+index 25ad155..29ec34c 100644
+--- a/docker/training-api/docker-compose.yml
++++ b/docker/training-api/docker-compose.yml
+@@ -22,6 +22,14 @@ services:
+       LISTEN_PORT: "8765"
+       COMPOSE_DIR: "/workspace/oss-gaussian/docker/trainer"
+       CONTAINER_NAME: "oss-trainer"
++      RUN_DIR: "/checkpoints/srcnn-v7.0-pico-005"
++      # Propagated into nested `docker compose -f docker/trainer/docker-compose.yml`
++      # calls. The Docker CLI runs inside this container, but host Docker resolves
++      # bind-mount sources, so these must be host paths, not container defaults.
++      HOME: ${HOME}
++      OSS_REPO: ${OSS_REPO:-${HOME}/OpenSuperSampling}
++      OSS_DATASETS: ${OSS_DATASETS:-${HOME}/datasets}
++      OSS_CHECKPOINTS: ${OSS_CHECKPOINTS:-${HOME}/checkpoints}
+       SHARED_SECRET: ${OSS_API_SECRET}
+ 
+     volumes:
+@@ -31,6 +39,9 @@ services:
+       # The repo (needed for compose file path)
+       - ${HOME}/OpenSuperSampling:/workspace/oss-gaussian:ro
+ 
++      # Active run artifacts for /status step/loss/GPU freshness checks
++      - ${OSS_CHECKPOINTS:-${HOME}/checkpoints}/srcnn-v7.0-pico-005:/checkpoints/srcnn-v7.0-pico-005:ro
++
+     # Security: drop all capabilities, read-only rootfs (except /tmp for python)
+     cap_drop:
+       - ALL
+diff --git a/scripts/build_public_dashboard.py b/scripts/build_public_dashboard.py
+index d472222..fcb028c 100644
+--- a/scripts/build_public_dashboard.py
++++ b/scripts/build_public_dashboard.py
+@@ -1286,23 +1286,26 @@ HTML_TEMPLATE = r"""<!doctype html>
+       </article>
+     </section>
+ 
+-    <section id="training-controls" class="hidden rounded-md border border-cyan-700 bg-cyan-950/15 p-4" data-surface aria-label="Training controls">
+-      <div class="flex items-center justify-between gap-3 mb-3">
++    <section id="training-controls" class="hidden rounded-md border border-cyan-700 bg-cyan-950/15 p-4" data-surface aria-label="Trainer controls">
++      <div class="flex items-start justify-between gap-3 mb-3">
+         <div>
+-          <h2 class="text-lg font-semibold text-cyan-200" data-text>Training controls</h2>
+-          <p class="text-xs text-zinc-400" data-subtext>Only visible on your Tailscale tailnet</p>
++          <h2 class="text-lg font-semibold text-cyan-200" data-text>Trainer controls</h2>
++          <p class="text-xs text-zinc-400" data-subtext>Private controls for the training host. This panel only appears when you are on the Tailscale tailnet.</p>
++          <p id="train-status-detail" class="mt-1 text-xs text-zinc-400" data-subtext aria-live="polite">Checking whether the trainer is reachable…</p>
+         </div>
+-        <span id="train-status-badge" class="rounded border border-zinc-700 px-2 py-0.5 text-xs text-zinc-300">checking</span>
++        <span id="train-status-badge" class="rounded border border-zinc-700 px-2 py-0.5 text-xs text-zinc-300" role="status" aria-live="polite">Checking</span>
+       </div>
+-      <div id="train-secret-prompt" class="mb-3 flex items-center gap-2">
+-        <input id="train-secret-input" type="password" placeholder="API secret" class="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm text-zinc-200 w-64" />
+-        <button id="train-secret-save" class="rounded border border-cyan-600 px-3 py-1 text-sm text-cyan-200 hover:bg-cyan-900/50">Unlock</button>
+-        <span id="train-secret-msg" class="text-xs text-zinc-500"></span>
++      <div id="train-secret-prompt" class="mb-3 flex flex-wrap items-center gap-2">
++        <label for="train-secret-input" class="sr-only">Trainer API secret</label>
++        <input id="train-secret-input" type="password" placeholder="Trainer API secret" autocomplete="off" spellcheck="false" class="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm text-zinc-200 w-64" />
++        <button id="train-secret-save" type="button" class="rounded border border-cyan-600 px-3 py-1 text-sm text-cyan-200 hover:bg-cyan-900/50">Unlock controls</button>
++        <button id="train-secret-clear" type="button" class="rounded border border-zinc-700 px-3 py-1 text-sm text-zinc-300 hover:bg-zinc-800">Forget secret</button>
++        <span id="train-secret-msg" class="text-xs text-zinc-500" aria-live="polite"></span>
+       </div>
+       <div class="flex flex-wrap items-center gap-2">
+-        <button id="train-btn-start" disabled class="rounded border border-emerald-700 px-4 py-2 text-sm font-medium text-emerald-300 hover:bg-emerald-950/50 disabled:opacity-40 disabled:cursor-not-allowed">Start training</button>
+-        <button id="train-btn-stop" disabled class="rounded border border-red-700 px-4 py-2 text-sm font-medium text-red-300 hover:bg-red-950/50 disabled:opacity-40 disabled:cursor-not-allowed">Stop training</button>
+-        <button id="train-btn-restart" disabled class="rounded border border-amber-700 px-4 py-2 text-sm font-medium text-amber-300 hover:bg-amber-950/50 disabled:opacity-40 disabled:cursor-not-allowed">Restart</button>
++        <button id="train-btn-start" disabled title="Start the trainer container. The trainer should resume from its configured checkpoint if one exists." class="rounded border border-emerald-700 px-4 py-2 text-sm font-medium text-emerald-300 hover:bg-emerald-950/50 disabled:opacity-40 disabled:cursor-not-allowed">Start / resume</button>
++        <button id="train-btn-stop" disabled title="Stop the trainer container through Docker Compose." class="rounded border border-red-700 px-4 py-2 text-sm font-medium text-red-300 hover:bg-red-950/50 disabled:opacity-40 disabled:cursor-not-allowed">Stop trainer</button>
++        <button id="train-btn-restart" disabled title="Restart the trainer container through Docker Compose." class="rounded border border-amber-700 px-4 py-2 text-sm font-medium text-amber-300 hover:bg-amber-950/50 disabled:opacity-40 disabled:cursor-not-allowed">Restart trainer</button>
+       </div>
+       <pre id="train-api-output" class="mt-3 hidden max-h-40 overflow-auto rounded border border-zinc-800 bg-zinc-950/60 p-2 text-xs text-zinc-400 font-mono"></pre>
+     </section>
+@@ -1782,12 +1785,14 @@ document.addEventListener("DOMContentLoaded", () => {
+ 
+ // ── Training control panel (tailnet-gated) ──────────────────────────
+ async function initTrainingControls() {
+-  const API = 'http://100.126.238.73:8765';
+-  const SECRET_KEY='***';
++  const API = localStorage.getItem('oss-training-api-url') || 'http://100.126.238.73:8765';
++  const SECRET_KEY = 'oss-training-api-secret';
+   const panel = document.getElementById('training-controls');
+   const badge = document.getElementById('train-status-badge');
++  const statusDetail = document.getElementById('train-status-detail');
+   const secretInput = document.getElementById('train-secret-input');
+   const secretSave = document.getElementById('train-secret-save');
++  const secretClear = document.getElementById('train-secret-clear');
+   const secretMsg = document.getElementById('train-secret-msg');
+   const startBtn = document.getElementById('train-btn-start');
+   const stopBtn = document.getElementById('train-btn-stop');
+@@ -1795,72 +1800,207 @@ async function initTrainingControls() {
+   const output = document.getElementById('train-api-output');
+ 
+   let secret = localStorage.getItem(SECRET_KEY) || '';
++  let busy = false;
+ 
+   // Check if we're on the tailnet
+   try {
+     const resp = await fetch(`${API}/health`, { mode: 'cors', signal: AbortSignal.timeout(3000) });
+     if (!resp.ok) return;
+     panel.classList.remove('hidden');
+-  } catch { return; /* not on tailnet */ }
++  } catch (err) {
++    console.info('Trainer controls hidden: training API is not reachable from this browser.', err);
++    return; /* not on tailnet */
++  }
+ 
+   function authHeaders() { return { 'Authorization': `Bearer ${secret}` }; }
+ 
+-  function showOutput(text) {
+-    output.textContent = text;
++  function trainBadgeClass(tone) {
++    const base = 'rounded border px-2 py-0.5 text-xs';
++    if (tone === 'good') return `${base} border-emerald-700 text-emerald-300`;
++    if (tone === 'warn') return `${base} border-amber-700 text-amber-300`;
++    if (tone === 'bad') return `${base} border-red-700 text-red-300`;
++    return `${base} border-zinc-700 text-zinc-300`;
++  }
++
++  function trainStateText(data) {
++    if (!data) return { badge: 'Unknown', detail: 'I could not read the trainer status yet.', tone: 'muted' };
++    if (data.reason === 'infra_ok_but_trainer_stale') {
++      return { badge: 'Trainer is stale', detail: data.detail || 'The infrastructure looks healthy, but the trainer has stopped reporting new progress.', tone: 'bad' };
++    }
++    if (data.reason === 'trainer_stale_step') {
++      return { badge: 'Trainer may be stuck', detail: data.detail || 'The trainer is running, but step or loss has not refreshed recently.', tone: 'warn' };
++    }
++    if (data.reason === 'gpu_telemetry_missing') {
++      return { badge: 'GPU telemetry missing', detail: data.detail || 'The trainer may be running, but GPU status is not available.', tone: 'warn' };
++    }
++    if (data.running) {
++      const step = data.trainer?.latest_step;
++      const stepText = Number.isFinite(step) ? ` Current step: ${step.toLocaleString()}.` : '';
++      return { badge: 'Training is running', detail: `${data.detail || 'The trainer container is running.'}${stepText}`, tone: data.overall === 'degraded' ? 'warn' : 'good' };
++    }
++    if (data.state === 'not-found') {
++      return { badge: 'Trainer is not created', detail: 'The trainer container does not exist yet. Use Start / resume to create and launch it.', tone: 'warn' };
++    }
++    if (data.state === 'exited') {
++      const exit = data.exit_code ?? 'unknown';
++      return { badge: 'Training is stopped', detail: `The trainer container exited with code ${exit}. Use Start / resume to continue from the configured checkpoint path.`, tone: exit === 0 ? 'muted' : 'bad' };
++    }
++    return { badge: `Trainer is ${data.state || 'not running'}`, detail: data.detail || 'The trainer is reachable, but Docker is reporting a non-running state.', tone: 'warn' };
++  }
++
++  function setActionButtons({ canStart, canStop, canRestart }) {
++    startBtn.disabled = !canStart || busy;
++    stopBtn.disabled = !canStop || busy;
++    restartBtn.disabled = !canRestart || busy;
++    startBtn.dataset.statusDisabled = String(!canStart);
++    stopBtn.dataset.statusDisabled = String(!canStop);
++    restartBtn.dataset.statusDisabled = String(!canRestart);
++  }
++
++  function setControlsBusy(isBusy, label = '') {
++    busy = isBusy;
++    for (const btn of [startBtn, stopBtn, restartBtn, secretSave, secretClear]) {
++      if (!btn) continue;
++      btn.disabled = isBusy || btn.dataset.statusDisabled === 'true';
++      btn.setAttribute('aria-busy', isBusy ? 'true' : 'false');
++    }
++    if (label) {
++      badge.textContent = label;
++      badge.className = trainBadgeClass('warn');
++      statusDetail.textContent = 'Waiting for the trainer API to finish the requested change…';
++    }
++  }
++
++  function showOutput(message, details = '') {
++    output.textContent = details ? `${message}\n\nDetails:\n${details}` : message;
+     output.classList.remove('hidden');
+   }
+ 
++  function actionPendingText(action) {
++    return { start: 'Starting trainer…', stop: 'Stopping trainer…', restart: 'Restarting trainer…' }[action] || 'Working…';
++  }
++
++  function actionResultText(action, data) {
++    const result = data?.result || 'unknown';
++    const failed = result === 'failed' || Number(data?.returncode || 0) !== 0;
++    if (action === 'start' && result === 'already-running') return { message: 'Training was already running.', tone: 'good' };
++    if (action === 'start' && result === 'started') return { message: 'Training started. I’ll refresh the status in a moment.', tone: 'good' };
++    if (action === 'stop' && result === 'stopped') return { message: 'Training stop was sent successfully. The container should report stopped shortly.', tone: 'warn' };
++    if (action === 'restart' && result === 'restarted') return { message: 'Trainer restart was sent successfully. Give it a few seconds to come back online.', tone: 'warn' };
++    if (result === 'busy') return { message: 'Another trainer command is already running. Wait for it to finish, then try again.', tone: 'warn' };
++    if (failed) return { message: `The ${action} command failed.`, tone: 'bad' };
++    return { message: `The ${action} command finished with result: ${result}.`, tone: 'muted' };
++  }
++
+   async function refreshStatus() {
+-    if (!secret) { badge.textContent = 'locked'; badge.className = 'rounded border border-zinc-700 px-2 py-0.5 text-xs text-zinc-300'; return; }
++    if (!secret) {
++      badge.textContent = 'Locked';
++      badge.className = trainBadgeClass('muted');
++      statusDetail.textContent = 'Enter the trainer API secret to enable start, stop, and restart.';
++      setActionButtons({ canStart: false, canStop: false, canRestart: false });
++      return;
++    }
+     try {
+       const resp = await fetch(`${API}/status`, { headers: authHeaders(), signal: AbortSignal.timeout(5000) });
+-      if (!resp.ok) { badge.textContent = 'auth failed'; return; }
+-      const data = await resp.json();
+-      if (data.running) {
+-        badge.textContent = 'running';
+-        badge.className = 'rounded border border-emerald-700 px-2 py-0.5 text-xs text-emerald-300';
+-        startBtn.disabled = true;
+-        stopBtn.disabled = false;
+-        restartBtn.disabled = false;
+-      } else {
+-        badge.textContent = data.state || 'stopped';
+-        badge.className = 'rounded border border-red-700 px-2 py-0.5 text-xs text-red-300';
+-        startBtn.disabled = false;
+-        stopBtn.disabled = true;
+-        restartBtn.disabled = true;
++      if (!resp.ok) {
++        badge.textContent = resp.status === 401 ? 'Secret rejected' : 'API error';
++        badge.className = trainBadgeClass('bad');
++        statusDetail.textContent = resp.status === 401 ? 'The API secret was rejected. Check the secret and unlock controls again.' : `The trainer API returned HTTP ${resp.status}.`;
++        setActionButtons({ canStart: false, canStop: false, canRestart: false });
++        return;
+       }
+-    } catch { badge.textContent = 'unreachable'; }
++      const data = await resp.json();
++      const state = trainStateText(data);
++      badge.textContent = state.badge;
++      badge.className = trainBadgeClass(state.tone);
++      statusDetail.textContent = state.detail;
++      const actions = data.actions || { can_start: !data.running, can_stop: data.running, can_restart: data.running };
++      setActionButtons({ canStart: !!actions.can_start, canStop: !!actions.can_stop, canRestart: !!actions.can_restart });
++    } catch (err) {
++      badge.textContent = 'API unreachable';
++      badge.className = trainBadgeClass('bad');
++      statusDetail.textContent = `Could not contact the trainer API: ${err.message}`;
++      setActionButtons({ canStart: false, canStop: false, canRestart: false });
++    }
+   }
+ 
+   async function apiAction(action) {
+-    if (!secret) return;
++    if (!secret) {
++      showOutput('Enter the trainer API secret before using the controls.');
++      secretInput.focus();
++      return;
++    }
++    setControlsBusy(true, actionPendingText(action));
+     try {
+       const resp = await fetch(`${API}/${action}`, { method: 'POST', headers: authHeaders(), signal: AbortSignal.timeout(120000) });
+-      const data = await resp.json();
+-      showOutput(`${action}: ${data.result}\n${data.stdout || ''}${data.stderr ? '\nSTDERR:\n' + data.stderr : ''}`);
++      let data = {};
++      try { data = await resp.json(); } catch { data = { result: 'failed', stderr: 'The training API returned a non-JSON response.' }; }
++      if (!resp.ok) {
++        const msg = resp.status === 401 ? 'The API secret was rejected. Check the secret and try again.' : `The training API returned HTTP ${resp.status}.`;
++        showOutput(msg, data.error || data.message || data.stderr || '');
++        badge.textContent = resp.status === 401 ? 'Secret rejected' : 'API error';
++        badge.className = trainBadgeClass('bad');
++        return;
++      }
++      const result = actionResultText(action, data);
++      showOutput(result.message, [data.stdout, data.stderr ? `STDERR:\n${data.stderr}` : ''].filter(Boolean).join('\n'));
++      badge.textContent = result.message;
++      badge.className = trainBadgeClass(result.tone);
++    } catch (err) {
++      const timedOut = /aborted|timeout/i.test(err?.message || '');
++      showOutput(timedOut ? 'The trainer API did not answer before the timeout.' : `Could not contact the trainer API: ${err.message}`);
++      badge.textContent = timedOut ? 'Request timed out' : 'API unreachable';
++      badge.className = trainBadgeClass('bad');
++    } finally {
++      setControlsBusy(false);
+       setTimeout(refreshStatus, 2000);
+-    } catch (err) { showOutput(`Error: ${err.message}`); }
++    }
+   }
+ 
+   secretSave.addEventListener('click', () => {
+     const val = secretInput.value.trim();
+-    if (!val) { secretMsg.textContent = 'enter a secret'; return; }
++    if (!val) {
++      secretMsg.textContent = 'Enter the trainer API secret first.';
++      secretMsg.className = 'text-xs text-amber-300';
++      return;
++    }
+     secret = val;
+     localStorage.setItem(SECRET_KEY, secret);
+-    secretMsg.textContent = 'saved';
++    secretMsg.textContent = 'Controls unlocked in this browser.';
+     secretMsg.className = 'text-xs text-emerald-400';
+     refreshStatus();
+   });
+ 
++  secretClear.addEventListener('click', () => {
++    secret = '';
++    localStorage.removeItem(SECRET_KEY);
++    secretInput.value = '';
++    secretMsg.textContent = 'Secret removed from this browser.';
++    secretMsg.className = 'text-xs text-zinc-400';
++    badge.textContent = 'Locked';
++    badge.className = trainBadgeClass('muted');
++    statusDetail.textContent = 'Enter the trainer API secret to enable start, stop, and restart.';
++    setActionButtons({ canStart: false, canStop: false, canRestart: false });
++    output.classList.add('hidden');
++  });
++
++  secretInput.addEventListener('keydown', (event) => {
++    if (event.key === 'Enter') secretSave.click();
++  });
++
+   // Pre-fill from localStorage
+-  if (secret) { secretInput.value = secret; secretMsg.textContent = 'loaded'; refreshStatus(); }
++  if (secret) {
++    secretInput.value = secret;
++    secretMsg.textContent = 'Saved secret loaded from this browser.';
++    secretMsg.className = 'text-xs text-zinc-400';
++    refreshStatus();
++  } else {
++    refreshStatus();
++  }
+ 
+   startBtn.addEventListener('click', () => apiAction('start'));
+   stopBtn.addEventListener('click', () => apiAction('stop'));
+   restartBtn.addEventListener('click', () => apiAction('restart'));
+-
+-  // Enable buttons once secret is set
+-  if (secret) { startBtn.disabled = false; stopBtn.disabled = false; restartBtn.disabled = false; }
+ }
+ </script>
+ </body>
+diff --git a/scripts/training_api.py b/scripts/training_api.py
+index 1b9017f..16b2f9d 100644
+--- a/scripts/training_api.py
++++ b/scripts/training_api.py
+@@ -6,18 +6,28 @@ Requires a shared secret in the Authorization header.
+ Uses only Python stdlib — no pip deps needed.
+ """
+ 
++import hmac
+ import json
+ import os
+ import subprocess
+ import sys
+-from http.server import HTTPServer, BaseHTTPRequestHandler
++import threading
++from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+ from pathlib import Path
+ 
++try:
++    from scripts import training_status
++except ImportError:  # direct execution from scripts/
++    import training_status  # type: ignore
++
+ LISTEN_HOST = os.environ.get("LISTEN_HOST", "100.126.238.73")
+ LISTEN_PORT = int(os.environ.get("LISTEN_PORT", "8765"))
+ SHARED_SECRET = os.environ.get("SHARED_SECRET", "")
+ COMPOSE_DIR = Path(os.environ.get("COMPOSE_DIR", "/workspace/oss-gaussian/docker/trainer"))
+ CONTAINER_NAME = os.environ.get("CONTAINER_NAME", "oss-trainer")
++RUN_DIR = Path(os.environ.get("RUN_DIR", str(Path.home() / "checkpoints" / "srcnn-v7.0-pico-005")))
++ACTION_LOCK = threading.Lock()
++ACTION_IN_PROGRESS = False
+ 
+ CORS_HEADERS = {
+     "Access-Control-Allow-Origin": "*",
+@@ -29,7 +39,7 @@ CORS_HEADERS = {
+ def check_auth(handler) -> bool:
+     auth = handler.headers.get("Authorization", "")
+     expected = f"Bearer {SHARED_SECRET}"
+-    return auth == expected and SHARED_SECRET != ""
++    return SHARED_SECRET != "" and hmac.compare_digest(auth, expected)
+ 
+ 
+ def docker(*args: str, timeout: int = 120) -> subprocess.CompletedProcess:
+@@ -39,6 +49,10 @@ def docker(*args: str, timeout: int = 120) -> subprocess.CompletedProcess:
+     )
+ 
+ 
++def command_runner(args: list[str], timeout: int = 120) -> subprocess.CompletedProcess:
++    return subprocess.run(args, capture_output=True, text=True, timeout=timeout)
++
++
+ def docker_compose(*args: str, timeout: int = 120) -> subprocess.CompletedProcess:
+     return subprocess.run(
+         ["docker", "compose", "-f", str(COMPOSE_DIR / "docker-compose.yml")] + list(args),
+@@ -48,28 +62,89 @@ def docker_compose(*args: str, timeout: int = 120) -> subprocess.CompletedProces
+ 
+ def container_status() -> dict:
+     """Return the current state of the oss-trainer container."""
+-    result = docker("inspect", CONTAINER_NAME)
+-    if result.returncode != 0:
+-        return {"running": False, "state": "not-found", "error": result.stderr.strip()}
++    return training_status.docker_container_probe(
++        container_name=CONTAINER_NAME,
++        runner=command_runner,
++    )
+ 
+-    try:
+-        data = json.loads(result.stdout)
+-        info = data[0]
+-        state = info.get("State", {})
+-        return {
+-            "running": state.get("Running", False),
+-            "state": state.get("Status", "exited"),
+-            "exit_code": state.get("ExitCode"),
+-            "started_at": state.get("StartedAt", ""),
+-            "finished_at": state.get("FinishedAt", ""),
+-        }
+-    except (json.JSONDecodeError, IndexError, KeyError):
+-        return {"running": False, "state": "unknown", "error": "parse failed"}
++
++def status_payload(runner=command_runner) -> dict:
++    """Return structured trainer status for the control UI.
++
++    Keeps legacy top-level ``running`` and ``state`` for older dashboard JS while
++    exposing reason-coded evidence for the hardened controls.
++    """
++    return training_status.build_training_status(
++        container_name=CONTAINER_NAME,
++        run_dir=RUN_DIR,
++        runner=runner,
++    )
+ 
+ 
+ def recent_logs(lines: int = 20) -> str:
+-    result = docker("logs", "--tail", str(lines), CONTAINER_NAME)
+-    return result.stdout
++    result = training_status.recent_logs_probe(
++        container_name=CONTAINER_NAME,
++        runner=command_runner,
++        lines=lines,
++    )
++    return result.get("stdout", "")
++
++
++def truncate_output(text: str, limit: int = 800) -> str:
++    if len(text) <= limit:
++        return text
++    return text[-limit:]
++
++
++def action_message(action: str, result: str) -> str:
++    if result == "busy":
++        return "Another trainer control action is already running."
++    if action == "start" and result == "already-running":
++        return "Training is already running."
++    if action == "start" and result == "started":
++        return "Start command completed; the trainer should start or resume shortly."
++    if action == "stop" and result == "stopped":
++        return "Stop command completed; the trainer container should stop shortly."
++    if action == "restart" and result == "restarted":
++        return "Restart command completed; the trainer should come back online shortly."
++    return f"{action.capitalize()} command failed."
++
++
++def action_response(action: str, result: subprocess.CompletedProcess, runner=command_runner) -> dict:
++    success_result = {
++        "start": "started",
++        "stop": "stopped",
++        "restart": "restarted",
++    }.get(action, "completed")
++    outcome = success_result if result.returncode == 0 else "failed"
++    return {
++        "action": action,
++        "result": outcome,
++        "message": action_message(action, outcome),
++        "stdout": truncate_output(result.stdout or ""),
++        "stderr": truncate_output(result.stderr or ""),
++        "returncode": result.returncode,
++        "status": status_payload(runner=runner),
++    }
++
++
++def busy_action_response(action: str) -> dict:
++    return {
++        "action": action,
++        "result": "busy",
++        "message": action_message(action, "busy"),
++    }
++
++
++def timeout_action_response(action: str, error: str) -> dict:
++    return {
++        "action": action,
++        "result": "failed",
++        "message": action_message(action, "failed"),
++        "stdout": "",
++        "stderr": truncate_output(error),
++        "returncode": 124,
++    }
+ 
+ 
+ def json_response(handler, data: dict, status: int = 200):
+@@ -115,9 +190,7 @@ class Handler(BaseHTTPRequestHandler):
+             return
+ 
+         if self.path == "/status":
+-            status = container_status()
+-            status["logs_tail"] = recent_logs()
+-            json_response(self, status)
++            json_response(self, status_payload())
+ 
+         else:
+             json_response(self, {"error": "not found"}, 404)
+@@ -127,42 +200,58 @@ class Handler(BaseHTTPRequestHandler):
+             json_response(self, {"error": "unauthorized"}, 401)
+             return
+ 
+-        if self.path == "/start":
+-            status = container_status()
+-            if status["running"]:
+-                json_response(self, {"action": "start", "result": "already-running", "status": status})
++        action = self.path.strip("/")
++        if action not in {"start", "stop", "restart"}:
++            json_response(self, {"error": "not found"}, 404)
++            return
++
++        global ACTION_IN_PROGRESS
++        with ACTION_LOCK:
++            if ACTION_IN_PROGRESS:
++                json_response(self, busy_action_response(action), 409)
++                return
++            ACTION_IN_PROGRESS = True
++
++        try:
++            if action == "start":
++                status = container_status()
++                if status["running"]:
++                    payload = {
++                        "action": "start",
++                        "result": "already-running",
++                        "message": action_message("start", "already-running"),
++                        "status": status_payload(),
++                    }
++                    json_response(self, payload)
++                    return
++                try:
++                    result = docker_compose("up", "-d")
++                except subprocess.TimeoutExpired as exc:
++                    json_response(self, timeout_action_response("start", str(exc)), 504)
++                    return
++                json_response(self, action_response("start", result))
+                 return
+-            result = docker_compose("up", "-d")
+-            json_response(self, {
+-                "action": "start",
+-                "result": "started" if result.returncode == 0 else "failed",
+-                "stdout": result.stdout[-500:],
+-                "stderr": result.stderr[-500:],
+-                "returncode": result.returncode,
+-            })
+-
+-        elif self.path == "/stop":
+-            result = docker_compose("stop")
+-            json_response(self, {
+-                "action": "stop",
+-                "result": "stopped" if result.returncode == 0 else "failed",
+-                "stdout": result.stdout[-500:],
+-                "stderr": result.stderr[-500:],
+-                "returncode": result.returncode,
+-            })
+-
+-        elif self.path == "/restart":
+-            result = docker_compose("restart")
+-            json_response(self, {
+-                "action": "restart",
+-                "result": "restarted" if result.returncode == 0 else "failed",
+-                "stdout": result.stdout[-500:],
+-                "stderr": result.stderr[-500:],
+-                "returncode": result.returncode,
+-            })
+ 
+-        else:
+-            json_response(self, {"error": "not found"}, 404)
++            if action == "stop":
++                try:
++                    result = docker_compose("stop")
++                except subprocess.TimeoutExpired as exc:
++                    json_response(self, timeout_action_response("stop", str(exc)), 504)
++                    return
++                json_response(self, action_response("stop", result))
++                return
++
++            if action == "restart":
++                try:
++                    result = docker_compose("restart")
++                except subprocess.TimeoutExpired as exc:
++                    json_response(self, timeout_action_response("restart", str(exc)), 504)
++                    return
++                json_response(self, action_response("restart", result))
++                return
++        finally:
++            with ACTION_LOCK:
++                ACTION_IN_PROGRESS = False
+ 
+ 
+ def main():
+@@ -170,7 +259,7 @@ def main():
+         print("FATAL: SHARED_SECRET env var not set", file=sys.stderr)
+         sys.exit(1)
+ 
+-    server = HTTPServer((LISTEN_HOST, LISTEN_PORT), Handler)
++    server = ThreadingHTTPServer((LISTEN_HOST, LISTEN_PORT), Handler)
+     print(f"[api] Listening on {LISTEN_HOST}:{LISTEN_PORT}", file=sys.stderr)
+     try:
+         server.serve_forever()
+diff --git a/scripts/training_status.py b/scripts/training_status.py
+new file mode 100644
+index 0000000..180eef8
+--- /dev/null
++++ b/scripts/training_status.py
+@@ -0,0 +1,328 @@
++#!/usr/bin/env python3
++"""Structured trainer status helpers for OSS training controls.
++
++This module is intentionally stdlib-only and side-effect-light so the tailnet
++control API can report operator-grade state without coupling tests to Docker.
++"""
++
++from __future__ import annotations
++
++import json
++import subprocess
++from datetime import datetime, timezone
++from pathlib import Path
++from typing import Any, Callable
++
++SCHEMA_VERSION = "2026-06-training-control-v1"
++
++REASON_TRAINER_OK = "trainer_ok"
++REASON_TRAINER_PROCESS_DEAD = "trainer_process_dead"
++REASON_GPU_TELEMETRY_OK = "gpu_telemetry_ok"
++REASON_GPU_TELEMETRY_MISSING = "gpu_telemetry_missing"
++REASON_TRAINER_STALE_STEP = "trainer_stale_step"
++REASON_INFRA_OK_BUT_TRAINER_STALE = "infra_ok_but_trainer_stale"
++
++Runner = Callable[[list[str], int], subprocess.CompletedProcess[str]]
++
++
++def utcnow() -> datetime:
++    return datetime.now(timezone.utc)
++
++
++def isoformat_z(dt: datetime) -> str:
++    if dt.tzinfo is None:
++        dt = dt.replace(tzinfo=timezone.utc)
++    return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
++
++
++def _age_seconds(path: Path, now: datetime) -> float | None:
++    try:
++        return max(0.0, now.timestamp() - path.stat().st_mtime)
++    except OSError:
++        return None
++
++
++def parse_docker_inspect(stdout: str) -> dict[str, Any]:
++    try:
++        data = json.loads(stdout)
++        info = data[0]
++        state = info.get("State", {})
++    except (json.JSONDecodeError, IndexError, TypeError, AttributeError):
++        return {
++            "running": False,
++            "state": "unknown",
++            "reason": "docker_inspect_parse_failed",
++            "error": "Could not parse docker inspect output.",
++        }
++
++    health = state.get("Health") or {}
++    health_log = health.get("Log") or []
++    health_tail = []
++    for entry in health_log[-3:]:
++        if isinstance(entry, dict):
++            health_tail.append(str(entry.get("Output", "")).strip())
++
++    return {
++        "running": bool(state.get("Running", False)),
++        "state": state.get("Status", "exited"),
++        "exit_code": state.get("ExitCode"),
++        "started_at": state.get("StartedAt", ""),
++        "finished_at": state.get("FinishedAt", ""),
++        "health": health.get("Status"),
++        "health_failing_streak": health.get("FailingStreak"),
++        "health_log_tail": health_tail,
++        "oom_killed": bool(state.get("OOMKilled", False)),
++        "dead": bool(state.get("Dead", False)),
++        "restarting": bool(state.get("Restarting", False)),
++        "error": state.get("Error", ""),
++    }
++
++
++def docker_container_probe(
++    *,
++    container_name: str,
++    runner: Runner,
++    timeout: int = 120,
++) -> dict[str, Any]:
++    try:
++        result = runner(["docker", "inspect", container_name], timeout)
++    except subprocess.TimeoutExpired:
++        return {
++            "running": False,
++            "state": "unknown",
++            "reason": REASON_TRAINER_PROCESS_DEAD,
++            "error": "docker inspect timed out",
++            "returncode": 124,
++        }
++    except OSError as exc:
++        return {
++            "running": False,
++            "state": "unknown",
++            "reason": REASON_TRAINER_PROCESS_DEAD,
++            "error": str(exc),
++            "returncode": 127,
++        }
++    if result.returncode != 0:
++        return {
++            "running": False,
++            "state": "not-found",
++            "reason": REASON_TRAINER_PROCESS_DEAD,
++            "error": (result.stderr or result.stdout or "docker inspect failed").strip(),
++            "returncode": result.returncode,
++        }
++    parsed = parse_docker_inspect(result.stdout)
++    parsed["returncode"] = result.returncode
++    return parsed
++
++
++def recent_logs_probe(
++    *,
++    container_name: str,
++    runner: Runner,
++    lines: int = 20,
++    timeout: int = 120,
++) -> dict[str, Any]:
++    try:
++        result = runner(["docker", "logs", "--tail", str(lines), container_name], timeout)
++    except subprocess.TimeoutExpired:
++        return {"stdout": "", "stderr": "docker logs timed out", "returncode": 124}
++    except OSError as exc:
++        return {"stdout": "", "stderr": str(exc), "returncode": 127}
++    stdout = result.stdout or ""
++    stderr = result.stderr or ""
++    return {
++        "stdout": stdout[-4000:],
++        "stderr": stderr[-2000:],
++        "returncode": result.returncode,
++    }
++
++
++def _parse_json_line(line: str) -> dict[str, Any] | None:
++    try:
++        value = json.loads(line)
++    except json.JSONDecodeError:
++        return None
++    return value if isinstance(value, dict) else None
++
++
++def latest_training_step_from_run_dir(run_dir: Path, now: datetime | None = None) -> dict[str, Any]:
++    now = now or utcnow()
++    history = run_dir / "history.jsonl"
++    metrics = run_dir / "metrics.json"
++
++    if history.exists():
++        latest: dict[str, Any] | None = None
++        try:
++            for line in history.read_text(encoding="utf-8", errors="replace").splitlines():
++                item = _parse_json_line(line)
++                if item is not None and "step" in item:
++                    latest = item
++        except OSError as exc:
++            return {"status": "unknown", "latest_step": None, "reason": "history_read_failed", "detail": str(exc)}
++        step = latest.get("step") if latest else None
++        return {
++            "status": "healthy" if step is not None else "unknown",
++            "reason": "history_step_found" if step is not None else "history_missing_step",
++            "latest_step": int(step) if isinstance(step, int | float) else None,
++            "loss": latest.get("loss") if latest else None,
++            "source": "history.jsonl",
++            "source_mtime_age_seconds": _age_seconds(history, now),
++        }
++
++    if metrics.exists():
++        try:
++            data = json.loads(metrics.read_text(encoding="utf-8", errors="replace"))
++        except (OSError, json.JSONDecodeError) as exc:
++            return {"status": "unknown", "latest_step": None, "reason": "metrics_read_failed", "detail": str(exc)}
++        step = data.get("step") or data.get("latest_step")
++        return {
++            "status": "healthy" if step is not None else "unknown",
++            "reason": "metrics_step_found" if step is not None else "metrics_missing_step",
++            "latest_step": int(step) if isinstance(step, int | float) else None,
++            "loss": data.get("loss"),
++            "source": "metrics.json",
++            "source_mtime_age_seconds": _age_seconds(metrics, now),
++        }
++
++    return {
++        "status": "unknown",
++        "reason": "training_progress_missing",
++        "latest_step": None,
++        "source": None,
++        "source_mtime_age_seconds": None,
++    }
++
++
++def gpu_status_probe(run_dir: Path, now: datetime | None = None, max_age_seconds: int = 600) -> dict[str, Any]:
++    now = now or utcnow()
++    path = run_dir / "gpu_status.json"
++    age = _age_seconds(path, now)
++    if age is None:
++        return {
++            "status": "degraded",
++            "reason": REASON_GPU_TELEMETRY_MISSING,
++            "detail": "No gpu_status.json is available for this run.",
++            "age_seconds": None,
++        }
++    try:
++        data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
++    except (OSError, json.JSONDecodeError) as exc:
++        return {
++            "status": "degraded",
++            "reason": REASON_GPU_TELEMETRY_MISSING,
++            "detail": f"GPU status is unreadable: {exc}",
++            "age_seconds": age,
++        }
++    status = "healthy" if age <= max_age_seconds else "degraded"
++    reason = REASON_GPU_TELEMETRY_OK if status == "healthy" else REASON_GPU_TELEMETRY_MISSING
++    return {
++        "status": status,
++        "reason": reason,
++        "detail": "GPU telemetry is fresh." if status == "healthy" else "GPU telemetry is stale.",
++        "age_seconds": age,
++        "data": data,
++    }
++
++
++def _fmt_step(step: Any) -> str:
++    return f"{int(step):,}" if isinstance(step, int | float) else "unknown"
++
++
++def classify_trainer_health(
++    *,
++    docker: dict[str, Any],
++    progress: dict[str, Any],
++    gpu: dict[str, Any],
++    stale_warn_seconds: int = 300,
++    stale_offline_seconds: int = 900,
++) -> dict[str, Any]:
++    running = bool(docker.get("running"))
++    state = str(docker.get("state") or "unknown")
++    if not running:
++        return {
++            "overall": "offline",
++            "reason": REASON_TRAINER_PROCESS_DEAD,
++            "detail": f"The trainer container is {state}. Start or resume training to continue.",
++        }
++
++    health = docker.get("health")
++    latest_step = progress.get("latest_step")
++    if latest_step is None:
++        return {
++            "overall": "degraded",
++            "reason": REASON_TRAINER_STALE_STEP,
++            "detail": "The trainer container is running, but no training progress file or latest step was found.",
++        }
++
++    age = progress.get("step_stale_seconds")
++    if age is None:
++        age = progress.get("source_mtime_age_seconds")
++
++    if health == "unhealthy" or (isinstance(age, int | float) and age > stale_offline_seconds):
++        reason = (
++            REASON_INFRA_OK_BUT_TRAINER_STALE
++            if gpu.get("status") == "healthy"
++            else REASON_TRAINER_STALE_STEP
++        )
++        return {
++            "overall": "offline",
++            "reason": reason,
++            "detail": f"The trainer container is running, but step {_fmt_step(latest_step)} has not refreshed recently.",
++        }
++
++    if isinstance(age, int | float) and age > stale_warn_seconds:
++        return {
++            "overall": "degraded",
++            "reason": REASON_TRAINER_STALE_STEP,
++            "detail": f"The trainer is running, but step {_fmt_step(latest_step)} has not refreshed in {int(age)} seconds.",
++        }
++
++    return {
++        "overall": "healthy",
++        "reason": REASON_TRAINER_OK,
++        "detail": f"Training is running and reporting step {_fmt_step(latest_step)}.",
++    }
++
++
++def actions_for_status(status: dict[str, Any]) -> dict[str, bool]:
++    running = bool(status.get("running"))
++    return {
++        "can_start": not running,
++        "can_stop": running,
++        "can_restart": running,
++    }
++
++
++def build_training_status(
++    *,
++    container_name: str,
++    run_dir: Path,
++    runner: Runner,
++    now: datetime | None = None,
++) -> dict[str, Any]:
++    now = now or utcnow()
++    container = docker_container_probe(container_name=container_name, runner=runner)
++    progress = latest_training_step_from_run_dir(run_dir, now=now)
++    gpu = gpu_status_probe(run_dir, now=now)
++    classification = classify_trainer_health(docker=container, progress=progress, gpu=gpu)
++    logs = recent_logs_probe(container_name=container_name, runner=runner)
++
++    status = {
++        "schema_version": SCHEMA_VERSION,
++        "checked_at": isoformat_z(now),
++        "overall": classification["overall"],
++        "reason": classification["reason"],
++        "detail": classification["detail"],
++        "running": bool(container.get("running")),
++        "state": container.get("state", "unknown"),
++        "exit_code": container.get("exit_code"),
++        "started_at": container.get("started_at", ""),
++        "finished_at": container.get("finished_at", ""),
++        "container": container,
++        "trainer": progress,
++        "gpu": gpu,
++        "logs": logs,
++        "logs_tail": logs.get("stdout", ""),
++        "actions": actions_for_status(container),
++    }
++    return status
+diff --git a/tests/test_public_dashboard_schema.py b/tests/test_public_dashboard_schema.py
+index 5acab80..61e2bbb 100644
+--- a/tests/test_public_dashboard_schema.py
++++ b/tests/test_public_dashboard_schema.py
+@@ -13,7 +13,7 @@ from scripts import build_public_dashboard as dashboard
+ ROOT = Path(__file__).resolve().parents[1]
+ 
+ 
+-def _build_fixture(tmp_path: Path) -> Path:
++def _build_fixture_dir(tmp_path: Path) -> Path:
+     out_dir = tmp_path / "dashboard"
+     subprocess.run(
+         [
+@@ -27,7 +27,11 @@ def _build_fixture(tmp_path: Path) -> Path:
+         check=True,
+         cwd=ROOT,
+     )
+-    return out_dir / "data.json"
++    return out_dir
++
++
++def _build_fixture(tmp_path: Path) -> Path:
++    return _build_fixture_dir(tmp_path) / "data.json"
+ 
+ 
+ def test_public_dashboard_fixture_passes_schema(tmp_path: Path) -> None:
+@@ -87,3 +91,38 @@ def test_public_dashboard_schema_rejects_missing_models(tmp_path: Path) -> None:
+ 
+     assert proc.returncode == 1
+     assert "models: required field missing" in proc.stderr
++
++
++def test_generated_dashboard_includes_plain_english_training_controls(tmp_path: Path) -> None:
++    out_dir = _build_fixture_dir(tmp_path)
++    html = (out_dir / "index.html").read_text(encoding="utf-8")
++
++    assert 'id="training-controls"' in html
++    assert 'id="train-status-badge"' in html
++    assert 'id="train-status-detail"' in html
++    assert 'id="train-secret-input"' in html
++    assert 'id="train-secret-save"' in html
++    assert 'id="train-secret-clear"' in html
++    assert 'id="train-btn-start"' in html
++    assert 'id="train-btn-stop"' in html
++    assert 'id="train-btn-restart"' in html
++    assert "Start / resume" in html
++    assert "Stop trainer" in html
++    assert "Restart trainer" in html
++    assert "Training is running" in html
++    assert "The API secret was rejected" in html
++    assert "Trainer controls" in html
++    assert "oss-training-api-secret" in html
++    assert "const SECRET_KEY='***'" not in html
++
++
++def test_training_controls_have_accessibility_and_busy_hooks(tmp_path: Path) -> None:
++    out_dir = _build_fixture_dir(tmp_path)
++    html = (out_dir / "index.html").read_text(encoding="utf-8")
++
++    assert 'aria-live="polite"' in html
++    assert 'role="status"' in html
++    assert "aria-busy" in html
++    assert 'autocomplete="off"' in html
++    assert "setControlsBusy" in html
++    assert "actionResultText" in html
+diff --git a/tests/test_public_dashboard_training_controls.py b/tests/test_public_dashboard_training_controls.py
+new file mode 100644
+index 0000000..98c1803
+--- /dev/null
++++ b/tests/test_public_dashboard_training_controls.py
+@@ -0,0 +1,29 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[1]
++
++
++def test_canonical_public_dashboard_ships_plain_english_training_controls():
++    html = (ROOT / "dashboard-public" / "index.html").read_text(encoding="utf-8")
++
++    assert 'id="training-controls"' in html
++    assert 'id="train-status-detail"' in html
++    assert 'id="train-secret-clear"' in html
++    assert "Start / resume" in html
++    assert "Stop trainer" in html
++    assert "Restart trainer" in html
++    assert "Training is running" in html
++    assert "The API secret was rejected" in html
++    assert "oss-training-api-secret" in html
++    assert "const SECRET_KEY='***'" not in html
++    assert "initTrainingControls();" in html
++
++
++def test_canonical_public_dashboard_keeps_existing_status_and_data_loading():
++    html = (ROOT / "dashboard-public" / "index.html").read_text(encoding="utf-8")
++
++    assert "status.json?ts=" in html
++    assert 'id="status-strip"' in html
++    assert "data.json" in html
++    assert "loadStatus();" in html
+diff --git a/tests/test_training_api_deployment.py b/tests/test_training_api_deployment.py
+new file mode 100644
+index 0000000..582c937
+--- /dev/null
++++ b/tests/test_training_api_deployment.py
+@@ -0,0 +1,22 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[1]
++
++
++def test_training_api_docker_image_includes_status_helper():
++    dockerfile = (ROOT / "docker" / "training-api" / "Dockerfile").read_text(encoding="utf-8")
++
++    assert "COPY scripts/training_api.py /app/training_api.py" in dockerfile
++    assert "COPY scripts/training_status.py /app/training_status.py" in dockerfile
++
++
++def test_training_api_compose_mounts_run_dir_for_status_probe():
++    compose = (ROOT / "docker" / "training-api" / "docker-compose.yml").read_text(encoding="utf-8")
++
++    assert 'RUN_DIR: "/checkpoints/srcnn-v7.0-pico-005"' in compose
++    assert "HOME: ${HOME}" in compose
++    assert "OSS_REPO: ${OSS_REPO:-${HOME}/OpenSuperSampling}" in compose
++    assert "OSS_DATASETS: ${OSS_DATASETS:-${HOME}/datasets}" in compose
++    assert "OSS_CHECKPOINTS: ${OSS_CHECKPOINTS:-${HOME}/checkpoints}" in compose
++    assert "/srcnn-v7.0-pico-005:/checkpoints/srcnn-v7.0-pico-005:ro" in compose
+diff --git a/tests/test_training_api_status.py b/tests/test_training_api_status.py
+new file mode 100644
+index 0000000..84c1d9e
+--- /dev/null
++++ b/tests/test_training_api_status.py
+@@ -0,0 +1,87 @@
++import json
++import subprocess
++
++from scripts import training_api
++
++
++def test_status_payload_includes_structured_status_and_legacy_fields(monkeypatch, tmp_path):
++    run_dir = tmp_path / "run"
++    run_dir.mkdir()
++    (run_dir / "history.jsonl").write_text('{"step": 5}\n', encoding="utf-8")
++
++    def fake_runner(args, timeout=120):
++        if args[:2] == ["docker", "inspect"]:
++            return subprocess.CompletedProcess(args, 0, json.dumps([{"State": {"Running": True, "Status": "running", "ExitCode": 0, "Health": {"Status": "healthy", "FailingStreak": 0}}}]), "")
++        if args[:2] == ["docker", "logs"]:
++            return subprocess.CompletedProcess(args, 0, "step 5", "")
++        raise AssertionError(args)
++
++    monkeypatch.setattr(training_api, "RUN_DIR", run_dir)
++    status = training_api.status_payload(runner=fake_runner)
++
++    assert status["running"] is True
++    assert status["state"] == "running"
++    assert status["schema_version"] == "2026-06-training-control-v1"
++    assert status["container"]["health"] == "healthy"
++    assert "reason" in status
++    assert "detail" in status
++    assert "trainer" in status
++    assert "gpu" in status
++    assert "logs" in status
++    assert "actions" in status
++
++
++def test_status_payload_reports_trainer_process_dead(monkeypatch, tmp_path):
++    def fake_runner(args, timeout=120):
++        if args[:2] == ["docker", "inspect"]:
++            return subprocess.CompletedProcess(args, 1, "", "No such container")
++        if args[:2] == ["docker", "logs"]:
++            return subprocess.CompletedProcess(args, 1, "", "No such container")
++        raise AssertionError(args)
++
++    monkeypatch.setattr(training_api, "RUN_DIR", tmp_path)
++    status = training_api.status_payload(runner=fake_runner)
++
++    assert status["running"] is False
++    assert status["state"] == "not-found"
++    assert status["reason"] == "trainer_process_dead"
++    assert status["actions"]["can_start"] is True
++
++
++def test_action_response_truncates_output_and_includes_plain_message(monkeypatch, tmp_path):
++    def fake_runner(args, timeout=120):
++        if args[:2] == ["docker", "inspect"]:
++            return subprocess.CompletedProcess(args, 1, "", "No such container")
++        if args[:2] == ["docker", "logs"]:
++            return subprocess.CompletedProcess(args, 1, "", "No such container")
++        raise AssertionError(args)
++
++    result = subprocess.CompletedProcess(["docker", "compose"], 1, "x" * 2000, "bad" * 1000)
++    response = training_api.action_response("start", result, runner=fake_runner)
++
++    assert response["action"] == "start"
++    assert response["result"] == "failed"
++    assert response["message"] == "Start command failed."
++    assert len(response["stdout"]) <= 800
++    assert len(response["stderr"]) <= 800
++    assert "status" in response
++
++
++def test_action_lock_returns_busy_without_running_command(monkeypatch):
++    training_api.ACTION_IN_PROGRESS = True
++    try:
++        response = training_api.busy_action_response("restart")
++    finally:
++        training_api.ACTION_IN_PROGRESS = False
++
++    assert response["result"] == "busy"
++    assert response["message"] == "Another trainer control action is already running."
++
++
++def test_timeout_action_response_is_structured():
++    response = training_api.timeout_action_response("restart", "docker compose restart timed out")
++
++    assert response["result"] == "failed"
++    assert response["returncode"] == 124
++    assert response["message"] == "Restart command failed."
++    assert "timed out" in response["stderr"]
+diff --git a/tests/test_training_status.py b/tests/test_training_status.py
+new file mode 100644
+index 0000000..da5f336
+--- /dev/null
++++ b/tests/test_training_status.py
+@@ -0,0 +1,125 @@
++import json
++import subprocess
++from datetime import datetime, timedelta, timezone
++from pathlib import Path
++
++from scripts import training_status
++
++
++def test_parse_docker_inspect_extracts_running_health():
++    payload = [{
++        "State": {
++            "Running": True,
++            "Status": "running",
++            "ExitCode": 0,
++            "StartedAt": "2026-06-08T01:00:00Z",
++            "FinishedAt": "0001-01-01T00:00:00Z",
++            "Health": {"Status": "healthy", "FailingStreak": 0, "Log": [{"Output": "ok"}]},
++            "OOMKilled": False,
++            "Dead": False,
++            "Restarting": False,
++            "Error": "",
++        }
++    }]
++
++    parsed = training_status.parse_docker_inspect(json.dumps(payload))
++
++    assert parsed["running"] is True
++    assert parsed["state"] == "running"
++    assert parsed["health"] == "healthy"
++    assert parsed["health_failing_streak"] == 0
++
++
++def test_parse_docker_inspect_missing_or_invalid_returns_unknown():
++    parsed = training_status.parse_docker_inspect("not json")
++
++    assert parsed["running"] is False
++    assert parsed["state"] == "unknown"
++    assert parsed["reason"] == "docker_inspect_parse_failed"
++
++
++def test_latest_training_step_from_history_jsonl_ignores_torn_final_line(tmp_path: Path):
++    run_dir = tmp_path / "run"
++    run_dir.mkdir()
++    history = run_dir / "history.jsonl"
++    history.write_text('{"step": 10, "loss": 0.2}\n{"step": 12, "loss": 0.1}\n{"step": ', encoding="utf-8")
++
++    latest = training_status.latest_training_step_from_run_dir(run_dir)
++
++    assert latest["latest_step"] == 12
++    assert latest["source"] == "history.jsonl"
++    assert latest["status"] == "healthy"
++
++
++def test_gpu_status_missing_is_gpu_telemetry_missing(tmp_path: Path):
++    result = training_status.gpu_status_probe(tmp_path, now=datetime.now(timezone.utc))
++
++    assert result["status"] == "degraded"
++    assert result["reason"] == "gpu_telemetry_missing"
++
++
++def test_classify_running_stale_step_as_infra_ok_but_trainer_stale():
++    result = training_status.classify_trainer_health(
++        docker={"running": True, "state": "running", "health": "healthy"},
++        progress={"latest_step": 17700, "step_stale_seconds": 3600, "status": "degraded"},
++        gpu={"status": "healthy", "reason": "gpu_telemetry_ok"},
++        stale_offline_seconds=900,
++    )
++
++    assert result["overall"] == "offline"
++    assert result["reason"] == "infra_ok_but_trainer_stale"
++    assert "17,700" in result["detail"]
++
++
++def test_classify_running_without_progress_is_not_healthy():
++    result = training_status.classify_trainer_health(
++        docker={"running": True, "state": "running", "health": "healthy"},
++        progress={"latest_step": None, "status": "unknown", "reason": "training_progress_missing"},
++        gpu={"status": "degraded", "reason": "gpu_telemetry_missing"},
++    )
++
++    assert result["overall"] == "degraded"
++    assert result["reason"] == "trainer_stale_step"
++    assert "running" in result["detail"]
++    assert "no training progress" in result["detail"]
++
++
++def test_classify_exited_container_as_process_dead():
++    result = training_status.classify_trainer_health(
++        docker={"running": False, "state": "exited", "exit_code": 137},
++        progress={"latest_step": None, "status": "unknown"},
++        gpu={"status": "unknown", "reason": "gpu_telemetry_missing"},
++    )
++
++    assert result["overall"] == "offline"
++    assert result["reason"] == "trainer_process_dead"
++    assert "exited" in result["detail"]
++
++
++def test_build_training_status_includes_legacy_fields_and_actions(tmp_path: Path):
++    run_dir = tmp_path / "run"
++    run_dir.mkdir()
++    (run_dir / "history.jsonl").write_text('{"step": 42, "loss": 0.1}\n', encoding="utf-8")
++    (run_dir / "gpu_status.json").write_text('{"name": "RTX 3080 Ti", "utilization_gpu": 91}\n', encoding="utf-8")
++
++    def fake_runner(args, timeout=120):
++        if args[:2] == ["docker", "inspect"]:
++            return subprocess.CompletedProcess(args, 0, json.dumps([{"State": {"Running": True, "Status": "running", "ExitCode": 0, "Health": {"Status": "healthy", "FailingStreak": 0}}}]), "")
++        if args[:2] == ["docker", "logs"]:
++            return subprocess.CompletedProcess(args, 0, "step 42 ok", "")
++        raise AssertionError(args)
++
++    status = training_status.build_training_status(
++        container_name="oss-trainer",
++        run_dir=run_dir,
++        runner=fake_runner,
++        now=datetime.now(timezone.utc),
++    )
++
++    assert status["schema_version"] == "2026-06-training-control-v1"
++    assert status["running"] is True
++    assert status["state"] == "running"
++    assert status["container"]["health"] == "healthy"
++    assert status["trainer"]["latest_step"] == 42
++    assert status["actions"] == {"can_start": False, "can_stop": True, "can_restart": True}
++    assert "logs_tail" in status
