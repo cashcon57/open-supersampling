@@ -15,6 +15,7 @@
 
 #include <Windows.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <cstring>
@@ -169,6 +170,9 @@ std::mutex g_embedded_interface_mutex;
 std::unordered_map<FfxInterfaceAbi*, FfxInterfaceCallbacks> g_embedded_interface_callbacks;
 FfxInterfaceCallbacks g_last_embedded_interface_callbacks;
 bool g_has_last_embedded_interface_callbacks = false;
+
+// Defined below; declared here for the embedded-callback wrappers.
+void LogResourceSummary(const char* name, const FfxResourceAbi& resource);
 
 enum class RealFsr3Kind {
     kFsr3,
@@ -452,7 +456,7 @@ FfxErrorCode WrappedEmbeddedStageConstantBufferData(
     uint32_t copied_floats = 0;
     if (data && size >= sizeof(float)) {
         __try {
-            copied_floats = min<uint32_t>(8u, size / static_cast<uint32_t>(sizeof(float)));
+            copied_floats = (std::min)(8u, size / static_cast<uint32_t>(sizeof(float)));
             std::memcpy(first_values, data, copied_floats * sizeof(float));
         } __except (EXCEPTION_EXECUTE_HANDLER) {
             copied_floats = 0;
