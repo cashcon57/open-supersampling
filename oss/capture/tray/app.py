@@ -30,7 +30,7 @@ try:
     import pystray  # type: ignore[import-not-found]
     from PIL import Image, ImageDraw  # type: ignore[import-not-found]
     _HAS_PYSTRAY = True
-except ImportError:
+except Exception:  # ImportError, or Xlib.error.DisplayNameError on headless Linux
     _HAS_PYSTRAY = False
 
 from oss.capture.tray import config as cfg_mod
